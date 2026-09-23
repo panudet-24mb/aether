@@ -53,7 +53,7 @@ func main() {
 	defer repo.Close()
 	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow})
 	if cfg.AlertsShadow {
-		slog.Warn("ALERTS_SHADOW is on: events are recorded, no alerts, notifications or automations run")
+		slog.Warn("ALERTS_SHADOW is on: events are recorded; only SOS (button) opens alerts; no automations run")
 	}
 	service, e := app.New(repo, security.NewTokens(cfg.JWTKey, cfg.Issuer), false)
 	if e != nil {

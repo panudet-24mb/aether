@@ -6,6 +6,7 @@ import (
 	"aether/backend/internal/adapters/minew"
 	"aether/backend/internal/domain"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,7 +27,15 @@ type State struct {
 	// time of the last uplink whose PIR reported motion=1 (zero when never).
 	Occupied   int
 	LastMotion time.Time
+	// TriggerAt is the server time the button-trigger slot (iBeacon) was last heard; zero when never.
+	TriggerAt time.Time
 }
+
+// ButtonTriggerQuiet is how long a button tag's trigger slot must have been silent for its reappearance to
+// count as a new press. The physical B10 advertises iBeacon only after a press, in a burst that lasts over
+// a minute with gaps of a few seconds when the gateway misses a packet; at rest it is silent for minutes.
+// 30 s sits well clear of both, and a second press inside a running burst is the same emergency anyway.
+const ButtonTriggerQuiet = 30 * time.Second
 
 // OccupancyHoldSec is how long a PIR must report no motion before the room counts as vacant. PIR sensors
 // only report motion while something moves, so a person sitting still at a desk goes quiet for minutes.
@@ -40,7 +49,7 @@ func Vacant(s State, now time.Time) bool {
 // Detect compares a fresh reading with the previous state and returns the events that happened.
 // Threshold rules are evaluated here too, so a breach becomes one event, not one per uplink.
 func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time) ([]domain.DeviceEvent, State) {
-	next := State{Known: true, Tamper: prev.Tamper, Leak: prev.Leak, Moving: prev.Moving, Instance: prev.Instance, Breaches: append([]string(nil), prev.Breaches...), Door: prev.Door, Occupied: prev.Occupied, LastMotion: prev.LastMotion}
+	next := State{Known: true, Tamper: prev.Tamper, Leak: prev.Leak, Moving: prev.Moving, Instance: prev.Instance, Breaches: append([]string(nil), prev.Breaches...), Door: prev.Door, Occupied: prev.Occupied, LastMotion: prev.LastMotion, TriggerAt: prev.TriggerAt}
 	var out []domain.DeviceEvent
 	emit := func(t string, detail map[string]any) {
 		out = append(out, domain.DeviceEvent{EventType: t, Detail: detail, OccurredAt: at})
@@ -102,6 +111,19 @@ func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time)
 			emit(domain.EventButton, map[string]any{"from": prev.Instance, "to": r.Beacon.Instance, "namespace": r.Beacon.Namespace, "note": "Eddystone-UID instance changed; press semantics unverified on hardware"})
 		}
 		next.Instance = r.Beacon.Instance
+	}
+	// Button trigger slot: the B10 advertises iBeacon only after its button is pressed. The slot coming back
+	// after ButtonTriggerQuiet of silence is one press. Every tag with a regular iBeacon slot produces this
+	// event too; the caller keeps it only for devices registered with a button profile.
+	if slices.Contains(r.Frames, minew.FrameIBeacon) {
+		if prev.TriggerAt.IsZero() || at.Sub(prev.TriggerAt) >= ButtonTriggerQuiet {
+			detail := map[string]any{"trigger": minew.FrameIBeacon}
+			if !prev.TriggerAt.IsZero() {
+				detail["silent_sec"] = int(at.Sub(prev.TriggerAt).Seconds())
+			}
+			emit(domain.EventButton, detail)
+		}
+		next.TriggerAt = at
 	}
 	// Threshold rules: rising edge per rule id.
 	breached := map[string]bool{}
@@ -324,7 +346,7 @@ func contains(list []string, v string) bool {
 
 var eventLabel = map[string]string{
 	domain.EventTamper: "ป้ายถูกถอด / tamper", domain.EventTamperCleared: "tamper กลับสู่ปกติ",
-	domain.EventButton: "กดปุ่ม (instance เปลี่ยน)", domain.EventLeak: "พบน้ำรั่ว", domain.EventLeakCleared: "น้ำรั่วหาย",
+	domain.EventButton: "กดปุ่ม SOS", domain.EventLeak: "พบน้ำรั่ว", domain.EventLeakCleared: "น้ำรั่วหาย",
 	domain.EventMotion: "เริ่มเคลื่อนไหว", domain.EventMotionStopped: "หยุดเคลื่อนไหว",
 	domain.EventOffline: "ขาดการติดต่อ (offline)", domain.EventOnline: "กลับมาออนไลน์",
 	domain.EventThreshold: "ค่าเกินเกณฑ์", domain.EventThresholdClear: "ค่ากลับเข้าเกณฑ์",

@@ -285,7 +285,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       <header className="topo-bar ov-bar">
         <h1 className="topo-bar-title">ภาพรวม</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบทุก 5 วินาที"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
-        {shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · ไม่แจ้งเตือน</span>}
+        {shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ยกเว้นปุ่มฉุกเฉิน SOS ที่แจ้งเตือนเสมอ · ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · แจ้งเตือนเฉพาะ SOS</span>}
         <select className="ov-select" aria-label="โปรเจค" value={project} onChange={(e) => setProject(e.target.value)}>
           <option value="all">ทุกโปรเจค</option>
           {(snapshot?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

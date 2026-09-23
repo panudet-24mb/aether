@@ -26,7 +26,7 @@ type Config struct {
 	SampleMinIntervalSec int      // store at most one environment sample per stream per interval (0 = every uplink)
 	BLEHistoryHours      int      // raw BLE advertisement archive kept for Studio decoders (default 24)
 	DiscoveryLimit       int      // streams per gateway for tags that are NOT registered devices (default 100)
-	AlertsShadow         bool     // record events but open no alerts, send nothing and run no automations
+	AlertsShadow         bool     // record events but open no alerts, send nothing and run no automations; SOS (button) still alerts
 	SealKey              []byte   // optional CHANNEL_SEAL_KEY; falls back to a key derived from JWT_SIGNING_KEY
 	TrustedProxies       []string // CIDRs/IPs of the reverse proxy; only then is X-Forwarded-For believed
 	WebhookAllowedHosts  []string // host:port targets exempt from the private-address block (on-prem relays)

@@ -10,7 +10,8 @@
 --     event until the periodic scan raises `vacant`) and `last_motion_at` (server receive time of the
 --     last PIR motion=1 uplink; device clocks are never trusted).
 --
--- NUMBERING: 00027 is reserved for the frontend change that ships alongside this one.
+-- NUMBERING: 00027 was once reserved for a frontend change that shipped without a migration; it is now
+-- 00027_button_trigger.sql.
 --
 -- +goose Up
 SET ROLE aether_owner;

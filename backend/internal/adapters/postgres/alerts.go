@@ -56,6 +56,7 @@ type stateRow struct {
 	Breaches             json.RawMessage
 	Door, Occupied       int
 	LastMotionAt         *time.Time
+	TriggerAt            *time.Time
 	// Signals holds the last matched/not-matched state of each learned signal for this stream. It
 	// deliberately rides in core.stream_state with the built-in tamper/leak/moving flags rather than
 	// in a parallel table: learned signals are edge-triggered by exactly the same rule, and sharing
@@ -68,12 +69,15 @@ func (row stateRow) state() alerts.State {
 	if row.LastMotionAt != nil {
 		s.LastMotion = *row.LastMotionAt
 	}
+	if row.TriggerAt != nil {
+		s.TriggerAt = *row.TriggerAt
+	}
 	_ = json.Unmarshal(row.Breaches, &s.Breaches)
 	return s
 }
 
 // stateColumns is every column stateRow reads, so all readers of core.stream_state stay in step.
-const stateColumns = `external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at`
+const stateColumns = `external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at`
 
 // upsertState reports tracked=false when the stream row does not exist (discovery cap reached); callers must
 // then emit nothing, otherwise an untracked device would look "first seen" on every uplink and flood events.
@@ -82,15 +86,18 @@ func upsertState(tx *gorm.DB, tenant, gateway, external string, s alerts.State) 
 	if s.Breaches == nil {
 		breaches = []byte("[]")
 	}
-	var lastMotion any
+	var lastMotion, triggerAt any
 	if !s.LastMotion.IsZero() {
 		lastMotion = s.LastMotion
 	}
-	res := tx.Exec(`INSERT INTO core.stream_state(tenant_id,gateway_id,external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,updated_at)
-    SELECT ?,?,?,?,?,?,?,?,?::jsonb,?,?,?::timestamptz,now() WHERE EXISTS(SELECT 1 FROM core.sensor_streams WHERE gateway_id=? AND external_id=?)
+	if !s.TriggerAt.IsZero() {
+		triggerAt = s.TriggerAt
+	}
+	res := tx.Exec(`INSERT INTO core.stream_state(tenant_id,gateway_id,external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at,updated_at)
+    SELECT ?,?,?,?,?,?,?,?,?::jsonb,?,?,?::timestamptz,?::timestamptz,now() WHERE EXISTS(SELECT 1 FROM core.sensor_streams WHERE gateway_id=? AND external_id=?)
     ON CONFLICT(tenant_id,gateway_id,external_id) DO UPDATE SET tamper=EXCLUDED.tamper,leak=EXCLUDED.leak,moving=EXCLUDED.moving,instance=EXCLUDED.instance,offline=EXCLUDED.offline,breaches=EXCLUDED.breaches,
-      door=EXCLUDED.door,occupied=EXCLUDED.occupied,last_motion_at=EXCLUDED.last_motion_at,updated_at=now()`,
-		tenant, gateway, external, s.Tamper, s.Leak, s.Moving, s.Instance, s.Offline, string(breaches), s.Door, s.Occupied, lastMotion, gateway, external)
+      door=EXCLUDED.door,occupied=EXCLUDED.occupied,last_motion_at=EXCLUDED.last_motion_at,trigger_at=EXCLUDED.trigger_at,updated_at=now()`,
+		tenant, gateway, external, s.Tamper, s.Leak, s.Moving, s.Instance, s.Offline, string(breaches), s.Door, s.Occupied, lastMotion, triggerAt, gateway, external)
 	return res.RowsAffected > 0, res.Error
 }
 
@@ -112,8 +119,15 @@ func createAlerts(tx *gorm.DB, tenant string, ev domain.DeviceEvent, rules []dom
 		if !alerts.Matches(rule, ev) {
 			continue
 		}
+		// One alert at a time per rule and device. For SOS the alert that blocks a new one is only an
+		// UNACKNOWLEDGED one: once somebody has acknowledged a press, the next press is a new call for help
+		// and must ring again, not vanish behind an alert that is merely waiting to be resolved.
+		blocking := `status<>'resolved'`
+		if ev.EventType == domain.EventButton {
+			blocking = `status='open'`
+		}
 		var n int64
-		if e := tx.Raw(`SELECT count(*) FROM core.alerts WHERE rule_id=? AND external_id=? AND (status<>'resolved' OR opened_at>?)`, rule.ID, ev.ExternalID, ev.OccurredAt.Add(-time.Duration(rule.DedupeSec)*time.Second)).Scan(&n).Error; e != nil {
+		if e := tx.Raw(`SELECT count(*) FROM core.alerts WHERE rule_id=? AND external_id=? AND (`+blocking+` OR opened_at>?)`, rule.ID, ev.ExternalID, ev.OccurredAt.Add(-time.Duration(rule.DedupeSec)*time.Second)).Scan(&n).Error; e != nil {
 			return e
 		}
 		if n > 0 {
@@ -288,8 +302,8 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 	for _, n := range named {
 		names[n.ExternalID] = n.Name
 	}
-	// A button press is inferred from an Eddystone-UID instance change. Any third-party beacon can do that, so
-	// only tags registered with a button profile may raise it.
+	// A button press is inferred (the B10's iBeacon trigger slot reappearing, or an Eddystone-UID instance
+	// change). Any third-party beacon can produce either, so only tags registered with a button profile may raise it.
 	var buttonIDs []string
 	if e := tx.Raw(`SELECT lower(external_id) FROM core.devices WHERE removed_at IS NULL AND profile_id IN ? LIMIT 5000`, domain.ButtonProfileIDs()).Scan(&buttonIDs).Error; e != nil {
 		return e
@@ -377,7 +391,10 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 				return e
 			}
 			inserted = append(inserted, ev)
-			if opts.AlertsShadow { // shadow mode: the event log fills, nothing is alerted or sent
+			// Shadow mode: the event log fills, nothing is alerted or sent — except SOS. Shadow exists so untuned
+			// thresholds do not wake anyone during the first days; a person pressing a panic button is never a
+			// tuning problem, so a `button` event still opens its alert (and notifies its channels).
+			if opts.AlertsShadow && ev.EventType != domain.EventButton {
 				continue
 			}
 			if e := createAlerts(tx, tenant, ev, rules); e != nil {

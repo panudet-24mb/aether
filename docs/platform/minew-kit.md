@@ -138,3 +138,12 @@ would. The original simulated B10 (`f00000000007`) keeps its Eddystone-UID behav
 - A learned signal of type `custom` only lands in the event log: no alert rule can subscribe to it.
 - Templates/thresholds still apply only to the environment decoder (`device_templates.decoder_id` check constraint).
 - Dashboard Studio supports bundled raw-byte decoders and official kit widgets for motion, tamper, buttons and beacons, plus event and alert displays. See [Widget Studio](widget-studio.md).
+
+
+## B10 SOS press: the iBeacon trigger slot (2026-09-23)
+
+The physical B10 `c300007b573c` was recorded for four minutes on the production MG3 while the operator pressed the button three times. The A1-03 accelerometer, A1-08 info and Eddystone-TLM slots advertise all the time. **The iBeacon slot, and the Minew FFF1 frame beside it, advertise only after a press.** At rest there was no iBeacon for almost three minutes. From the press at 10:50:18 (a 1.66 g jolt on the accelerometer) a dense iBeacon burst ran for over a minute, with gaps of a few seconds where the gateway missed packets.
+
+Aether detects this without teaching. A device registered with a button profile raises `button` when its iBeacon slot reappears after at least `alerts.ButtonTriggerQuiet` (30 s) of silence. That is one SOS per burst: a second press inside a running burst is the same emergency. The last time the slot was heard is `core.stream_state.trigger_at` (migration 00027). The Eddystone-UID instance rule still applies to tags that have a UID slot. Tests: `TestButtonTriggerSlot` (engine) and `TestB10PressFromTriggerSlot` (real frames, event and critical alert).
+
+Still open: whether shaking the B10 without pressing also starts the burst (a motion trigger configured in the Minew app). Check once by moving the tag around without pressing. If it does, disable the motion trigger for that slot in the Minew app.

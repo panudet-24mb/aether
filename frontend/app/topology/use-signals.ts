@@ -6,6 +6,13 @@ const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 
 export type SignalKind = "packet" | "event" | "alert" | "inventory";
 
+/**
+ * Packet and event signals arrive about once per second per busy gateway (every Minew tag advertises every
+ * second). Refetching on each one sent a single tab past the API rate limit, so they are coalesced and
+ * delivered at most once per this interval. `alert` signals are never delayed: an SOS must show at once.
+ */
+const SIGNAL_MIN_INTERVAL_MS = 3000;
+
 function socketURL(): string {
   const base = API || location.origin;
   return base.replace(/^http/, "ws") + "/ws";
@@ -27,6 +34,25 @@ export function useSignals(handlers: RefObject<{ getToken: () => string; refresh
     let retry: ReturnType<typeof setTimeout> | undefined;
     let ping: ReturnType<typeof setInterval> | undefined;
     let delay = 1000;
+    // Coalesced non-alert signals: kind -> gateway id (undefined once two gateways signalled the same kind).
+    const queued = new Map<SignalKind, string | undefined>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastFlush = 0;
+    const flush = () => {
+      flushTimer = undefined;
+      lastFlush = Date.now();
+      const batch = [...queued];
+      queued.clear();
+      for (const [kind, gatewayId] of batch) onSignalRef.current(kind, gatewayId);
+    };
+    const deliver = (kind: SignalKind, gatewayId: string | undefined) => {
+      if (kind === "alert") {
+        onSignalRef.current(kind, gatewayId);
+        return;
+      }
+      queued.set(kind, queued.has(kind) && queued.get(kind) !== gatewayId ? undefined : gatewayId);
+      flushTimer ??= setTimeout(flush, Math.max(0, lastFlush + SIGNAL_MIN_INTERVAL_MS - Date.now()));
+    };
 
     const connect = () => {
       if (stopped) return;
@@ -46,7 +72,7 @@ export function useSignals(handlers: RefObject<{ getToken: () => string; refresh
           clearInterval(ping);
           ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('{"type":"ping"}'), 30000);
         } else if (msg.type === "signal" && msg.kind) {
-          onSignalRef.current(msg.kind, msg.gateway_id || undefined);
+          deliver(msg.kind, msg.gateway_id || undefined);
         } else if (msg.type === "error" && msg.error === "too_many_connections") {
           // The workspace has too many open tabs. Polling keeps the page working; try again much later.
           delay = 120000;
@@ -68,6 +94,7 @@ export function useSignals(handlers: RefObject<{ getToken: () => string; refresh
     return () => {
       stopped = true;
       clearTimeout(retry);
+      clearTimeout(flushTimer);
       clearInterval(ping);
       socket?.close();
     };

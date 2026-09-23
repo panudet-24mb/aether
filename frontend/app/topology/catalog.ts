@@ -35,6 +35,8 @@ export type DeviceProfile = {
   verified?: boolean;
   /** Name the tag reports in its FFE1 info frame; used to suggest this profile. */
   info_name?: string;
+  /** Other names real units report for this model (the physical S1 says "PLUS", the E8S says "E8"). */
+  info_aliases?: string[];
   notes?: string;
 };
 
@@ -86,6 +88,7 @@ export const GATEWAY_MODELS: GatewayModel[] = [
     transport: "mqtt",
     description: "BLE → Wi‑Fi / Ethernet gateway ของชุด MOS smart office · ส่ง BLE advertisement เข้า Aether ผ่าน MQTT",
     logo: "/brands/minew.png",
+    image: "/devices/minew-mg4.png",
   },
   {
     id: "generic-http",
@@ -94,6 +97,7 @@ export const GATEWAY_MODELS: GatewayModel[] = [
     label: "Generic HTTP",
     transport: "http",
     description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)",
+    image: "/devices/generic-http-gateway.png",
   },
 ];
 
@@ -110,6 +114,7 @@ export const DEVICE_PROFILES: DeviceProfile[] = [
     kinds: ["environment"],
     verified: true,
     info_name: "S1",
+    info_aliases: ["PLUS"],
   },
   {
     id: "minew-msp01-pending@1",
@@ -118,6 +123,7 @@ export const DEVICE_PROFILES: DeviceProfile[] = [
     label: "Minew MSP01 · PIR ตรวจจับคน",
     radio: "ble",
     description: "PIR occupancy sensor ของชุด MOS · มีคนเมื่อพบการเคลื่อนไหวภายใน 5 นาที",
+    image: "/devices/minew-msp01.png",
     metrics: ["motion", "battery"],
     kinds: ["motion", "environment"],
     occupancy: true,
@@ -130,6 +136,7 @@ export const DEVICE_PROFILES: DeviceProfile[] = [
     label: "Minew S4 · เซ็นเซอร์ประตู",
     radio: "ble",
     description: "Door / window contact sensor ของชุด MOS · door = 1 เปิด / 0 ปิด",
+    image: "/devices/minew-s4.png",
     metrics: ["door", "battery"],
     kinds: ["door"],
     door: true,
@@ -142,6 +149,7 @@ export const DEVICE_PROFILES: DeviceProfile[] = [
     label: "Generic environment sensor",
     radio: "any",
     description: "อุปกรณ์ทั่วไปที่ส่ง telemetry.v1 ผ่าน gateway · ใช้ทดสอบเส้นทางข้อมูลหรืออุปกรณ์ต่างแบรนด์",
+    image: "/devices/generic-environment.png",
     metrics: ["ตาม payload ที่ส่งเข้ามา"],
     kinds: ["environment"],
   },
@@ -158,11 +166,17 @@ export function formatMAC(id: string): string {
   return /^[0-9a-f]{12}$/i.test(id) ? id.match(/.{2}/g)!.join(":").toUpperCase() : id;
 }
 
+/** Whether a name from a tag's FFE1 info frame identifies this profile (its info name or a known alias). */
+export function matchesInfo(p: DeviceProfile, name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return !!n && [p.info_name, ...(p.info_aliases ?? [])].some((x) => x?.toLowerCase() === n);
+}
+
 /** Best-effort profile suggestion from what the gateway actually decoded. */
 export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean }): DeviceProfile | undefined {
   if (input.model) {
     const name = input.model.toLowerCase();
-    const byName = DEVICE_PROFILES.find((p) => p.info_name && p.info_name.toLowerCase() === name);
+    const byName = DEVICE_PROFILES.find((p) => matchesInfo(p, name));
     if (byName) return byName;
     // MOS kit names, in case the server catalog does not carry info_name for them.
     if (name === "msp01") { const p = DEVICE_PROFILES.find((x) => x.occupancy); if (p) return p; }
@@ -188,6 +202,9 @@ const MODEL_PHOTOS: [string, string][] = [
   ["B7", "/devices/minew-b7.png"],
   ["S1", "/devices/minew-s1.png"],
   ["MG3", "/devices/minew-mg3.png"],
+  ["MG4", "/devices/minew-mg4.png"],
+  ["MSP01", "/devices/minew-msp01.png"],
+  ["S4", "/devices/minew-s4.png"],
 ];
 
 /** Product photo for a free-text model label such as "MBT01 / A1-20" or "E8S · C10 · B7"; the model named first wins. */

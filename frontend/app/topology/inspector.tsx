@@ -213,7 +213,8 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
   const id = g.gateway.id;
   const hasAccount = !!g.state?.revision;
   const applied = hasAccount && g.state!.applied_revision === g.state!.revision;
-  const devices = topology.devices.filter((d) => d.heard.some((h) => h.gatewayId === id) || d.registrations.some((r) => r.gateway_id === id));
+  // Registered devices plus supported models waiting to be registered; raw MACs (phones, foreign beacons) stay out.
+  const devices = topology.devices.filter((d) => d.registrations.some((r) => r.gateway_id === id) || (d.heard.some((h) => h.gatewayId === id) && p.discovery.some((x) => x.gateway_id === id && x.external_id === d.external)));
   const adopted = devices.filter((d) => d.registrations.some((r) => r.gateway_id === id));
   const mqttFields: [string, string][] = settings
     ? [

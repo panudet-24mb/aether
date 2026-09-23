@@ -84,11 +84,64 @@ func TestDiscoveryRegistrationAndGatewayIsolation(t *testing.T) {
 	if e != nil || len(items) != 0 {
 		t.Fatal("discovery window", e)
 	}
-	// Unknown advertisements are still discoverable without inventing a model.
+	// Anything that is not a supported catalog model (phones, foreign beacons) is left out: they rotate
+	// their MAC and would otherwise pile up as endless "new devices". The count of hidden ones is reported.
 	if _, e = f.repo.CapturePacket(ctx, a.TenantID, g1.ID, []byte(`[{"mac":"aabbccddeeff","rawData":"020106"}]`)); e != nil {
 		t.Fatal(e)
 	}
 	code, out, _ = req(t, api, "GET", "/api/v1/discovery", "Bearer "+auth.AccessToken, "", "", nil)
+	if code != 200 {
+		t.Fatal(code, out)
+	}
+	for _, raw := range out["items"].([]any) {
+		if raw.(map[string]any)["external_id"] == "aabbccddeeff" {
+			t.Fatal("unknown advertisement shown by default")
+		}
+	}
+	if n, _ := out["hidden_unknown"].(float64); n < 1 || out["window_minutes"] != float64(15) {
+		t.Fatalf("hidden count / window: %v %v", out["hidden_unknown"], out["window_minutes"])
+	}
+	// A real kit beacon (C10/B7) whose latest uplink carried only its iBeacon slot is still recognised:
+	// the model survives in the stream name that an earlier info frame set.
+	ibeacon := `[{"mac":"c30000aa0001","rawData":"0201061aff4c000215e2c56db5dffb48d2b060d0f5a71096e000010002c5"}]`
+	if _, e = f.repo.CapturePacket(ctx, a.TenantID, g1.ID, []byte(ibeacon)); e != nil {
+		t.Fatal(e)
+	}
+	shown := func(id string) (map[string]any, bool) {
+		code, out, _ := req(t, api, "GET", "/api/v1/discovery", "Bearer "+auth.AccessToken, "", "", nil)
+		if code != 200 {
+			t.Fatal(code, out)
+		}
+		for _, raw := range out["items"].([]any) {
+			if item := raw.(map[string]any); item["external_id"] == id {
+				return item, true
+			}
+		}
+		return nil, false
+	}
+	if _, ok := shown("c30000aa0001"); ok {
+		t.Fatal("bare iBeacon without a model shown by default")
+	}
+	if _, e = f.admin.ExecContext(ctx, `UPDATE core.sensor_streams SET name='Minew C10' WHERE gateway_id=$1 AND external_id='c30000aa0001'`, g1.ID); e != nil {
+		t.Fatal(e)
+	}
+	if item, ok := shown("c30000aa0001"); !ok || item["model"] != "C10" || item["profile"] == nil {
+		t.Fatalf("kit beacon with a known model hidden or unmatched: %v", item)
+	}
+	// The physical S1 reports "PLUS" in its info frame (captured from the real kit on the production MG3):
+	// it is a Minew device, listed with the S1 profile.
+	plus := `[{"mac":"c30000393fe5","rawData":"0201060303e1ff1016e1ffa10864e53f390000c3504c5553"}]`
+	if _, e = f.repo.CapturePacket(ctx, a.TenantID, g1.ID, []byte(plus)); e != nil {
+		t.Fatal(e)
+	}
+	if item, ok := shown("c30000393fe5"); !ok || item["model"] != "PLUS" || item["profile"] == nil || item["profile"].(map[string]any)["model"] != "S1" {
+		t.Fatalf("real S1 (PLUS) not listed as S1: %v", item)
+	}
+	if code, _, _ = req(t, api, "GET", "/api/v1/discovery?minutes=0", "Bearer "+auth.AccessToken, "", "", nil); code != 400 {
+		t.Fatal("minutes=0 accepted", code)
+	}
+	// ?all=1 still lists them, without inventing a model.
+	code, out, _ = req(t, api, "GET", "/api/v1/discovery?all=1", "Bearer "+auth.AccessToken, "", "", nil)
 	if code != 200 {
 		t.Fatal(code, out)
 	}

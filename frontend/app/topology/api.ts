@@ -53,6 +53,8 @@ export type DeviceEventRow = { id: string; gateway_id: string; external_id: stri
 export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile };
 export type Snapshot = {
   discovery?: Discovery[];
+  /** Per gateway: advertisements that are not a supported model (phones, foreign beacons), left out of `discovery`. */
+  discoveryHidden?: Record<string, number>;
   projects: Project[];
   /** Withdrawn registrations (owner/admin only); kept so they can be restored. */
   removedDevices: Device[];
@@ -157,7 +159,7 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
         slow = { at: Date.now(), gateways: g, sources: so, devices: d, settings: se, catalog: c, removed: rm, projects: pj };
       }
       const { gateways, sources, devices, settings, catalog, removed, projects } = slow!;
-      const [status, live, events, discovery] = await Promise.all([settle(this.mqttStatus()), settle(this.live()), settle(this.raw<{ items: DeviceEventRow[] }>("/events?limit=200")), settle(this.raw<{ items: Discovery[] }>("/discovery"))]);
+      const [status, live, events, discovery] = await Promise.all([settle(this.mqttStatus()), settle(this.live()), settle(this.raw<{ items: DeviceEventRow[] }>("/events?limit=200")), settle(this.raw<{ items: Discovery[]; hidden_by_gateway?: Record<string, number> }>("/discovery"))]);
       if (catalog.status === "fulfilled") applyCatalog(catalog.value);
       // Gateways and MQTT status are required; everything else degrades gracefully.
       if (gateways.status === "rejected") throw gateways.reason;
@@ -180,6 +182,7 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       }
       return {
         discovery: discovery.status === "fulfilled" ? discovery.value.items : [],
+        discoveryHidden: discovery.status === "fulfilled" ? discovery.value.hidden_by_gateway ?? {} : {},
         projects: projects.status === "fulfilled" ? projects.value : [],
         removedDevices: removed.status === "fulfilled" ? removed.value : [],
         events: events.status === "fulfilled" ? events.value.items : [],

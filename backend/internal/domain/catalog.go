@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // The device catalog is the single source of truth for the gateway models and device profiles this
 // deployment accepts. The API exposes it read-only so the UI never carries its own copy.
 // Verified means a packet from the physical device was captured and decoded by a golden test in
@@ -34,6 +36,9 @@ type DeviceProfile struct {
 	Button bool `json:"button,omitempty"`
 	// InfoName is the device name the tag reports in its FFE1 info frame, used to suggest this profile.
 	InfoName string `json:"info_name,omitempty"`
+	// InfoAliases are other names real units report for this model. Measured on the physical kit on
+	// 2026-09-21: the S1 temperature/humidity sensor says "PLUS" and the E8S says "E8".
+	InfoAliases []string `json:"info_aliases,omitempty"`
 	// Occupancy marks PIR sensors whose `motion` metric drives occupied / vacant (see alerts.OccupancyHoldSec).
 	Occupancy bool `json:"occupancy,omitempty"`
 	// Door marks door/window contact sensors whose state is the `door` metric (1 = open, 0 = closed).
@@ -59,11 +64,11 @@ var GatewayModels = []GatewayModel{
 	// timestamps (server time only) and parses every row on its own, so both are harmless. Not yet verified with
 	// a captured MG4 uplink.
 	{ID: "minew-mg4", Brand: "Minew", Model: "MG4", Label: "Minew MG4 · Rechargeable gateway", Transport: "mqtt", Description: "Rechargeable BLE → Wi‑Fi gateway (ชุด MOS smart office) · ส่ง BLE advertisement เข้า Aether ผ่าน MQTT แบบ JSON-Long · อัปโหลดทาง HTTP ก็ได้โดยใช้เส้นทาง Generic HTTP (POST /ingest/gateways/<id>/packets + HTTP Basic) · ยังไม่ยืนยันกับเครื่องจริง", Logo: "/brands/minew.png", Image: "/devices/minew-mg4.png", Verified: false},
-	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
+	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Image: "/devices/generic-http-gateway.png", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
 }
 
 var DeviceProfiles = []DeviceProfile{
-	{ID: "minew-s1-pending@1", Brand: "Minew", Model: "S1", Label: "Minew S1 · อุณหภูมิ / ความชื้น", Radio: "ble", Image: "/devices/minew-s1.png", Kinds: []string{"environment"}, Metrics: []string{"temperature", "humidity", "battery"}, Verified: true, InfoName: "S1",
+	{ID: "minew-s1-pending@1", Brand: "Minew", Model: "S1", Label: "Minew S1 · อุณหภูมิ / ความชื้น", Radio: "ble", Image: "/devices/minew-s1.png", Kinds: []string{"environment"}, Metrics: []string{"temperature", "humidity", "battery"}, Verified: true, InfoName: "S1", InfoAliases: []string{"PLUS"},
 		Description: "BLE sensor · เฟรม FFE1 A1‑01 ยืนยันกับเครื่องจริงแล้ว · profile ใช้ลงทะเบียนสินทรัพย์ ไม่ยืนยันรุ่นจากเฟรมเพียงอย่างเดียว"},
 	{ID: "minew-c10-pending@1", Wearable: true, Image: "/devices/minew-c10.png", Brand: "Minew", Model: "C10", Label: "Minew C10 · Card beacon", Radio: "ble", Kinds: []string{"beacon", "motion"}, Metrics: []string{"iBeacon / Eddystone id", "accelerometer", "battery"}, Verified: false, InfoName: "C10",
 		Description: "บัตรพนักงาน/ผู้ป่วยแบบ beacon มีปุ่มซ่อนและ accelerometer · ถอดรหัส iBeacon/Eddystone และเฟรม A1‑03 จากเอกสารสาธารณะ ยังไม่ยืนยันกับเครื่องจริง", Notes: "การกดปุ่มยังไม่มีเอกสารรูปแบบเฟรม"},
@@ -71,7 +76,7 @@ var DeviceProfiles = []DeviceProfile{
 		Description: "สายรัดข้อมือมีปุ่ม · ส่ง iBeacon/Eddystone และ accelerometer · ยังไม่ยืนยันกับเครื่องจริง", Notes: "รูปแบบ event ปุ่มกดของ B7 ยังไม่มีเอกสารยืนยัน"},
 	{ID: "minew-b10-pending@1", Wearable: true, Button: true, Image: "/devices/minew-b10.png", Brand: "Minew", Model: "B10", Label: "Minew B10 · Emergency button", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"Eddystone UID instance", "battery (TLM)"}, Verified: false, InfoName: "B10",
 		Description: "สายรัดปุ่มฉุกเฉิน · การกดปุ่มปรากฏเป็นการเปลี่ยน Eddystone‑UID instance ตามคู่มือตั้งค่าสาธารณะ · ยังไม่ยืนยันกับเครื่องจริง", Notes: "ระบบแสดงการเปลี่ยน instance เป็น event ไม่อ้างว่าเป็นสัญญาณฉุกเฉินที่รับรองแล้ว"},
-	{ID: "minew-e8s-pending@1", Image: "/devices/minew-e8s.png", Brand: "Minew", Model: "E8S", Label: "Minew E8S · Accelerometer asset tag", Radio: "ble", Kinds: []string{"motion"}, Metrics: []string{"accelerometer", "vibration", "battery"}, Verified: false, InfoName: "E8S",
+	{ID: "minew-e8s-pending@1", Image: "/devices/minew-e8s.png", Brand: "Minew", Model: "E8S", Label: "Minew E8S · Accelerometer asset tag", Radio: "ble", Kinds: []string{"motion"}, Metrics: []string{"accelerometer", "vibration", "battery"}, Verified: false, InfoName: "E8S", InfoAliases: []string{"E8"},
 		Description: "ป้ายติดสินทรัพย์ตรวจการเคลื่อนไหว · เฟรม A1‑03 / A1‑18 จากเอกสารสาธารณะ ยังไม่ยืนยันกับเครื่องจริง"},
 	{ID: "minew-mbt01-pending@1", Image: "/devices/minew-mbt01.png", Brand: "Minew", Model: "MBT01", Label: "Minew MBT01 · Anti‑tamper tag", Radio: "ble", Kinds: []string{"beacon", "tamper"}, Metrics: []string{"iBeacon id", "tamper", "battery"}, Verified: false, InfoName: "MBT01",
 		Description: "ป้ายกันถอด · คาดว่าใช้เฟรม A1‑20 (tamper flag) ยังไม่ยืนยันกับเครื่องจริง"},
@@ -85,9 +90,9 @@ var DeviceProfiles = []DeviceProfile{
 	{ID: "minew-s4-pending@1", Image: "/devices/minew-s4.png", Brand: "Minew", Model: "S4", Label: "Minew S4 · Door sensor", Radio: "ble", Kinds: []string{"door"}, Metrics: []string{"door (open / closed)", "battery"}, Verified: false, InfoName: "S4", Door: true,
 		Description: "เซนเซอร์ประตูแม่เหล็ก · รูปแบบเฟรมยังไม่มีเอกสารสาธารณะ Aether จึงไม่ถอดรหัสเอง · สถานะเปิด/ปิดมาจากการ \"สอนสัญญาณ\" (เปิด–ปิดประตูให้ระบบเรียนรู้) · ยังไม่ยืนยันกับเครื่องจริง",
 		Notes:       "เฟรมที่ไม่รู้จักแสดงใน unknown ของ reading · สอนสัญญาณ door ก่อนใช้งาน"},
-	{ID: "generic-ble-beacon@1", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
+	{ID: "generic-ble-beacon@1", Image: "/devices/generic-ble-beacon.png", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
 		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
-	{ID: "generic-environment@1", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
+	{ID: "generic-environment@1", Image: "/devices/generic-environment.png", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
 		Description: "อุปกรณ์ทั่วไปที่ส่ง telemetry.v1 ผ่าน gateway · ใช้ทดสอบเส้นทางข้อมูลหรืออุปกรณ์ต่างแบรนด์"},
 }
 
@@ -107,4 +112,20 @@ func DeviceProfileByID(id string) *DeviceProfile {
 		}
 	}
 	return nil
+}
+
+// MatchesInfo reports whether a name from a tag's FFE1 info frame identifies this profile.
+func (p DeviceProfile) MatchesInfo(name string) bool {
+	if name == "" || p.InfoName == "" {
+		return false
+	}
+	if strings.EqualFold(name, p.InfoName) {
+		return true
+	}
+	for _, alias := range p.InfoAliases {
+		if strings.EqualFold(name, alias) {
+			return true
+		}
+	}
+	return false
 }

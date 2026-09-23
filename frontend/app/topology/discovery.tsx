@@ -5,8 +5,10 @@ import type { Discovery, Gateway } from "./api";
 import { formatMAC, suggestProfile } from "./catalog";
 import { isFresh } from "./model";
 
-export default function DiscoveryList({ items, gateways, gatewayId, serverTime, busy, onAdopt }: {
+export default function DiscoveryList({ items, gateways, gatewayId, serverTime, busy, onAdopt, hiddenUnknown = 0 }: {
   items: Discovery[]; gateways: Gateway[]; gatewayId?: string; serverTime: number; busy: boolean;
+  /** Advertisements the server left out because they are not a supported model. */
+  hiddenUnknown?: number;
   onAdopt: (external: string, gatewayId: string) => void;
 }) {
   const [filter, setFilter] = useState("");
@@ -16,7 +18,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
   const matches = items.filter((d) => (!selected || d.gateway_id === selected) &&
     (!q || `${d.external_id}${d.model ?? ""}${d.profile?.label ?? ""}`.toLowerCase().replace(/[:\s-]/g, "").includes(q)));
   return <section className="topo-discovery" aria-label="อุปกรณ์ที่พบใหม่">
-    <p className="topo-note">อุปกรณ์ที่ gateway ได้ยินใน 24 ชั่วโมงล่าสุด · แสดงเฉพาะที่ยังไม่ลงทะเบียน</p>
+    <p className="topo-note">อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew{hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}</p>
     {!gatewayId && <label className="topo-project-select">Gateway
       <select aria-label="กรอง gateway ที่ค้นพบ" value={filter} onChange={(e) => setFilter(e.target.value)}>
         <option value="">ทุก gateway</option>
@@ -31,9 +33,9 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
       return <div key={g.id} className="topo-discovery-group">
         <h3 className="topo-h3">{g.name} <span className="topo-count">{devices.length}</span></h3>
         {devices.map((d) => {
-          const suggestion = !d.model ? suggestProfile({ kind: d.kind }) : undefined;
+          const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind }) : undefined;
           const profile = d.profile ?? suggestion;
-          const label = profile ? `${profile.brand} ${profile.model}` : d.model || "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
+          const label = d.profile ? `${d.profile.brand} ${d.profile.model}` : d.model ? `Minew ${d.model}` : profile ? `${profile.brand} ${profile.model}` : "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
           return <article className="topo-discovery-card" key={d.external_id}>
             <div className="topo-discovery-photo">{profile?.image ? <img src={profile.image} alt={label} /> : <Bluetooth size={30} />}</div>
             <div className="topo-discovery-info">

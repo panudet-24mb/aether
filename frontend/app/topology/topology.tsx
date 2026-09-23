@@ -17,7 +17,7 @@ import {
   type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Eye, LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search } from "lucide-react";
+import { LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./topology.css";
@@ -90,7 +90,6 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
   const [busy, setBusy] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
-  const [showAll, setShowAll] = useState(false);
   const [placed, setPlaced] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [credentials, setCredentials] = useState<Record<string, MQTTCredentials>>({});
@@ -284,12 +283,15 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     }
   }
 
-  // Which device nodes live on the canvas: recognised sensors and adopted devices always, raw BLE only when placed.
+  // Supported models the server resolved for discovery (its stream name keeps the model between info frames).
+  const discoveredIds = useMemo(() => new Set((snapshot?.discovery ?? []).map((d) => d.external_id.toLowerCase())), [snapshot]);
+  // Which device nodes live on the canvas: registered devices and supported models only. Anything else a
+  // gateway hears (phones, other people's beacons) never appears, even if it was placed or laid out before.
   const visibleDevices = useMemo(() => {
     const ids = new Set<string>();
-    for (const d of topology.devices) if (showAll || isRecognised(d) || placed.has(d.external)) ids.add(NODE_ID.device(d.external));
+    for (const d of topology.devices) if (isRecognised(d, discoveredIds)) ids.add(NODE_ID.device(d.external));
     return ids;
-  }, [topology, showAll, placed]);
+  }, [topology, discoveredIds]);
 
   const layoutInput = useMemo<LayoutInput>(() => ({ gateways: topology.gateways, devices: topology.devices, visibleDevices, drafts }), [topology, visibleDevices, drafts]);
 
@@ -321,13 +323,13 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       const keep = new Set<string>([NODE_ID.broker]);
       for (const g of fullTopology.gateways) keep.add(NODE_ID.gateway(g.gateway.id));
       const placedSet = nextPlaced ?? placed;
-      for (const d of fullTopology.devices) if (isRecognised(d) || placedSet.has(d.external)) keep.add(NODE_ID.device(d.external));
+      for (const d of fullTopology.devices) if (isRecognised(d, discoveredIds)) keep.add(NODE_ID.device(d.external));
       const pruned: Record<string, XYPosition> = {};
       for (const [id, pos] of Object.entries(positions.current)) if (keep.has(id)) pruned[id] = pos;
       const known = new Set(fullTopology.devices.map((d) => d.external));
       savePersisted(tenant, { positions: pruned, placed: [...placedSet].filter((mac) => known.has(mac)) });
     },
-    [tenant, placed, fullTopology],
+    [tenant, placed, fullTopology, discoveredIds],
   );
 
   // Nodes are derived from the model plus the positions the user has dragged to (kept in a ref, versioned by layoutVersion).
@@ -594,7 +596,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <b>{adoptedCount}</b> adopted
           </span>
           <span title="sensor ที่ Aether ถอดรหัสค่าได้">
-            <b>{topology.devices.filter((d) => d.reading).length}</b> sensor
+            <b>{topology.devices.filter((d) => d.reading && isRecognised(d, discoveredIds)).length}</b> sensor
           </span>
           <span title="BLE ที่ gateway ได้ยินแต่ยังไม่ได้วางบน canvas">
             <b>{discovered.length}</b> รอลงทะเบียน
@@ -612,9 +614,6 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <PanelRight size={15} />
           </button>
           <span className="topo-bar-sep" aria-hidden="true" />
-          <button type="button" className={`topo-btn ${showAll ? "is-on" : ""}`} aria-pressed={showAll} onClick={() => setShowAll((v) => !v)} title="แสดง BLE ทุกตัวที่ gateway ได้ยินบน canvas" aria-label="แสดง BLE ทั้งหมด">
-            <Eye size={15} />
-          </button>
           <button type="button" className="topo-btn" onClick={relayout} title="จัดวางอัตโนมัติ · broker → gateway → อุปกรณ์" aria-label="จัดวางอัตโนมัติ">
             <LayoutGrid size={15} />
           </button>
@@ -890,7 +889,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       <Dialog open={discoveryOpen} onOpenChange={setDiscoveryOpen}>
         <DialogContent className="topo-dialog topo-discovery-dialog">
           <DialogHeader><DialogTitle>อุปกรณ์ที่พบใหม่</DialogTitle><DialogDescription>เลือกอุปกรณ์จาก gateway ที่พบ แล้วลงทะเบียนเพื่อเริ่มใช้งาน</DialogDescription></DialogHeader>
-          <DiscoveryList items={discoveryItems} gateways={topology.gateways.map((g) => g.gateway)} serverTime={serverNow} busy={busy} onAdopt={(external, gatewayId) => { setDiscoveryOpen(false); setDialogError(""); setAdopt({ external, gatewayId }); }} />
+          <DiscoveryList items={discoveryItems} gateways={topology.gateways.map((g) => g.gateway)} serverTime={serverNow} busy={busy} hiddenUnknown={topology.gateways.reduce((n, g) => n + (snapshot?.discoveryHidden?.[g.gateway.id] ?? 0), 0)} onAdopt={(external, gatewayId) => { setDiscoveryOpen(false); setDialogError(""); setAdopt({ external, gatewayId }); }} />
         </DialogContent>
       </Dialog>
       {adopt && (

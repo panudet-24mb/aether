@@ -72,6 +72,16 @@ Downloaded from the manufacturer at the user's request, used for brand/product i
 
 The S1 photo is a model reference; a compatible FFE1 advertisement alone does not establish physical model identity.
 
+### Generic profile photos (2026-09-23)
+
+The three generic catalog entries use real-product reference photos from Wikimedia Commons. They show *a* device of that class. They do not identify the model the user actually connects.
+
+| File | Source | Licence / author |
+|---|---|---|
+| `generic-http-gateway.png` | https://commons.wikimedia.org/wiki/File:Bluetooth_IoT_Gateway.png | CC0 · IoT Devices Manufacturer |
+| `generic-ble-beacon.png` | https://commons.wikimedia.org/wiki/File:Mini_BLE_beacon.png | CC BY-SA 4.0 · MinewTech |
+| `generic-environment.png` | https://commons.wikimedia.org/wiki/File:2023_Czujnik_temperatury_i_wilgotno%C5%9Bci_Xiaomi_(1).jpg | CC BY-SA 4.0 · Jacek Halicki (cropped, 400 px) |
+
 ## Verification
 
 Backend race suite including private/community RLS, immutable widgets, foreign dashboard write/delete rejection and stale revision conflict. Live API smoke verifies FFE1 decoding and renders three panels from the MQTT simulator. Infinite loops and Node host API access fail with HTTP 422. Hardware is unavailable; simulator sources are labelled explicitly.

@@ -194,8 +194,16 @@ export function primaryGateway(d: DeviceEntity): string | null {
 }
 
 /** Devices that earn a place on the canvas automatically: adopted or recognised sensors. */
-export function isRecognised(d: DeviceEntity): boolean {
-  return d.registrations.length > 0 || d.reading !== null;
+/**
+ * Whether a device belongs on the canvas: registered, or a Minew device (it reported a model in its FFE1
+ * info frame, kept in the stream name "Minew C10", or decoded any FFE1 kind), or already listed by
+ * /discovery. A bare iBeacon/Eddystone is not enough: phones and other people's beacons send those too.
+ */
+export function isRecognised(d: DeviceEntity, discovered?: ReadonlySet<string>): boolean {
+  if (d.registrations.length > 0 || discovered?.has(d.external)) return true;
+  const name = d.name.replace(/^SIM · ข้อมูลจำลอง · /, "");
+  if (d.model || name.startsWith("Minew ")) return true;
+  return !!d.kind && d.kind !== "beacon";
 }
 
 /** One-line status for a node label; mirrors what the decoder actually produced. */

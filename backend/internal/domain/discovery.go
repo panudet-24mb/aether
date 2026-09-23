@@ -12,4 +12,7 @@ type DiscoveredDevice struct {
 	Kind       string         `json:"kind,omitempty"`
 	RSSI       *int           `json:"rssi"`
 	Profile    *DeviceProfile `json:"profile,omitempty"`
+	// StreamName is the device's stream name: "Minew <model>" once an info frame arrived, a user-assigned
+	// name, or a generic one. Used server-side to recognise the device; not part of the API.
+	StreamName string `json:"-" gorm:"column:stream_name"`
 }

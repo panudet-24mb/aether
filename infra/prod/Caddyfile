@@ -14,9 +14,15 @@
 	# The container's trust store is read-only and irrelevant: in `internal` mode the root
 	# certificate is installed on the CLIENT machines (see docs/production.md), not here.
 	skip_install_trust
+	# Clients that connect by IP send no SNI; without this Caddy has no certificate to offer them.
+	default_sni {$AETHER_HOST}
 	servers {
-		# Never believe an X-Forwarded-For that arrives from the outside. This proxy is the edge.
-		trusted_proxies static
+		# Never believe an X-Forwarded-For from the outside. The one exception is an outer proxy the
+		# operator names with setup.py --upstream-proxy (empty by default: this proxy is the edge).
+		trusted_proxies static {$AETHER_UPSTREAM_PROXIES}
+		# Read X-Forwarded-For right to left and stop at the first untrusted hop: proxies append, so the
+		# left-most entry is whatever the client typed and must never become {client_ip}.
+		trusted_proxies_strict
 	}
 }
 
@@ -67,8 +73,9 @@
 		reverse_proxy api:8080 {
 			# OVERWRITE, never append: the per-IP rate limiter trusts this header because
 			# TRUSTED_PROXIES names this container, so a client-supplied value must not survive.
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Real-IP {remote_host}
+			# {client_ip} is the peer address unless that peer is a trusted upstream proxy.
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-Host {host}
 		}
@@ -76,8 +83,8 @@
 
 	handle {
 		reverse_proxy web:3000 {
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
 			header_up X-Forwarded-Proto {scheme}
 			header_up X-Forwarded-Host {host}
 		}

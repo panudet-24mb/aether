@@ -36,7 +36,7 @@ if [ ! -f "$PWFILE" ]; then
 	chmod 0600 "$PWFILE"
 	echo "generated a random owner password in $PWFILE (not printed here)"
 fi
-[ "$(stat -f '%Lp' "$PWFILE" 2>/dev/null || stat -c '%a' "$PWFILE")" = "600" ] || {
+[ "$(stat -c '%a' "$PWFILE" 2>/dev/null || stat -f '%Lp' "$PWFILE")" = "600" ] || {
 	echo "password file must be mode 0600: $PWFILE" >&2; exit 1; }
 
 # The password reaches the container only on stdin. Inside, umask 077 makes the temporary file

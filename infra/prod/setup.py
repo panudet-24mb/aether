@@ -122,6 +122,17 @@ def main() -> int:
     p.add_argument("--host", required=True,
                    help="the name or IP clients and gateways use: APP_ORIGIN, the Caddy site, the "
                         "MQTT certificate SAN and MQTT_PUBLIC_HOST all come from it")
+    p.add_argument("--public-origin", default="",
+                   help="the URL browsers use when another reverse proxy (nginx, Cloudflare) sits in front of "
+                        "this stack, e.g. https://aether.example.com; becomes APP_ORIGIN (default: derived from --host)")
+    p.add_argument("--mqtt-host", default="",
+                   help="the name or IP gateways use for MQTT when it differs from --host, e.g. because the web "
+                        "name is behind a CDN that cannot carry MQTT (default: --host)")
+    p.add_argument("--upstream-proxy", default="",
+                   help="space-separated CIDRs of a reverse proxy in front of Caddy; only then does Caddy believe "
+                        "its X-Forwarded-For, so the API still sees each browser's own address")
+    p.add_argument("--web-bind", default="0.0.0.0",
+                   help="host interface for Caddy's HTTPS/HTTP ports; 127.0.0.1 when an outer proxy on this host fronts it")
     p.add_argument("--mqtt-bind", default="0.0.0.0", help="host interface for the 8883 listener")
     p.add_argument("--tls", choices=["internal", "acme"], default="internal")
     p.add_argument("--email", default="", help="ACME account address, and the owner account address")
@@ -151,6 +162,21 @@ def main() -> int:
         return fail("--tls acme requires --email for the ACME account")
     if not re.fullmatch(r"[A-Za-z0-9._:\-]{1,253}", a.host):
         return fail("--host must be a DNS name or an IP address")
+    mqtt_host = a.mqtt_host or a.host
+    if not re.fullmatch(r"[A-Za-z0-9._:\-]{1,253}", mqtt_host):
+        return fail("--mqtt-host must be a DNS name or an IP address")
+    if a.public_origin and not re.fullmatch(r"https://[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?", a.public_origin):
+        return fail("--public-origin must look like https://name[:port] with no path")
+    try:
+        if ipaddress.ip_address(a.web_bind).version != 4:
+            return fail("--web-bind must be an IPv4 address (compose port syntax)")
+    except ValueError:
+        return fail("--web-bind must be an IPv4 address")
+    for cidr in a.upstream_proxy.split():
+        try:
+            ipaddress.ip_network(cidr)
+        except ValueError:
+            return fail("--upstream-proxy must be IP addresses or CIDRs: " + cidr)
     if shutil.which("openssl") is None:
         return fail("openssl is required")
     if shutil.which("docker") is None:
@@ -228,14 +254,23 @@ def main() -> int:
     copy(mq / "ca.crt", broker / "ca.crt")
     copy(mq / "ca.crt", collector / "ca.crt")
 
-    sans = san_entry(a.host) + ",DNS:mqtt"
+    sans = san_entry(mqtt_host) + ",DNS:mqtt"
     if not (broker / "server.crt").exists():
         # 825 days is the longest a modern TLS client will accept for a leaf certificate.
         issue_cert(mq / "ca.key", mq / "ca.crt", broker / "server.key", broker / "server.crt",
-                   a.host, sans, 825, mq)
+                   mqtt_host, sans, 825, mq)
         created.append("MQTT broker certificate (825 days)")
     else:
         kept.append("MQTT broker certificate")
+        # The certificate is never reissued automatically (gateways pin nothing, but a new key is still a
+        # change to roll out). Say so loudly when the name gateways will be told no longer matches it.
+        have = subprocess.run(["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(broker / "server.crt")],
+                              capture_output=True, text=True).stdout
+        want = san_entry(mqtt_host).replace("IP:", "IP Address:")
+        if want not in have:
+            print("WARNING: the MQTT broker certificate does not cover " + mqtt_host + " (--mqtt-host/--host). Gateways "
+                  "that verify the server will refuse it. Reissue: move " + str(broker / "server.crt") + " away and re-run.",
+                  file=sys.stderr)
 
     ingest_password = secret("MQTT_INGEST_PASSWORD", lambda: secrets.token_urlsafe(32))
     # The collector configuration format requires at least one explicit topic binding. Production
@@ -343,10 +378,12 @@ connection_messages true
         "AETHER_TLS": "internal" if a.tls == "internal" else a.email,
         "AETHER_CSP_HEADER": "Content-Security-Policy" if a.csp == "enforce" else "Content-Security-Policy-Report-Only",
         "AETHER_HTTPS_PORT": str(a.https_port),
+        "AETHER_UPSTREAM_PROXIES": a.upstream_proxy,
+        "AETHER_WEB_BIND": a.web_bind,
         "AETHER_HTTP_PORT": str(a.http_port),
         "AETHER_TZ": os.environ.get("TZ", "Asia/Bangkok"),
         "APP_ENV": "production",
-        "APP_ORIGIN": origin,
+        "APP_ORIGIN": a.public_origin or origin,
         "DEPLOYMENT_MODE": "onprem",
         "ALLOW_REGISTRATION": "false",
         "TRUSTED_PROXIES": proxy_ip + "/32",
@@ -364,7 +401,7 @@ connection_messages true
         "SMTP_FROM": old.get("SMTP_FROM", ""),
         "MQTT_BIND_IP": a.mqtt_bind,
         "MQTT_PORT": str(a.mqtt_port),
-        "MQTT_PUBLIC_HOST": a.host,
+        "MQTT_PUBLIC_HOST": mqtt_host,
         "MQTT_PUBLIC_PORT": str(a.mqtt_port),
         "MQTT_PUBLIC_SCHEME": "ssl",
         "MQTT_ALLOW_PLAINTEXT": "true" if a.mqtt_plaintext else "false",
@@ -397,11 +434,13 @@ connection_messages true
     print("  backups       : " + str(backup_dir))
     print("  access log    : " + str(log_dir) + "/access.log")
     print("  site          : " + origin + "   TLS mode: " + a.tls)
-    print("  MQTT for MG3  : ssl://" + a.host + ":" + str(a.mqtt_port) +
+    if a.public_origin:
+        print("  public origin : " + a.public_origin + "   (APP_ORIGIN, behind " + (a.upstream_proxy or "an outer proxy") + ")")
+    print("  MQTT for MG3  : ssl://" + mqtt_host + ":" + str(a.mqtt_port) +
           "   CA to upload: " + str(broker / "ca.crt"))
     print("  broker cert   : expires " + expiry(broker / "server.crt"))
     if a.mqtt_plaintext:
-        print("  MQTT no TLS   : tcp://" + a.host + ":" + str(a.mqtt_plain_port) +
+        print("  MQTT no TLS   : tcp://" + mqtt_host + ":" + str(a.mqtt_plain_port) +
               "   WARNING: credentials and data are not encrypted; isolate these gateways")
     print("  proxy address : " + proxy_ip + " (TRUSTED_PROXIES)")
     print("  created       : " + (", ".join(created) if created else "nothing, everything existed"))

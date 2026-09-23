@@ -387,14 +387,16 @@ services:
       AETHER_CSP_HEADER: ${AETHER_CSP_HEADER:-Content-Security-Policy}
       AETHER_HOST: ${AETHER_HOST:?run infra/prod/setup.py}
       AETHER_HTTPS_PORT: ${AETHER_HTTPS_PORT:-443}
+      AETHER_UPSTREAM_PROXIES: ${AETHER_UPSTREAM_PROXIES:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
       - ${AETHER_CADDY_LOG_DIR:?run infra/prod/setup.py}:/var/log/caddy
     ports:
-      - "${AETHER_HTTPS_PORT:-443}:${AETHER_HTTPS_PORT:-443}"
-      - "${AETHER_HTTP_PORT:-80}:${AETHER_HTTP_PORT:-80}"
+      # 127.0.0.1 when an outer reverse proxy on this host is the only way in (setup.py --web-bind).
+      - "${AETHER_WEB_BIND:-0.0.0.0}:${AETHER_HTTPS_PORT:-443}:${AETHER_HTTPS_PORT:-443}"
+      - "${AETHER_WEB_BIND:-0.0.0.0}:${AETHER_HTTP_PORT:-80}:${AETHER_HTTP_PORT:-80}"
     healthcheck:
       test:
         - CMD-SHELL

@@ -241,9 +241,33 @@ docker compose --env-file <env> -f infra/prod/compose.yaml up -d mqtt api
 
 `MQTT_PUBLIC_SCHEME=tcp` เป็นช่องทางหลักใน production ยังถูกปฏิเสธเหมือนเดิม — 1883 เป็นช่องทางเสริมเท่านั้น
 
+### 4.6 วางหลัง reverse proxy อื่น (nginx / Cloudflare) บนเครื่องเดียวกัน
+
+ถ้าเครื่องมี nginx ถือพอร์ต 80/443 อยู่แล้ว ให้ Caddy ของ Aether ฟังเฉพาะ loopback บนพอร์ตอื่น แล้วให้ nginx ส่งต่อมา:
+
+```sh
+python3 infra/prod/setup.py --host aether.example.com \
+    --public-origin https://aether.example.com \
+    --mqtt-host 203.0.113.10 \
+    --upstream-proxy 172.29.7.1/32 \
+    --web-bind 127.0.0.1 --https-port 8443 --http-port 8088 --tls internal
+```
+
+| option | ความหมาย |
+|---|---|
+| `--host` | ต้องเป็น**ชื่อเดียวกับที่ nginx ส่งมาใน Host/SNI** ไม่อย่างนั้น Caddy จะไม่มี site ที่ตรง |
+| `--public-origin` | URL ที่เบราว์เซอร์เห็นจริง (ไม่มีพอร์ต 8443) → `APP_ORIGIN` ที่ API ใช้ตรวจ Origin |
+| `--mqtt-host` | ชื่อ/IP ที่ gateway ใช้ต่อ MQTT เมื่อต่างจากเว็บ (เช่น เว็บอยู่หลัง Cloudflare ซึ่งส่ง MQTT ไม่ได้) · ใช้เป็น SAN ของใบรับรอง broker ตอนออกครั้งแรก ถ้าเปลี่ยนภายหลัง setup จะเตือนให้ออกใบใหม่ |
+| `--upstream-proxy` | IP/CIDR ของ proxy ด้านหน้าที่ Caddy เชื่อ `X-Forwarded-For` (อ่านจากขวาไปซ้าย `trusted_proxies_strict`) · nginx ที่ต่อเข้า `127.0.0.1` จะปรากฏเป็น gateway ของ subnet compose คือ `.1` |
+| `--web-bind` | IPv4 ที่ Caddy เปิดพอร์ต · `127.0.0.1` = เข้าได้เฉพาะผ่าน nginx |
+
+ฝั่ง nginx: `proxy_pass https://127.0.0.1:8443;` พร้อม `proxy_ssl_server_name on; proxy_ssl_name <host>;` ตรวจใบของ Caddy ด้วย root ที่ดึงจาก `proxy:/data/caddy/pki/authorities/local/root.crt`, ส่ง `Host $host`, **เขียนทับ** `X-Forwarded-For $remote_addr` (ไม่ append) และส่ง `Upgrade`/`Connection` สำหรับ `/ws`
+
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 
 `setup.py` ตั้ง `ALERTS_SHADOW=true` ให้ตั้งแต่ต้น หมายความว่า: **บันทึก event ทุกอย่างลงฐานข้อมูลตามปกติ แต่ไม่เปิด alert ไม่ส่ง LINE/webhook/อีเมล และไม่รัน automation**
+
+**ข้อยกเว้น: ปุ่มฉุกเฉิน SOS (event `button`) เปิด alert และส่งตามช่องทางของกฎเสมอ แม้อยู่ใน shadow mode** (ตั้งแต่ 2026-09-23) เพราะ shadow มีไว้กันเกณฑ์ที่ยังไม่ได้จูนปลุกคนตอนดึก แต่คนกดปุ่มขอความช่วยเหลือไม่ใช่เรื่องที่ต้องจูน
 
 ใช้แบบนี้ **อย่างน้อย 3–7 วัน** เพื่อดูว่าเกณฑ์ที่ตั้งไว้ไม่ปลุกคนทั้งโรงพยาบาลตอนตีสาม
 

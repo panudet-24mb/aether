@@ -34,3 +34,6 @@ __pycache__/
 .idea/
 .vscode/
 *.log
+
+# Caddy access logs written by the production stack
+infra/prod/logs/

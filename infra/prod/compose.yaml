@@ -1,0 +1,468 @@
+# Aether — single-server production stack (on-premise first).
+#
+#   docker compose --env-file .env.prod -f infra/prod/compose.yaml <command>
+#
+# Standalone: it does NOT extend infra/compose.yaml and shares no volume with the development
+# stack. Every value comes from the env file written by infra/prod/setup.py; missing values fail
+# loudly (`:?`) instead of silently starting an insecure deployment.
+name: aether-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+# The API must see the real client address for its per-IP rate limit, so TRUSTED_PROXIES names the
+# proxy exactly. That is only possible with a fixed subnet and a fixed address for the proxy.
+networks:
+  aether:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${AETHER_SUBNET:?run infra/prod/setup.py}
+
+volumes:
+  postgres-data:
+  postgres-certs:
+  mqtt-data:
+  caddy-data:
+  caddy-config:
+
+services:
+  # One-shot. PostgreSQL refuses a server key it does not own, and Mosquitto needs its persistence
+  # directory owned by its unprivileged uid. Both are fixed here instead of by the operator, so the
+  # same commands work on Linux and on a macOS test host.
+  prepare:
+    # The postgres image itself, so the certificate ends up owned by whatever uid that image's
+    # "postgres" user happens to have (70 on alpine, 999 on the Debian variants).
+    image: postgres:18-alpine
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - |
+        cp /src/postgres/server.crt /pgcerts/server.crt
+        cp /src/postgres/server.key /pgcerts/server.key
+        chown postgres:postgres /pgcerts/server.crt /pgcerts/server.key
+        chmod 0644 /pgcerts/server.crt
+        chmod 0600 /pgcerts/server.key
+        chown "$${MQTT_UID}:$${MQTT_GID}" /mqttdata
+        chmod 0700 /mqttdata
+        echo "prepare: certificate installed for $$(id -u postgres), mosquitto data owned by $${MQTT_UID}"
+    environment:
+      MQTT_UID: ${MQTT_UID:?run infra/prod/setup.py}
+      MQTT_GID: ${MQTT_GID:?run infra/prod/setup.py}
+    volumes:
+      - ${AETHER_SECRETS_DIR:?run infra/prod/setup.py}/postgres:/src/postgres:ro
+      - postgres-certs:/pgcerts
+      - mqtt-data:/mqttdata
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    logging: *logging
+    networks: [aether]
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run infra/prod/setup.py}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      # Consumed only by init-db.sh, on a new volume.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run infra/prod/setup.py}
+      MQTT_PROVISION_DB_PASSWORD: ${MQTT_PROVISION_DB_PASSWORD:?run infra/prod/setup.py}
+    command:
+      - postgres
+      # TLS is not optional: APP_ENV=production refuses a DATABASE_URL without sslmode=verify-full.
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - wal_compression=on
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - min_wal_size=1GB
+      - -c
+      - track_io_timing=on
+      # Slow-query visibility without logging every statement.
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - log_checkpoints=on
+      - -c
+      - log_lock_waits=on
+      - -c
+      - log_autovacuum_min_duration=1000
+      - -c
+      - log_temp_files=0
+      - -c
+      - log_line_prefix=%m [%p] %u@%d
+      - -c
+      - timezone=UTC
+      # sensor_samples, gateway_packets and ble_observations are delete-heavy (retention worker):
+      # vacuum far more eagerly than the defaults so dead tuples do not accumulate between runs.
+      - -c
+      - autovacuum_naptime=30s
+      - -c
+      - autovacuum_max_workers=4
+      - -c
+      - autovacuum_vacuum_scale_factor=0.02
+      - -c
+      - autovacuum_analyze_scale_factor=0.01
+      - -c
+      - autovacuum_vacuum_threshold=1000
+      - -c
+      - autovacuum_vacuum_cost_limit=2000
+      - -c
+      - autovacuum_vacuum_cost_delay=2ms
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - postgres-certs:/certs:ro
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-aether.sh:ro
+    # No published port. The database is reachable only from this compose network.
+    shm_size: 256mb
+    healthcheck:
+      # Run as the postgres OS user: pg_hba.conf uses peer for the local socket, so a probe from
+      # root would log a FATAL authentication line every interval for the life of the server.
+      test: ["CMD-SHELL", "gosu postgres pg_isready -U postgres -d aether"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    cap_drop: [ALL]
+    # The stock entrypoint starts as root and drops to uid 999 with su-exec.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  migrate:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    entrypoint: ["/app/migrate"]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+    volumes:
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    <<: *hardened
+    restart: "no"
+    logging: *logging
+    networks: [aether]
+
+  api:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      APP_ENV: production
+      APP_ORIGIN: ${APP_ORIGIN:?run infra/prod/setup.py}
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      LISTEN_ADDR: ":8080"
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?run infra/prod/setup.py}
+      CHANNEL_SEAL_KEY: ${CHANNEL_SEAL_KEY:?run infra/prod/setup.py}
+      # Only then is X-Forwarded-For believed; Caddy overwrites that header (see Caddyfile).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?run infra/prod/setup.py}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-300}
+      SAMPLE_RETENTION_DAYS: ${SAMPLE_RETENTION_DAYS:-90}
+      SAMPLE_MIN_INTERVAL_SEC: ${SAMPLE_MIN_INTERVAL_SEC:-30}
+      BLE_HISTORY_HOURS: ${BLE_HISTORY_HOURS:-24}
+      DISCOVERY_LIMIT: ${DISCOVERY_LIMIT:-100}
+      ALERTS_SHADOW: ${ALERTS_SHADOW:-true}
+      WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      # Shown by the UI on the "connect a device" page; must be what an MG3 on the LAN can reach.
+      MQTT_PUBLIC_HOST: ${MQTT_PUBLIC_HOST:?run infra/prod/setup.py}
+      MQTT_PUBLIC_PORT: ${MQTT_PUBLIC_PORT:-8883}
+      MQTT_PUBLIC_SCHEME: ${MQTT_PUBLIC_SCHEME:-ssl}
+      MQTT_ALLOW_PLAINTEXT: ${MQTT_ALLOW_PLAINTEXT:-false}
+      MQTT_PLAIN_PORT: ${MQTT_PLAIN_PORT:-1883}
+    volumes:
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    healthcheck:
+      test: ["CMD", "/app/api", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    # create-owner.sh writes the password file here, inside the container, as uid 10001.
+    tmpfs:
+      - /tmp:mode=1777,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  mqtt:
+    image: eclipse-mosquitto:2.0.22
+    user: "${MQTT_UID}:${MQTT_GID}"
+    entrypoint: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+    volumes:
+      - ${AETHER_SECRETS_DIR}/mqtt/broker:/mosquitto/config:ro
+      - ${AETHER_SECRETS_DIR}/mqtt/runtime:/mosquitto/runtime:ro
+      - mqtt-data:/mosquitto/data
+    ports:
+      # TLS listener for gateways.
+      - "${MQTT_BIND_IP:-0.0.0.0}:${MQTT_PORT:-8883}:8883"
+      # Plaintext listener only exists when setup.py ran with --mqtt-plaintext; otherwise this is bound to
+      # loopback and nothing listens behind it inside the container.
+      - "${MQTT_PLAIN_BIND:-127.0.0.1}:${MQTT_PLAIN_PORT:-1883}:1883"
+    healthcheck:
+      # A TLS handshake that ends in "not authorised" (exit 5) proves the listener, the certificate
+      # chain and the authentication stack are all alive without embedding a password here.
+      test:
+        - CMD-SHELL
+        - >-
+          mosquitto_sub -h mqtt -p 8883 --cafile /mosquitto/config/ca.crt
+          -i aether-healthcheck -u aether-healthcheck -P invalid
+          -t '$$SYS/broker/uptime' -C 1 -W 3 >/dev/null 2>&1;
+          s=$$?; [ "$$s" = 5 ] || [ "$$s" = 0 ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+    <<: *hardened
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  mqtt-ingest:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    entrypoint: ["/app/mqtt"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      APP_ENV: production
+      APP_ORIGIN: ${APP_ORIGIN}
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      CHANNEL_SEAL_KEY: ${CHANNEL_SEAL_KEY}
+      SAMPLE_RETENTION_DAYS: ${SAMPLE_RETENTION_DAYS:-90}
+      SAMPLE_MIN_INTERVAL_SEC: ${SAMPLE_MIN_INTERVAL_SEC:-30}
+      BLE_HISTORY_HOURS: ${BLE_HISTORY_HOURS:-24}
+      DISCOVERY_LIMIT: ${DISCOVERY_LIMIT:-100}
+      ALERTS_SHADOW: ${ALERTS_SHADOW:-true}
+      MQTT_CONFIG_FILE: /run/mqtt/collector.json
+    volumes:
+      - ${AETHER_SECRETS_DIR}/mqtt/collector:/run/mqtt:ro
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    healthcheck:
+      test: ["CMD", "/app/mqtt", "health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+    <<: *hardened
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # Renders broker credentials for gateways created in the web UI and SIGHUPs Mosquitto through a
+  # shared PID namespace. It never gets a Docker socket and can only read password hashes.
+  mqtt-provisioner:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    entrypoint: ["/app/mqtt-provisioner"]
+    user: "${MQTT_UID}:${MQTT_GID}"
+    pid: "service:mqtt"
+    environment:
+      DATABASE_URL: postgresql://aether_mqtt_provisioner:${MQTT_PROVISION_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+    volumes:
+      - ${AETHER_SECRETS_DIR}/mqtt/broker/passwords:/run/mqtt-base/passwords:ro
+      - ${AETHER_SECRETS_DIR}/mqtt/broker/acl:/run/mqtt-base/acl:ro
+      - ${AETHER_SECRETS_DIR}/mqtt/runtime:/run/mqtt-runtime
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    depends_on:
+      mqtt:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    <<: *hardened
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  web:
+    image: ${AETHER_WEB_IMAGE:-aether-web:prod}
+    build:
+      context: ../../frontend
+    # No published port: only the proxy talks to it. HEALTHCHECK comes from the image.
+    <<: *hardened
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      AETHER_SITE: ${AETHER_SITE:?run infra/prod/setup.py}
+      AETHER_HTTP_SITE: ${AETHER_HTTP_SITE:?run infra/prod/setup.py}
+      AETHER_TLS: ${AETHER_TLS:?run infra/prod/setup.py}
+      AETHER_CSP_HEADER: ${AETHER_CSP_HEADER:-Content-Security-Policy}
+      AETHER_HOST: ${AETHER_HOST:?run infra/prod/setup.py}
+      AETHER_HTTPS_PORT: ${AETHER_HTTPS_PORT:-443}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - ${AETHER_CADDY_LOG_DIR:?run infra/prod/setup.py}:/var/log/caddy
+    ports:
+      - "${AETHER_HTTPS_PORT:-443}:${AETHER_HTTPS_PORT:-443}"
+      - "${AETHER_HTTP_PORT:-80}:${AETHER_HTTP_PORT:-80}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -k -o /dev/null
+          --resolve "$${AETHER_HOST}:$${AETHER_HTTPS_PORT}:127.0.0.1"
+          "https://$${AETHER_HOST}:$${AETHER_HTTPS_PORT}/health/live"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    # Only to bind 80/443 as an unprivileged process inside the container.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      aether:
+        ipv4_address: ${AETHER_PROXY_IP:?run infra/prod/setup.py}
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # Nightly pg_dump --format=custom with a pg_restore --list integrity check and 14 daily + 8 weekly
+  # retention. This is NOT point-in-time recovery: see docs/production.md.
+  backup:
+    image: postgres:18-alpine
+    entrypoint: ["/bin/sh", "/opt/aether/backup-loop.sh"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: aether
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /run/db-ca/ca.crt
+      BACKUP_AT: ${BACKUP_AT:-02:30}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-14}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-8}
+      TZ: ${AETHER_TZ:-Asia/Bangkok}
+    volumes:
+      - ./backup.sh:/opt/aether/backup.sh:ro
+      - ./backup-loop.sh:/opt/aether/backup-loop.sh:ro
+      - ./restore-inner.sh:/opt/aether/restore-inner.sh:ro
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+      - ${AETHER_BACKUP_DIR:?run infra/prod/setup.py}:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 256m

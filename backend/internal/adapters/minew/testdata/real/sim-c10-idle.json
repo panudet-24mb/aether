@@ -1,0 +1,193 @@
+{
+  "anonymized": true,
+  "captured_at": "2026-09-20T09:00:00Z",
+  "gateway_model": "minew-mg3",
+  "label": "sim-c10-idle",
+  "mac": "fe20d0d290a0",
+  "note": "generated from backend/internal/simulation then run through infra/capture-golden.py --anonymize; no hardware involved",
+  "rows": [
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1aff4c000215a37e0000c0de4be7aab1e2a5e7e7000100010005c5",
+      "rssi": -52,
+      "timestamp": 1789894800000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580000000a00fba090d2d020fe",
+      "rssi": -52,
+      "timestamp": 1789894800000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580004000a00fba090d2d020fe",
+      "rssi": -45,
+      "timestamp": 1789894805000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580008000900fba090d2d020fe",
+      "rssi": -57,
+      "timestamp": 1789894810000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358000b000700fba090d2d020fe",
+      "rssi": -57,
+      "timestamp": 1789894815000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "0f16e1ffa10858a090d2d020fe433130",
+      "rssi": -57,
+      "timestamp": 1789894815000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358000c000600fba090d2d020fe",
+      "rssi": -47,
+      "timestamp": 1789894820000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358000d000300fba090d2d020fe",
+      "rssi": -56,
+      "timestamp": 1789894825000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358000c000100fba090d2d020fe",
+      "rssi": -62,
+      "timestamp": 1789894830000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580009fffe00fba090d2d020fe",
+      "rssi": -53,
+      "timestamp": 1789894835000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580006fffc00fba090d2d020fe",
+      "rssi": -57,
+      "timestamp": 1789894840000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580002fffa00fba090d2d020fe",
+      "rssi": -68,
+      "timestamp": 1789894845000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fffefff800fba090d2d020fe",
+      "rssi": -63,
+      "timestamp": 1789894850000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fffafff700fba090d2d020fe",
+      "rssi": -60,
+      "timestamp": 1789894855000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff6fff600fba090d2d020fe",
+      "rssi": -73,
+      "timestamp": 1789894860000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff4fff600fba090d2d020fe",
+      "rssi": -73,
+      "timestamp": 1789894865000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff3fff600fba090d2d020fe",
+      "rssi": -66,
+      "timestamp": 1789894870000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff4fff800fba090d2d020fe",
+      "rssi": -77,
+      "timestamp": 1789894875000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff6fff900fba090d2d020fe",
+      "rssi": -83,
+      "timestamp": 1789894880000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fff9fffb00fba090d2d020fe",
+      "rssi": -75,
+      "timestamp": 1789894885000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa10358fffcfffe00fba090d2d020fe",
+      "rssi": -80,
+      "timestamp": 1789894890000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580001000000fba090d2d020fe",
+      "rssi": -91,
+      "timestamp": 1789894895000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580005000300fba090d2d020fe",
+      "rssi": -85,
+      "timestamp": 1789894900000
+    },
+    {
+      "mac": "fe20d0d290a0",
+      "rawData": "1216e1ffa103580008000500fba090d2d020fe",
+      "rssi": -83,
+      "timestamp": 1789894905000
+    }
+  ],
+  "synthetic": true,
+  "expect": {
+    "kind": "motion",
+    "model": "C10",
+    "frames": [
+      "ibeacon@1",
+      "minew-ffe1-a103@1",
+      "minew-ffe1-a108@1"
+    ],
+    "unknown": [],
+    "battery": [
+      78,
+      93
+    ],
+    "metrics": {
+      "accel_g": [
+        0.736,
+        1.226
+      ],
+      "accel_x": [
+        -0.019,
+        0.081
+      ],
+      "accel_y": [
+        -0.03,
+        0.07
+      ],
+      "accel_z": [
+        0.735,
+        1.226
+      ]
+    },
+    "beacon": {
+      "type": "ibeacon",
+      "uuid": "a37e0000-c0de-4be7-aab1-e2a5e7e70001",
+      "major": 1,
+      "minor": 5
+    }
+  }
+}

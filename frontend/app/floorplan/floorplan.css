@@ -1,0 +1,177 @@
+/* Floor plan studio. Shares the lean toolbar, chips, dialogs and floating messages with the topology page. */
+.fp-bar { gap: 8px; }
+.fp-bar .topo-live { margin-right: 4px; }
+.fp-site { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-muted); min-width: 0; }
+.fp-site select, .fp-snap select, .fp-mini { background: transparent; border: 0; color: var(--color-ink); font: inherit; font-size: 13px; max-width: 190px; text-overflow: ellipsis; outline: none; }
+.fp-site select option, .fp-snap select option, .fp-mini option { background: var(--color-panel); }
+.fp-seg { display: inline-flex; border: 1px solid var(--color-border); border-radius: 7px; overflow: hidden; height: 30px; flex-shrink: 0; }
+.fp-seg button { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; background: transparent; border: 0; color: var(--color-muted); font-size: 12.5px; cursor: pointer; }
+.fp-seg button.is-on { background: var(--color-accent-faint); color: var(--color-accent); }
+.fp-tools { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.fp-mini { height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); }
+.fp-snap, .fp-slider { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: 7px; color: var(--color-muted); flex-shrink: 0; }
+.fp-slider input { width: 110px; accent-color: var(--color-accent); }
+.fp-spacer { flex: 1; min-width: 4px; }
+.fp-dirty { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-warning); margin-left: 2px; }
+@media (pointer: fine) { .topo.fp .fp-seg button, .topo.fp .fp-side button, .topo.fp .fp-bar button { min-height: 0; } }
+@media (max-width: 1500px) { .fp-bar { flex-wrap: wrap; } }
+
+.fp-body { grid-template-columns: 236px minmax(0, 1fr) 300px; }
+.fp-body.no-palette { grid-template-columns: minmax(0, 1fr) 300px; }
+.fp-body.no-inspector { grid-template-columns: 236px minmax(0, 1fr); }
+.fp-side { overflow-y: auto; padding: 12px; border-right: 1px solid var(--color-border); background: var(--color-panel); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fp-inspector { border-right: 0; border-left: 1px solid var(--color-border); gap: 10px; }
+.fp-side h2 { display: flex; align-items: center; gap: 7px; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--color-muted); margin: 6px 0 0; }
+.fp-side h2 small { margin-left: auto; font-size: 11px; color: var(--color-dim); letter-spacing: 0; }
+.fp-side label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-muted); min-width: 0; }
+.fp-side input:not([type=checkbox]):not([type=radio]):not([type=range]), .fp-side select { font: inherit; font-size: 13px; color: var(--color-ink); background: var(--color-paper); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 8px; min-width: 0; width: 100%; }
+.fp-side input[type=range] { accent-color: var(--color-accent); }
+.fp-side input:focus-visible, .fp-side select:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.fp-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.fp-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.fp-inline { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--color-ink) !important; }
+.fp-checks { border: 1px solid var(--color-border); border-radius: 8px; padding: 8px 10px; margin: 0; display: flex; flex-direction: column; gap: 5px; }
+.fp-checks legend { font-size: 12px; color: var(--color-muted); padding: 0 4px; }
+.fp-checks label { flex-direction: row; align-items: center; gap: 8px; font-size: 12.5px; color: var(--color-ink); }
+.fp-checks small { font-size: 11.5px; color: var(--color-muted); line-height: 1.5; }
+.fp-assets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.fp-asset-row { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel-raised); color: var(--color-muted); cursor: grab; }
+.fp-asset-row:hover:not(:disabled) { border-color: var(--color-accent); }
+.fp-asset-row:disabled { opacity: .55; cursor: default; }
+.fp-asset-row.is-online svg { color: var(--color-accent); }
+.fp-asset-row.is-wearable { cursor: pointer; }
+.fp-asset-row.is-wearable.is-online svg { color: #80b7ff; }
+.fp-asset-row span { display: flex; flex-direction: column; min-width: 0; }
+.fp-asset-row strong { font-size: 12.5px; font-weight: 500; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-asset-row small { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-asset-title { display: flex; flex-direction: column; gap: 2px; margin: 0; }
+.fp-asset-title strong { font-weight: 500; }
+.fp-asset-title small { font-size: 12px; color: var(--color-muted); }
+
+.fp-stage { position: relative; min-width: 0; min-height: 0; background: var(--color-paper); overflow: hidden; }
+.fp-svg { width: 100%; height: 100%; display: block; touch-action: none; user-select: none; }
+.fp-svg.is-pan { cursor: grab; }
+.fp-svg.is-draw { cursor: crosshair; }
+.fp-3d { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 35%, #142028 0%, var(--color-paper) 70%); }
+.fp-3d canvas { display: block; touch-action: none; }
+.fp-hint { position: absolute; left: 12px; bottom: 10px; max-width: calc(100% - 24px); font-size: 11.5px; color: var(--color-muted); background: color-mix(in oklab, var(--color-panel) 88%, transparent); border: 1px solid var(--color-border); border-radius: 6px; padding: 4px 9px; pointer-events: none; }
+.fp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--color-muted); padding: 24px; }
+.fp-empty h2 { font-size: 20px; color: var(--color-ink); }
+.fp-empty p { max-width: 460px; line-height: 1.8; font-size: 13.5px; }
+
+.fp-floor { fill: var(--color-panel); stroke: var(--color-border); }
+.fp-zone { cursor: move; transition: fill-opacity var(--dur-short) var(--ease-out); }
+.fp-zone-name { fill: var(--color-ink); font-weight: 500; pointer-events: none; }
+.fp-zone-meta { fill: var(--color-muted); pointer-events: none; }
+.fp-wall { stroke: #cfe0dc; cursor: move; }
+.fp-wall.is-on { stroke: var(--color-accent); }
+.fp-item { fill: var(--color-panel-raised); stroke: var(--color-muted); cursor: move; }
+.fp-item.is-on { stroke: var(--color-accent); }
+.fp-item.type-door, .fp-item.type-window { fill: #80b7ff33; stroke: #80b7ff; }
+.fp-item.type-exit { fill: #a7f3d033; stroke: var(--color-accent); }
+.fp-item.type-extinguisher { fill: #ff8f7033; stroke: var(--color-danger); }
+.fp-item-text { fill: var(--color-muted); pointer-events: none; }
+.fp-item-text.is-label { fill: var(--color-ink); }
+.fp-handle { fill: var(--color-paper); stroke: var(--color-accent); stroke-width: .02; vector-effect: non-scaling-stroke; cursor: crosshair; }
+.fp-edge-hit { cursor: copy; }
+.fp-coverage { fill: #a7f3d00d; stroke: var(--color-accent); stroke-dasharray: .4 .3; opacity: .7; pointer-events: none; }
+.fp-asset { cursor: move; }
+.fp-asset-body { fill: var(--color-panel-raised); stroke: var(--color-warning); }
+.fp-asset.is-online .fp-asset-body { stroke: var(--color-accent); }
+.fp-asset.is-alert .fp-asset-body { stroke: var(--color-danger); fill: #ff8f7026; }
+.fp-asset.is-on .fp-asset-body { stroke: var(--color-ink); }
+.fp-asset-dot { fill: var(--color-accent); }
+.fp-asset-name { fill: var(--color-ink); pointer-events: none; paint-order: stroke; stroke: var(--color-paper); stroke-width: .05; }
+.fp-asset-meta { fill: var(--color-muted); pointer-events: none; }
+.fp-wearable line { stroke: #80b7ff; opacity: .45; }
+.fp-wearable circle { fill: #80b7ff; stroke: var(--color-paper); }
+.fp-wearable text { fill: #80b7ff; pointer-events: none; paint-order: stroke; stroke: var(--color-paper); stroke-width: .05; }
+.fp-wearable .fp-pulse { fill: none; stroke: #80b7ff; animation: fp-pulse 2.2s var(--ease-out) infinite; }
+@keyframes fp-pulse { from { transform: scale(1); opacity: .8; } to { transform: scale(2.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .fp-wearable .fp-pulse { animation: none; opacity: 0; } }
+.fp-pending { fill: none; stroke: var(--color-accent); }
+.fp-pending.tool-zone { fill: #a7f3d01f; }
+.fp-pending-dot { fill: var(--color-accent); }
+.fp-measure { stroke: var(--color-warning); }
+.fp-dim { fill: var(--color-warning); paint-order: stroke; stroke: var(--color-paper); stroke-width: .06; pointer-events: none; }
+
+/* CAD (DXF) import dialog */
+[data-slot="dialog-content"].fp-dxf { width: min(880px, calc(100% - 2rem)); max-width: min(880px, calc(100% - 2rem)); }
+.fp-dxf-body, .fp-dxf-wait { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; min-width: 0; }
+.fp-dxf-wait p { font-size: 13px; color: var(--color-muted); display: flex; align-items: center; gap: 8px; line-height: 1.8; }
+.fp-dxf-wait strong { color: var(--color-ink); font-weight: 500; overflow-wrap: anywhere; }
+.fp-spin { animation: fp-spin 1s linear infinite; flex-shrink: 0; color: var(--color-accent); }
+@keyframes fp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .fp-spin { animation-duration: 3s; } }
+.fp-dxf-bar { height: 6px; border-radius: 3px; background: var(--color-panel-raised); overflow: hidden; }
+.fp-dxf-bar i { display: block; height: 100%; background: var(--color-accent); transition: width var(--dur-short) var(--ease-out); }
+.fp-dxf-error { align-items: flex-start !important; color: var(--color-danger) !important; line-height: 1.8; }
+.fp-dxf-error svg { flex-shrink: 0; margin-top: 3px; }
+.fp-dxf-file { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel-raised); min-width: 0; }
+.fp-dxf-file strong { font-size: 13px; font-weight: 500; color: var(--color-ink); overflow-wrap: anywhere; }
+.fp-dxf-file small, .fp-dxf-hint { font-size: 11.5px; color: var(--color-muted); line-height: 1.6; }
+.fp-dxf-layers { display: flex; flex-direction: column; gap: 4px; max-height: 176px; overflow-y: auto; padding: 8px; border: 1px solid var(--color-border); border-radius: 8px; }
+.fp-dxf-layer { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; align-items: center; }
+.fp-dxf-layer.is-off { opacity: .55; }
+.fp-dxf-layer > label { flex-direction: row !important; align-items: center; gap: 9px; margin: 0; cursor: pointer; min-width: 0; }
+.fp-dxf-layer input[type=checkbox] { width: 15px !important; height: 15px; flex-shrink: 0; accent-color: var(--color-accent); }
+.fp-dxf-layer > label > span { display: flex; flex-direction: column; min-width: 0; }
+.fp-dxf-layer strong { font-size: 12.5px; font-weight: 500; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-dxf-layer small { font-size: 11px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-dxf-layer select { padding: 5px 8px !important; font-size: 12.5px !important; }
+.fp-dxf-preview { width: 100%; height: 232px; display: block; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); }
+.fp-dxf-sheet { fill: var(--color-panel); stroke: var(--color-border); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.fp-dxf-zone { fill-opacity: .16; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.fp-dxf-wall { fill: none; stroke: #cfe0dc; stroke-width: 1.4px; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.fp-dxf-mark { fill: var(--color-warning); }
+.fp-dxf-sum { font-size: 12.5px; line-height: 1.8; color: var(--color-muted); }
+.fp-dxf-sum strong { color: var(--color-ink); font-weight: 500; }
+.fp-dxf-warn { display: flex; gap: 9px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--color-warning-dark); border-radius: 8px; color: var(--color-warning); font-size: 12.5px; line-height: 1.7; }
+.fp-dxf-warn svg { flex-shrink: 0; margin-top: 3px; }
+.fp-dxf-warn > span { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; min-width: 0; }
+.fp-dxf-mini { min-height: 28px; padding: 3px 10px; font-size: 12px; border: 1px solid var(--color-warning-dark); border-radius: 6px; background: transparent; color: var(--color-warning); cursor: pointer; }
+.fp-dxf-mini:hover { border-color: var(--color-warning); }
+.fp-dxf .topo-dialog-actions button { min-height: 38px; }
+
+/* Scope above shared toolbar rules, irrespective of stylesheet load order. */
+.topo.fp .fp-bar { flex: 0 0 auto; flex-wrap: wrap; gap: 10px 12px; padding: 10px 16px; height: auto; }
+.topo.fp .fp-bar > * { flex-shrink: 0; }
+.topo.fp .fp-bar .topo-bar-title { width: auto; margin: 0; }
+.topo.fp .fp-bar .topo-live { margin: 0 4px 0 0; }
+.topo.fp .fp-project { width: 200px; max-width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 13px; }
+.topo.fp .fp-site { height: 34px; max-width: 100%; }
+.topo.fp .fp-site select { width: 170px; min-width: 0; }
+.topo.fp .fp-edit-bar { gap: 8px; }
+.topo.fp .fp-tools { flex-wrap: wrap; max-width: 100%; gap: 6px; }
+.topo.fp .fp-bar .topo-btn { flex-shrink: 0; white-space: nowrap; }
+.topo.fp .fp-edit-bar .fp-spacer { flex: 1 1 12px; }
+
+/* SOS on the plan: the person who pressed the emergency button, and the zone they are standing in.
+   Red, larger and pulsing, so the operator sees WHERE to run without reading anything. */
+.fp-wearable.is-sos line { stroke: var(--color-danger); opacity: .9; }
+.fp-wearable.is-sos circle { fill: var(--color-danger); stroke: var(--color-paper); }
+.fp-wearable.is-sos text { fill: var(--color-danger); font-weight: 600; }
+.fp-wearable.is-sos .fp-pulse { fill: none; stroke: var(--color-danger); animation-duration: 1.1s; }
+.fp-zone.is-sos { fill: var(--color-danger); stroke: var(--color-danger); fill-opacity: .3; animation: fp-sos-zone 1.2s ease-in-out infinite; }
+.fp-zone-name.is-sos { fill: var(--color-danger); font-weight: 700; }
+@keyframes fp-sos-zone { 0%, 100% { fill-opacity: .3; } 50% { fill-opacity: .14; } }
+@media (prefers-reduced-motion: reduce) { .fp-zone.is-sos { animation: none; } .fp-wearable.is-sos .fp-pulse { animation: none; opacity: .6; } }
+.fp-asset-row.is-sos strong { color: var(--color-danger); font-weight: 600; }
+
+/* Smart office (MOS kit): rooms tinted by the PIR sensor placed inside them; door sensors drawn as doors. */
+.fp-zone.is-occupied { fill: var(--color-accent); stroke: var(--color-accent); fill-opacity: .26; }
+.fp-zone.is-vacant { fill: var(--color-muted); fill-opacity: .07; }
+.fp-zone-occ { font-weight: 500; pointer-events: none; paint-order: stroke; stroke: var(--color-paper); stroke-width: .04; }
+.fp-zone-occ.is-occupied { fill: var(--color-accent); }
+.fp-zone-occ.is-vacant { fill: var(--color-muted); }
+.fp-door-hit { fill: transparent; stroke: none; }
+.fp-door-frame { stroke: var(--color-muted); stroke-linecap: round; }
+.fp-door-leaf { stroke: var(--color-muted); stroke-linecap: round; }
+.fp-door-arc { fill: none; stroke: var(--color-muted); }
+.fp-door.is-open .fp-door-leaf, .fp-door.is-open .fp-door-arc { stroke: var(--color-accent); }
+.fp-door.is-long .fp-door-leaf, .fp-door.is-long .fp-door-arc, .fp-door.is-long .fp-door-frame { stroke: var(--color-warning); }
+.fp-door.is-long .fp-door-hit { fill: color-mix(in oklab, var(--color-warning) 18%, transparent); }
+.fp-door.is-unknown .fp-door-leaf { stroke-dasharray: .1 .08; }
+.fp-asset.is-on .fp-door-frame { stroke: var(--color-ink); }
+.fp-asset-meta.is-warn { fill: var(--color-warning); }
+.fp-asset-meta.is-occupied { fill: var(--color-accent); }

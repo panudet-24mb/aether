@@ -1,0 +1,5 @@
+# Explicit LAN-only plaintext MQTT opt-in for trusted development networks.
+services:
+  mqtt:
+    ports:
+      - "${MQTT_BIND_IP:?Set the LAN IP in .env}:1883:1883"

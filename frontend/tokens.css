@@ -1,0 +1,37 @@
+/* Hallmark · macrostructure: Map / Diagram · theme: custom · anchor hue: mint
+   Audience: building operators · navigation: N3 side rail · footer: Ft2 inline
+   Pre-emit critique: P4 H5 E4 S5 R4 V4 */
+:root {
+  --color-paper: oklch(14.8% .008 180);
+  --color-panel: oklch(18.1% .009 180);
+  --color-panel-raised: oklch(21% .012 180);
+  --color-sidebar: oklch(16.6% .01 180);
+  --color-ink: oklch(94% .008 165);
+  --color-muted: oklch(69% .014 180);
+  --color-dim: oklch(65% .018 180);
+  --color-accent: oklch(85% .16 160);
+  --color-accent-dark: oklch(25% .046 167);
+  --color-accent-faint: oklch(21% .025 167);
+  --color-border: oklch(28% .014 180);
+  --color-grid: oklch(29% .025 171);
+  --color-blue: oklch(73% .12 245);
+  --color-blue-dark: oklch(24% .035 245);
+  --color-warning: oklch(82% .14 76);
+  --color-warning-dark: oklch(24% .035 65);
+  --color-danger: oklch(74% .16 34);
+  --color-danger-dark: oklch(26% .04 34);
+  --color-floor: oklch(24% .026 170);
+  --color-floor-selected: oklch(30% .042 170);
+  --color-wall: oklch(38% .048 165 / .42);
+  --color-wall-line: oklch(63% .056 165);
+  --color-furniture: oklch(35% .024 170);
+  --color-shadow: oklch(5% .01 180 / .25);
+  --font-display: "Avenir Next", "Segoe UI", "Tahoma", sans-serif;
+  --font-body: "Avenir Next", "Segoe UI", "Tahoma", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, monospace;
+  --space-xs: 4px; --space-sm: 8px; --space-md: 16px; --space-lg: 24px; --space-xl: 32px; --space-2xl: 48px;
+  --text-xs: .75rem; --text-sm: .875rem; --text-body: 1rem; --text-heading: 1.125rem;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+  --ease-out: cubic-bezier(.16,1,.3,1); --ease-in: cubic-bezier(.7,0,.84,0); --ease-in-out: cubic-bezier(.65,0,.35,1);
+  --dur-short: 150ms; --dur-medium: 250ms;
+}

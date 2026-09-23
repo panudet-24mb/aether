@@ -1,0 +1,28 @@
+{
+  "kit": "Minew IoT Starter Kit MHS",
+  "status": "hardware_mqtt_live_dashboard_verified",
+  "confirmed_gateway": {
+    "model": "mg3-a-lychee",
+    "firmware": "v1.4.4",
+    "product_id": "001E",
+    "lan_ip": "192.168.1.77",
+    "verified_on": "2026-09-11",
+    "verification": "Read-only GET /hello; MAC matched user screenshot"
+  },
+  "reported_gateway": "USB Mini Bluetooth LE Wi-Fi Gateway",
+  "expected_gateway": "MG3",
+  "expected_temperature_sensor": "S1",
+  "manufacturer_reference": "https://www.minew.com/product/hospital-and-healthcare/",
+  "decoder_verified": true,
+  "notes": "Inventory reference only, not a published device profile or confirmed hardware capture.",
+  "mqtt_integration": {
+    "broker": "192.168.1.64:8883",
+    "tls": true,
+    "synthetic_capture_verified": true,
+    "hardware_capture_verified": true,
+    "note": "2026-09-11 live MG3 connection verified; authenticated API packet count increased 13 to 15 across 8 seconds; real array payloads, decoder pending.",
+    "gateway_endpoint": "mqtt://192.168.1.64:1883",
+    "gateway_tls": false
+  },
+  "decoder_scope": "FFE1 A1/01 temperature/humidity read projection, captured frame tested; physical S1 identity and calibration not confirmed"
+}

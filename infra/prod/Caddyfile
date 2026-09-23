@@ -1,0 +1,85 @@
+# Aether production reverse proxy.
+#
+# Everything site-specific arrives as an environment variable written by infra/prod/setup.py, so
+# this file is identical on every installation:
+#   AETHER_SITE        https://gateway.hospital.local:443   (or an IP, or a public DNS name)
+#   AETHER_HTTP_SITE   http://gateway.hospital.local:80
+#   AETHER_TLS         "internal"  -> Caddy's own CA, for a LAN name or IP with no public DNS
+#                      "ops@x.org" -> ACME/Let's Encrypt for a public DNS name
+#   AETHER_CSP_HEADER  Content-Security-Policy | Content-Security-Policy-Report-Only
+
+{
+	admin off
+	auto_https disable_redirects
+	# The container's trust store is read-only and irrelevant: in `internal` mode the root
+	# certificate is installed on the CLIENT machines (see docs/production.md), not here.
+	skip_install_trust
+	servers {
+		# Never believe an X-Forwarded-For that arrives from the outside. This proxy is the edge.
+		trusted_proxies static
+	}
+}
+
+# Plain HTTP exists only to send people to HTTPS. Caddy still answers ACME HTTP-01 challenges here.
+{$AETHER_HTTP_SITE} {
+	redir {$AETHER_SITE}{uri} permanent
+}
+
+{$AETHER_SITE} {
+	tls {$AETHER_TLS}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 10
+			roll_keep_for 2160h
+		}
+		format json
+	}
+
+	encode zstd gzip
+
+	# The API rejects bodies over 256 KiB itself; stop anything clearly larger at the edge.
+	request_body {
+		max_size 288KiB
+	}
+
+	header {
+		# Browsers on the LAN must not be able to fall back to plain HTTP once they have been here.
+		# Not preloaded and no includeSubDomains: an on-prem hostname may have unrelated siblings.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		# The framework injects inline bootstrap scripts and the widget previews render user HTML in
+		# sandboxed iframe srcDoc, so 'unsafe-inline' is unavoidable for scripts and styles today.
+		# three.js builds WebGL textures from canvas blobs; React Flow writes inline style attributes.
+		{$AETHER_CSP_HEADER} "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: data:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: data:; media-src 'self' data: blob:; manifest-src 'self'"
+		-Server
+	}
+
+	# Backend. /ws is a WebSocket upgrade (Caddy passes upgrades through unchanged) and the API
+	# compares its Origin header with APP_ORIGIN exactly, so the header must survive untouched.
+	@backend path /api/* /ws /health/* /openapi.json /ingest/*
+	handle @backend {
+		reverse_proxy api:8080 {
+			# OVERWRITE, never append: the per-IP rate limiter trusts this header because
+			# TRUSTED_PROXIES names this container, so a client-supplied value must not survive.
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+}

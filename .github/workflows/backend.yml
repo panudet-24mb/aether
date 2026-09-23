@@ -1,0 +1,49 @@
+name: backend-security
+on:
+  push:
+    paths: ['backend/**', 'infra/**', '.github/workflows/backend.yml']
+  pull_request:
+    paths: ['backend/**', 'infra/**', '.github/workflows/backend.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-postgres
+          POSTGRES_DB: aether_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U postgres -d aether_test'
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://aether_app:ci-only-app@localhost:5432/aether_test?sslmode=disable
+      TEST_ADMIN_DATABASE_URL: postgres://postgres:ci-only-postgres@localhost:5432/aether_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.8'
+          cache-dependency-path: backend/go.sum
+      - name: Create restricted roles in isolated test database
+        env:
+          PGPASSWORD: ci-only-postgres
+        run: |
+          psql -h localhost -U postgres -d aether_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE aether_owner NOLOGIN NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE aether_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD 'ci-only-app';
+          GRANT CREATE ON DATABASE aether_test TO aether_owner;
+          REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+          SQL
+      - name: Compile, vet, and integration security checks
+        working-directory: backend
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: Reachable dependency vulnerabilities
+        working-directory: backend
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

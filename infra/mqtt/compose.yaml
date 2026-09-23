@@ -1,0 +1,39 @@
+# Run with -f infra/compose.yaml -f infra/mqtt/compose.yaml.
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0.22
+    user: "${MQTT_UID:?Provision MQTT first}:${MQTT_GID:?Provision MQTT first}"
+    entrypoint: ["/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+    volumes:
+      - ../.secrets/mqtt/broker:/mosquitto/config:ro
+      - mqtt-data:/mosquitto/data
+    ports:
+      - "${MQTT_BIND_IP:?Set the LAN IP in .env}:${MQTT_PORT:-8883}:8883"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+  mqtt-ingest:
+    image: aether-backend:local
+    build: ../backend
+    entrypoint: ["/app/mqtt"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=disable
+      APP_ENV: development
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      MQTT_CONFIG_FILE: /run/mqtt/collector.json
+    volumes:
+      - ../.secrets/mqtt/collector:/run/mqtt:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+volumes:
+  mqtt-data:

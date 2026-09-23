@@ -1,0 +1,85 @@
+/* ทีมและสิทธิ์ · dark only, tokens from tokens.css, sizes from the lean topology toolbar. */
+.tm { display: flex; flex-direction: column; height: calc(100svh - var(--live-top-height, 72px)); min-height: 520px; color: var(--color-ink); font-size: 14px; }
+.tm h1, .tm h2, .tm h3 { font-weight: 500; }
+
+/* Lean top area: exactly one 42 px toolbar row, nothing above the table. */
+.tm-bar { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 5px 16px; border-bottom: 1px solid var(--color-border); background: var(--color-panel); flex-wrap: nowrap; }
+h1.tm-title { font-size: 15px; margin: 0; white-space: nowrap; }
+.tm-count { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-muted); white-space: nowrap; }
+.tm-count b { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tm-search { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); color: var(--color-muted); min-width: 130px; max-width: 220px; flex: 1; margin-left: auto; }
+.tm-search:focus-within { border-color: var(--color-accent); }
+.tm-search input { background: transparent; border: 0; color: var(--color-ink); font: inherit; font-size: 13px; padding: 0; line-height: 28px; width: 100%; min-width: 0; outline: none; }
+.tm-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.tm-icon-btn { height: 30px; min-width: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-panel-raised); color: var(--color-ink); cursor: pointer; }
+.tm-icon-btn:hover:not(:disabled) { border-color: var(--color-accent); }
+.tm-icon-btn.is-danger { color: var(--color-danger); border-color: var(--color-danger-dark); background: transparent; }
+.tm-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
+.tm-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-panel-raised); color: var(--color-ink); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.tm-btn:hover:not(:disabled) { border-color: var(--color-accent); }
+.tm-btn.primary { background: var(--color-accent); color: var(--color-paper); border-color: transparent; font-weight: 600; }
+.tm-btn.danger { background: transparent; color: var(--color-danger); border-color: var(--color-danger-dark); }
+.tm-btn:disabled { opacity: .45; cursor: not-allowed; }
+/* The shell's 40 px touch target is kept on coarse pointers only; this page is a desktop workspace. */
+@media (pointer: fine) {
+  .tm .tm-btn, .tm .tm-icon-btn, .tm .tm-select, .tm .tm-link { min-height: 0; }
+}
+@media (max-width: 900px) { .tm-bar { flex-wrap: wrap; } .tm-search { margin-left: 0; } }
+
+.tm-alert { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 16px; font-size: 12.5px; line-height: 1.6; border-bottom: 1px solid var(--color-border); }
+.tm-alert.is-error { background: var(--color-danger-dark); color: #ffd9c9; }
+.tm-alert.is-notice { background: var(--color-accent-dark); color: var(--color-accent); }
+.tm-alert button { background: transparent; border: 0; color: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
+
+.tm-body { flex: 1; min-height: 0; overflow: auto; }
+
+/* Dense table. The page never scrolls sideways; this container does. */
+.tm-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.tm-table thead th { position: sticky; top: 0; z-index: 2; height: 32px; padding: 0 10px; text-align: left; font-weight: 500; color: var(--color-muted); white-space: nowrap; background: var(--color-panel); border-bottom: 1px solid var(--color-border); }
+.tm-table td { height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--color-border); vertical-align: middle; white-space: nowrap; }
+.tm-table tbody tr:hover { background: var(--color-panel); }
+.tm-person { display: flex; flex-direction: column; gap: 1px; max-width: 280px; }
+.tm-person strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.tm-person small { font-size: 11px; color: var(--color-dim); overflow: hidden; text-overflow: ellipsis; }
+.tm-you { margin-left: 6px; padding: 1px 7px; border-radius: 11px; border: 1px solid var(--color-accent-dark); color: var(--color-accent); font-size: 10.5px; }
+.tm-dim { color: var(--color-muted); }
+.tm-select { height: 28px; max-width: 160px; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+.tm-select:disabled { opacity: .6; cursor: not-allowed; }
+.tm-chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; max-width: 320px; white-space: normal; }
+.tm-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 11px; border: 1px solid var(--color-border); font-size: 11px; color: var(--color-muted); }
+.tm-chip i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.tm-chip.is-all { color: var(--color-accent); border-color: var(--color-accent-dark); }
+.tm-flag { color: var(--color-warning); font-size: 11px; }
+.tm-row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.tm-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 56px 20px; color: var(--color-muted); text-align: center; }
+.tm-empty h2 { font-size: 15px; color: var(--color-ink); }
+.tm-empty p { font-size: 13px; line-height: 1.7; max-width: 560px; }
+
+/* "บัญชีของฉัน" · one small block under the table, not a second toolbar. */
+.tm-self { border-top: 1px solid var(--color-border); padding: 16px; display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+.tm-self h2 { font-size: 13px; }
+.tm-self p { font-size: 12.5px; color: var(--color-muted); line-height: 1.7; }
+.tm-self form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.tm-field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--color-muted); min-width: 0; flex: 1 1 190px; }
+.tm-field input, .tm-field select { width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 13px; }
+.tm-field input:focus, .tm-field select:focus { outline: none; border-color: var(--color-accent); }
+
+/* Dialogs */
+[data-slot="dialog-content"].tm-dialog { background: var(--color-panel); color: var(--color-ink); border-color: var(--color-border); max-width: 560px; }
+.tm-form { display: flex; flex-direction: column; gap: 12px; }
+.tm-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--color-muted); min-width: 0; }
+.tm-form input, .tm-form select { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 13px; }
+.tm-form input:focus, .tm-form select:focus { outline: none; border-color: var(--color-accent); }
+.tm-hint { font-size: 11.5px; color: var(--color-dim); line-height: 1.6; }
+.tm-roles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.tm-roles li { font-size: 11.5px; color: var(--color-dim); line-height: 1.6; }
+.tm-roles b { color: var(--color-muted); font-weight: 500; }
+.tm-picker { display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow-y: auto; padding: 8px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); }
+.tm-pick { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--color-ink); cursor: pointer; }
+.tm-pick input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--color-accent); padding: 0; }
+.tm-pick i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tm-secret { display: flex; gap: 8px; align-items: center; }
+.tm-secret code { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--color-accent-dark); border-radius: 7px; background: var(--color-paper); color: var(--color-accent); font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+.tm-warn { padding: 9px 12px; border: 1px solid var(--color-warning-dark); border-radius: 8px; background: var(--color-panel-raised); color: var(--color-warning); font-size: 12px; line-height: 1.7; }
+.tm-dialog-error { padding: 9px 12px; border: 1px solid var(--color-danger); border-radius: 8px; background: var(--color-danger-dark); color: #ffd9c9; font-size: 12.5px; line-height: 1.6; }
+.tm-form-actions { display: flex; justify-content: flex-end; gap: 8px; }

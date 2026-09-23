@@ -1,0 +1,110 @@
+package domain
+
+// The device catalog is the single source of truth for the gateway models and device profiles this
+// deployment accepts. The API exposes it read-only so the UI never carries its own copy.
+// Verified means a packet from the physical device was captured and decoded by a golden test in
+// this repository; everything else is implemented from public frame documentation and simulation.
+
+type GatewayModel struct {
+	ID          string `json:"id"`
+	Brand       string `json:"brand"`
+	Model       string `json:"model"`
+	Label       string `json:"label"`
+	Transport   string `json:"transport"` // mqtt | http
+	Description string `json:"description"`
+	Logo        string `json:"logo,omitempty"`
+	Image       string `json:"image,omitempty"` // product photo (manufacturer's image, used for identification only)
+	Verified    bool   `json:"verified"`
+}
+
+type DeviceProfile struct {
+	ID          string   `json:"id"`
+	Brand       string   `json:"brand"`
+	Model       string   `json:"model"`
+	Label       string   `json:"label"`
+	Radio       string   `json:"radio"` // ble | any
+	Description string   `json:"description"`
+	Image       string   `json:"image,omitempty"`
+	Kinds       []string `json:"kinds"`   // reading kinds the device is expected to produce
+	Metrics     []string `json:"metrics"` // human-readable list for the UI
+	Verified    bool     `json:"verified"`
+	// Wearable marks tags carried by people; the UI proposes roaming (follow across gateways) when adopting one.
+	Wearable bool `json:"wearable,omitempty"`
+	// Button marks tags whose Eddystone-UID instance change means "button pressed" (B10). Only these raise button events.
+	Button bool `json:"button,omitempty"`
+	// InfoName is the device name the tag reports in its FFE1 info frame, used to suggest this profile.
+	InfoName string `json:"info_name,omitempty"`
+	// Occupancy marks PIR sensors whose `motion` metric drives occupied / vacant (see alerts.OccupancyHoldSec).
+	Occupancy bool `json:"occupancy,omitempty"`
+	// Door marks door/window contact sensors whose state is the `door` metric (1 = open, 0 = closed).
+	Door  bool   `json:"door,omitempty"`
+	Notes string `json:"notes,omitempty"`
+}
+
+// ButtonProfileIDs lists the profiles whose tags may raise a button event.
+func ButtonProfileIDs() []string {
+	out := []string{}
+	for _, p := range DeviceProfiles {
+		if p.Button {
+			out = append(out, p.ID)
+		}
+	}
+	return out
+}
+
+var GatewayModels = []GatewayModel{
+	{ID: "minew-mg3", Brand: "Minew", Model: "MG3", Label: "Minew MG3", Transport: "mqtt", Description: "USB Mini BLE → Wi‑Fi gateway · ส่ง BLE advertisement เข้า Aether ผ่าน MQTT (JSON-LONG)", Logo: "/brands/minew.png", Image: "/devices/minew-mg3.png", Verified: true},
+	// MG4: JSON-Long is its only upload format and reelyActive's barnowl-minew parses it exactly like MG3, except
+	// that row timestamps may be ISO-8601 strings and rows may carry extra fields. Aether ignores device
+	// timestamps (server time only) and parses every row on its own, so both are harmless. Not yet verified with
+	// a captured MG4 uplink.
+	{ID: "minew-mg4", Brand: "Minew", Model: "MG4", Label: "Minew MG4 · Rechargeable gateway", Transport: "mqtt", Description: "Rechargeable BLE → Wi‑Fi gateway (ชุด MOS smart office) · ส่ง BLE advertisement เข้า Aether ผ่าน MQTT แบบ JSON-Long · อัปโหลดทาง HTTP ก็ได้โดยใช้เส้นทาง Generic HTTP (POST /ingest/gateways/<id>/packets + HTTP Basic) · ยังไม่ยืนยันกับเครื่องจริง", Logo: "/brands/minew.png", Image: "/devices/minew-mg4.png", Verified: false},
+	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
+}
+
+var DeviceProfiles = []DeviceProfile{
+	{ID: "minew-s1-pending@1", Brand: "Minew", Model: "S1", Label: "Minew S1 · อุณหภูมิ / ความชื้น", Radio: "ble", Image: "/devices/minew-s1.png", Kinds: []string{"environment"}, Metrics: []string{"temperature", "humidity", "battery"}, Verified: true, InfoName: "S1",
+		Description: "BLE sensor · เฟรม FFE1 A1‑01 ยืนยันกับเครื่องจริงแล้ว · profile ใช้ลงทะเบียนสินทรัพย์ ไม่ยืนยันรุ่นจากเฟรมเพียงอย่างเดียว"},
+	{ID: "minew-c10-pending@1", Wearable: true, Image: "/devices/minew-c10.png", Brand: "Minew", Model: "C10", Label: "Minew C10 · Card beacon", Radio: "ble", Kinds: []string{"beacon", "motion"}, Metrics: []string{"iBeacon / Eddystone id", "accelerometer", "battery"}, Verified: false, InfoName: "C10",
+		Description: "บัตรพนักงาน/ผู้ป่วยแบบ beacon มีปุ่มซ่อนและ accelerometer · ถอดรหัส iBeacon/Eddystone และเฟรม A1‑03 จากเอกสารสาธารณะ ยังไม่ยืนยันกับเครื่องจริง", Notes: "การกดปุ่มยังไม่มีเอกสารรูปแบบเฟรม"},
+	{ID: "minew-b7-pending@1", Wearable: true, Image: "/devices/minew-b7.png", Brand: "Minew", Model: "B7", Label: "Minew B7 · Button wristband", Radio: "ble", Kinds: []string{"beacon", "motion"}, Metrics: []string{"iBeacon / Eddystone id", "accelerometer", "battery"}, Verified: false, InfoName: "B7",
+		Description: "สายรัดข้อมือมีปุ่ม · ส่ง iBeacon/Eddystone และ accelerometer · ยังไม่ยืนยันกับเครื่องจริง", Notes: "รูปแบบ event ปุ่มกดของ B7 ยังไม่มีเอกสารยืนยัน"},
+	{ID: "minew-b10-pending@1", Wearable: true, Button: true, Image: "/devices/minew-b10.png", Brand: "Minew", Model: "B10", Label: "Minew B10 · Emergency button", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"Eddystone UID instance", "battery (TLM)"}, Verified: false, InfoName: "B10",
+		Description: "สายรัดปุ่มฉุกเฉิน · การกดปุ่มปรากฏเป็นการเปลี่ยน Eddystone‑UID instance ตามคู่มือตั้งค่าสาธารณะ · ยังไม่ยืนยันกับเครื่องจริง", Notes: "ระบบแสดงการเปลี่ยน instance เป็น event ไม่อ้างว่าเป็นสัญญาณฉุกเฉินที่รับรองแล้ว"},
+	{ID: "minew-e8s-pending@1", Image: "/devices/minew-e8s.png", Brand: "Minew", Model: "E8S", Label: "Minew E8S · Accelerometer asset tag", Radio: "ble", Kinds: []string{"motion"}, Metrics: []string{"accelerometer", "vibration", "battery"}, Verified: false, InfoName: "E8S",
+		Description: "ป้ายติดสินทรัพย์ตรวจการเคลื่อนไหว · เฟรม A1‑03 / A1‑18 จากเอกสารสาธารณะ ยังไม่ยืนยันกับเครื่องจริง"},
+	{ID: "minew-mbt01-pending@1", Image: "/devices/minew-mbt01.png", Brand: "Minew", Model: "MBT01", Label: "Minew MBT01 · Anti‑tamper tag", Radio: "ble", Kinds: []string{"beacon", "tamper"}, Metrics: []string{"iBeacon id", "tamper", "battery"}, Verified: false, InfoName: "MBT01",
+		Description: "ป้ายกันถอด · คาดว่าใช้เฟรม A1‑20 (tamper flag) ยังไม่ยืนยันกับเครื่องจริง"},
+	// MOS smart-office kit. The owner's real MSP01 (c30000161ebb) sent A1-01, A1-11 (motion), A1-03 and an A1-08
+	// info frame named "MSP01" on 2026-09-21, but motion stayed 0 in all 257 samples, so the PIR itself is untested.
+	{ID: "minew-msp01-pending@1", Image: "/devices/minew-msp01.png", Brand: "Minew", Model: "MSP01", Label: "Minew MSP01 · PIR occupancy", Radio: "ble", Kinds: []string{"motion", "environment"}, Metrics: []string{"motion (PIR)", "temperature", "humidity", "battery"}, Verified: false, InfoName: "MSP01", Occupancy: true,
+		Description: "เซนเซอร์ PIR ตรวจคนในห้อง · เฟรม A1‑11 (motion) และ A1‑01 ถอดรหัสได้ · occupied เมื่อ motion เป็น 1 และ vacant เมื่อไม่มี motion นาน 5 นาที · ยังไม่ยืนยันกับเครื่องจริง",
+		Notes:       "เครื่องจริงรายงาน motion=0 ทั้ง 257 ตัวอย่าง (2026-09-21) · ต้องทดสอบโดยเดินผ่านหน้าเซนเซอร์"},
+	// S4: the combination-frame byte layout is not public, so Aether has NO decoder for it. The door state comes
+	// from a signal the operator teaches (open vs closed); see docs/platform/mos-kit.md.
+	{ID: "minew-s4-pending@1", Image: "/devices/minew-s4.png", Brand: "Minew", Model: "S4", Label: "Minew S4 · Door sensor", Radio: "ble", Kinds: []string{"door"}, Metrics: []string{"door (open / closed)", "battery"}, Verified: false, InfoName: "S4", Door: true,
+		Description: "เซนเซอร์ประตูแม่เหล็ก · รูปแบบเฟรมยังไม่มีเอกสารสาธารณะ Aether จึงไม่ถอดรหัสเอง · สถานะเปิด/ปิดมาจากการ \"สอนสัญญาณ\" (เปิด–ปิดประตูให้ระบบเรียนรู้) · ยังไม่ยืนยันกับเครื่องจริง",
+		Notes:       "เฟรมที่ไม่รู้จักแสดงใน unknown ของ reading · สอนสัญญาณ door ก่อนใช้งาน"},
+	{ID: "generic-ble-beacon@1", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
+		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
+	{ID: "generic-environment@1", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
+		Description: "อุปกรณ์ทั่วไปที่ส่ง telemetry.v1 ผ่าน gateway · ใช้ทดสอบเส้นทางข้อมูลหรืออุปกรณ์ต่างแบรนด์"},
+}
+
+func GatewayModelByID(id string) *GatewayModel {
+	for i := range GatewayModels {
+		if GatewayModels[i].ID == id {
+			return &GatewayModels[i]
+		}
+	}
+	return nil
+}
+
+func DeviceProfileByID(id string) *DeviceProfile {
+	for i := range DeviceProfiles {
+		if DeviceProfiles[i].ID == id {
+			return &DeviceProfiles[i]
+		}
+	}
+	return nil
+}

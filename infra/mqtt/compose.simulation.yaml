@@ -1,0 +1,19 @@
+# Add alongside infra/compose.yaml and infra/mqtt/compose.yaml.
+services:
+  simulator:
+    image: aether-backend:local
+    build: ../backend
+    entrypoint: ["/app/simulator"]
+    environment:
+      SIMULATOR_CONFIG_FILE: /run/simulator/config.json
+    volumes:
+      - ../.secrets/simulator/runtime:/run/simulator:ro
+    depends_on:
+      mqtt:
+        condition: service_started
+      mqtt-ingest:
+        condition: service_started
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"

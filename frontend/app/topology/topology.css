@@ -1,0 +1,378 @@
+/* Topology · Packet‑Tracer style canvas for gateway ↔ device connections. Tokens from tokens.css. */
+.topo { display: flex; flex-direction: column; height: calc(100svh - 72px); min-height: 560px; color: var(--color-ink); font-size: 14px; }
+.topo h1, .topo h2, .topo h3 { font-weight: 500; }
+.topo-kicker { font-size: 11px; letter-spacing: 2px; color: var(--color-muted); }
+
+/* Top bar */
+.topo-bar { display: flex; align-items: center; gap: 18px; padding: 14px 22px; border-bottom: 1px solid var(--color-border); background: var(--color-panel); flex-wrap: wrap; }
+.topo-bar-title h1 { font-size: 20px; margin-top: 2px; }
+.topo-bar-stats { display: flex; gap: 14px; color: var(--color-muted); font-size: 13px; flex-wrap: wrap; }
+.topo-bar-stats b { color: var(--color-ink); font-weight: 600; margin-right: 3px; }
+.topo-bar-actions { display: flex; gap: 8px; margin-left: auto; }
+.topo-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); color: var(--color-muted); min-width: 180px; }
+.topo-search input { background: transparent; border: 0; color: var(--color-ink); padding: 9px 0; font-size: 13px; width: 100%; outline: none; }
+.topo-search:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 35%, transparent); }
+.topo-card:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* Buttons */
+.topo-btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-panel-raised); color: var(--color-ink); font-size: 13px; cursor: pointer; transition: border-color var(--dur-short) var(--ease-out), background var(--dur-short) var(--ease-out); }
+.topo-btn:hover:not(:disabled) { border-color: var(--color-accent); }
+.topo-btn.primary { background: var(--color-accent); color: var(--color-paper); border-color: transparent; font-weight: 600; }
+.topo-btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
+.topo-btn.danger { border-color: var(--color-danger-dark); color: var(--color-danger); background: transparent; }
+.topo-btn.danger:hover:not(:disabled) { background: var(--color-danger-dark); border-color: var(--color-danger); }
+.topo-btn.is-on { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-faint); }
+.topo-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--color-muted); cursor: pointer; flex-shrink: 0; }
+.topo-icon-btn:hover { color: var(--color-accent); border-color: var(--color-border); }
+
+/* Alerts */
+.topo-alert { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 22px; font-size: 13px; line-height: 1.6; border-bottom: 1px solid var(--color-border); }
+.topo-alert button { background: transparent; border: 0; color: inherit; font-size: 18px; cursor: pointer; }
+.topo-alert.is-error { background: var(--color-danger-dark); color: #ffd9c9; }
+.topo-alert.is-warn { background: var(--color-warning-dark); color: #f4dcb0; }
+.topo-alert.is-notice { background: var(--color-accent-dark); color: var(--color-accent); }
+
+/* Three-column body */
+.topo-body { display: grid; grid-template-columns: 250px minmax(0, 1fr) 360px; flex: 1; min-height: 0; }
+.topo-body.no-palette { grid-template-columns: minmax(0, 1fr) 360px; }
+.topo-body.no-inspector { grid-template-columns: 250px minmax(0, 1fr); }
+.topo-body.no-palette.no-inspector { grid-template-columns: minmax(0, 1fr); }
+.topo-bar-sep { width: 1px; height: 22px; background: var(--color-border); margin: 0 4px; align-self: center; }
+@media (max-width: 1180px) { .topo-body { grid-template-columns: 220px minmax(0, 1fr) 320px; } .topo-body.no-palette { grid-template-columns: minmax(0, 1fr) 320px; } .topo-body.no-inspector { grid-template-columns: 220px minmax(0, 1fr); } }
+@media (max-width: 900px) { .topo { height: auto; } .topo-body, .topo-body.no-palette, .topo-body.no-inspector, .topo-body.no-palette.no-inspector { grid-template-columns: 1fr; grid-template-rows: auto; } .topo-canvas { height: 60vh; } }
+
+/* Palette */
+.topo-palette { border-right: 1px solid var(--color-border); background: var(--color-sidebar); overflow-y: auto; padding: 16px 14px; display: flex; flex-direction: column; gap: 22px; }
+.topo-palette h2 { display: flex; align-items: center; gap: 7px; font-size: 13px; letter-spacing: .4px; color: var(--color-ink); margin-bottom: 4px; }
+.topo-palette p { font-size: 12px; color: var(--color-muted); line-height: 1.6; margin-bottom: 10px; }
+.topo-count { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--color-panel-raised); color: var(--color-muted); font-weight: 500; }
+.topo-card { display: flex; align-items: center; gap: 10px; padding: 9px 10px; margin-bottom: 8px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel); cursor: grab; user-select: none; transition: border-color var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out); }
+.topo-card:hover { border-color: var(--color-accent); transform: translateX(2px); }
+.topo-card:active { cursor: grabbing; }
+.topo-card.is-placed { opacity: .5; }
+.topo-card > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.topo-card strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-card small { font-size: 11px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-card-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: var(--color-panel-raised); color: var(--color-accent); flex-shrink: 0; overflow: hidden; }
+.topo-card-icon img { width: 26px; height: 26px; object-fit: contain; }
+.topo-card-small { padding: 7px 9px; }
+.topo-card-small .topo-card-icon { width: 28px; height: 28px; }
+.topo-grip { color: var(--color-dim); flex-shrink: 0; }
+.topo-discovered { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.topo-discovered .topo-search { margin-bottom: 10px; min-width: 0; }
+.topo-discovered-list { overflow-y: auto; min-height: 0; }
+.topo-empty { display: block; font-size: 12px; color: var(--color-dim); padding: 8px 2px; line-height: 1.6; }
+
+/* Canvas */
+/* isolation keeps React Flow's elevated z-indexes (selected nodes, connection line, minimap) inside the canvas so portaled dialogs always paint above it. */
+.topo-canvas { position: relative; min-width: 0; background: var(--color-paper); isolation: isolate; z-index: 0; }
+.topo { isolation: isolate; }
+.topo-canvas .react-flow { --xy-background-color: var(--color-paper); --xy-edge-stroke-default: var(--color-border); --xy-edge-stroke-width-default: 1.8; --xy-controls-button-background-color-default: var(--color-panel); --xy-controls-button-background-color-hover-default: var(--color-panel-raised); --xy-controls-button-color-default: var(--color-ink); --xy-controls-button-border-color-default: var(--color-border); --xy-minimap-background-color-default: var(--color-panel); --xy-minimap-mask-background-color-default: rgba(8, 14, 16, .65); --xy-handle-background-color-default: var(--color-accent); --xy-handle-border-color-default: var(--color-paper); --xy-edge-label-background-color-default: var(--color-panel-raised); --xy-edge-label-color-default: var(--color-muted); }
+.topo-canvas .react-flow__controls { box-shadow: none; border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; }
+.topo-canvas .react-flow__minimap { border: 1px solid var(--color-border); border-radius: 8px; }
+.topo-canvas .react-flow__handle { width: 10px; height: 10px; border-width: 2px; opacity: 0; transition: opacity var(--dur-short) var(--ease-out); }
+.topo-canvas .react-flow__node:hover .react-flow__handle, .topo-canvas .react-flow__node.selected .react-flow__handle, .topo-canvas .react-flow.connecting .react-flow__handle, .topo-canvas .react-flow__handle.connectingfrom, .topo-canvas .react-flow__handle.connectingto { opacity: 1; }
+.topo-canvas .react-flow__handle-top { top: -6px; }
+.topo-canvas .react-flow__handle-bottom { bottom: -6px; }
+.topo-canvas .react-flow__edge-textbg { fill: var(--color-panel-raised); }
+.topo-canvas .react-flow__edge-text { fill: var(--color-muted); font-size: 11px; font-family: var(--font-mono); }
+.topo-hint { position: absolute; inset: auto 0 0 0; margin: 0 auto 90px; width: max-content; max-width: 90%; text-align: center; padding: 14px 22px; border: 1px dashed var(--color-border); border-radius: 12px; background: color-mix(in oklab, var(--color-panel) 85%, transparent); color: var(--color-muted); font-size: 13px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; }
+.topo-hint strong { color: var(--color-ink); font-weight: 500; }
+
+/* Edges — colour by state, dashed for unadopted radio links */
+.topo-edge .react-flow__edge-path { stroke: var(--color-border); stroke-width: 1.8; transition: stroke var(--dur-medium) var(--ease-out); }
+.topo-edge.edge-none .react-flow__edge-path { stroke: var(--color-dim); stroke-dasharray: 3 5; }
+.topo-edge.edge-pending .react-flow__edge-path { stroke: var(--color-warning); stroke-dasharray: 6 4; }
+.topo-edge.edge-ready .react-flow__edge-path { stroke: var(--color-blue); }
+.topo-edge.edge-stale .react-flow__edge-path { stroke: var(--color-warning); }
+.topo-edge.edge-receiving .react-flow__edge-path { stroke: var(--color-accent); stroke-width: 2.2; }
+.topo-edge.edge-adopted .react-flow__edge-path { stroke: var(--color-accent); stroke-width: 2; }
+.topo-edge.edge-heard .react-flow__edge-path { stroke: var(--color-dim); stroke-dasharray: 6 4; }
+.topo-edge.edge-dim { opacity: .18; }
+.topo-canvas .react-flow__edge.selected .react-flow__edge-path, .topo-canvas .react-flow__edge:hover .react-flow__edge-path { stroke-width: 2.6; }
+.topo-canvas .react-flow__arrowhead polyline { fill: var(--color-border); stroke: var(--color-border); }
+.topo-edge.edge-receiving .react-flow__arrowhead polyline, .topo-edge.edge-adopted .react-flow__arrowhead polyline { fill: var(--color-accent); stroke: var(--color-accent); }
+
+/* Nodes — icon box with label below, Packet Tracer style */
+.topo-node { position: relative; width: 150px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 4px 4px; border-radius: 12px; text-align: center; transition: opacity var(--dur-medium) var(--ease-out); }
+.topo-node.is-dim { opacity: .22; }
+.topo-node-icon { position: relative; width: 62px; height: 62px; display: grid; place-items: center; border-radius: 14px; border: 1.5px solid var(--color-border); background: var(--color-panel-raised); color: var(--color-ink); box-shadow: 0 6px 18px var(--color-shadow); transition: border-color var(--dur-short) var(--ease-out), box-shadow var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out); }
+.topo-node-icon img { width: 40px; height: 40px; object-fit: contain; }
+.topo-node:hover .topo-node-icon { transform: translateY(-1px); border-color: var(--color-muted); }
+.topo-node.is-selected .topo-node-icon { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-faint), 0 8px 22px var(--color-shadow); }
+.topo-node-label { display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%; }
+.topo-node-label strong { font-size: 12.5px; font-weight: 500; line-height: 1.3; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-node-label small { font-size: 11px; color: var(--color-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-node-meta { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 10.5px; color: var(--color-dim); font-family: var(--font-mono); }
+.topo-node-dot { position: absolute; right: -4px; top: -4px; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--color-paper); background: var(--color-dim); }
+.topo-node-tag { position: absolute; left: -6px; bottom: -6px; font-size: 9px; letter-spacing: 1px; padding: 1px 5px; border-radius: 5px; background: var(--color-warning-dark); color: var(--color-warning); border: 1px solid var(--color-paper); }
+
+.topo-broker .topo-node-icon { width: 76px; height: 58px; border-radius: 18px; color: var(--color-blue); border-color: var(--color-blue-dark); background: linear-gradient(160deg, var(--color-blue-dark), var(--color-panel-raised)); }
+.topo-broker.is-unconfigured .topo-node-icon { color: var(--color-warning); border-color: var(--color-warning-dark); background: var(--color-panel-raised); }
+
+.topo-gateway .topo-node-icon { color: var(--color-accent); }
+.topo-gateway.health-none .topo-node-dot { background: var(--color-dim); }
+.topo-gateway.health-pending .topo-node-dot { background: var(--color-warning); animation: topo-blink 1.2s infinite; }
+.topo-gateway.health-ready .topo-node-dot { background: var(--color-blue); }
+.topo-gateway.health-stale .topo-node-dot { background: var(--color-warning); }
+.topo-gateway.health-receiving .topo-node-dot { background: var(--color-accent); box-shadow: 0 0 0 0 var(--color-accent); animation: topo-pulse 2s infinite; }
+
+.topo-device .topo-node-icon { width: 54px; height: 54px; border-radius: 50%; }
+.topo-device.state-online .topo-node-icon { border-color: var(--color-accent); }
+.topo-device.state-online .topo-node-dot { background: var(--color-accent); animation: topo-pulse 2s infinite; }
+.topo-device.state-stale .topo-node-dot { background: var(--color-warning); }
+.topo-device.state-registered .topo-node-dot { background: var(--color-blue); }
+.topo-device.state-seen .topo-node-icon { border-style: dashed; }
+.topo-device.state-seen .topo-node-dot { background: var(--color-muted); }
+.topo-device.state-raw .topo-node-icon { border-style: dashed; color: var(--color-muted); }
+.topo-device.state-raw .topo-node-dot { background: var(--color-dim); }
+.topo-device.state-draft .topo-node-icon { border-style: dashed; border-color: var(--color-warning); color: var(--color-warning); }
+.topo-device.is-alert .topo-node-icon { border-color: var(--color-danger); color: var(--color-danger); box-shadow: 0 0 0 3px var(--color-danger-dark), 0 6px 18px var(--color-shadow); }
+.topo-device.is-alert .topo-node-dot { background: var(--color-danger); animation: topo-pulse-danger 1.4s infinite; }
+.topo-device.is-alert .topo-node-meta { color: var(--color-danger); }
+.topo-node-tag.is-alert { left: auto; right: -8px; bottom: -6px; background: var(--color-danger-dark); color: var(--color-danger); }
+@keyframes topo-pulse-danger { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.topo-device.kind-beacon .topo-node-icon { color: var(--color-blue); }
+.topo-device.kind-motion .topo-node-icon { color: var(--color-accent); }
+
+@keyframes topo-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@keyframes topo-blink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .topo-node-dot { animation: none !important; } .react-flow__edge.animated path { animation: none !important; } }
+
+/* Inspector */
+.topo-inspector { position: relative; border-left: 1px solid var(--color-border); background: var(--color-sidebar); overflow-y: auto; padding: 18px 18px 28px; display: flex; flex-direction: column; gap: 14px; }
+.topo-inspector.is-empty { justify-content: center; color: var(--color-muted); }
+.topo-inspector.is-empty h2 { font-size: 16px; color: var(--color-ink); margin-bottom: 8px; }
+.topo-inspector.is-empty p { font-size: 13px; line-height: 1.7; }
+.topo-close { position: absolute; top: 12px; right: 12px; display: flex; gap: 2px; }
+.topo-inspector-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-right: 62px; }
+.topo-inspector-head h2 { font-size: 17px; margin-top: 3px; overflow-wrap: anywhere; }
+.topo-chip { font-size: 11px; padding: 4px 9px; border-radius: 20px; border: 1px solid var(--color-border); color: var(--color-muted); white-space: nowrap; flex-shrink: 0; margin-top: 4px; }
+.topo-chip.health-receiving { color: var(--color-accent); border-color: var(--color-accent-dark); background: var(--color-accent-faint); }
+.topo-chip.health-ready { color: var(--color-blue); border-color: var(--color-blue-dark); }
+.topo-chip.health-pending, .topo-chip.health-stale { color: var(--color-warning); border-color: var(--color-warning-dark); }
+.topo-h3 { display: flex; align-items: center; gap: 7px; font-size: 12px; letter-spacing: .6px; text-transform: uppercase; color: var(--color-muted); margin-top: 6px; }
+.topo-note { font-size: 12.5px; line-height: 1.7; color: var(--color-muted); }
+.topo-warn { font-size: 12.5px; line-height: 1.7; color: var(--color-warning); padding: 10px 12px; border: 1px solid var(--color-warning-dark); border-radius: 8px; background: color-mix(in oklab, var(--color-warning-dark) 60%, transparent); }
+.topo-callout { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--color-accent-dark); background: var(--color-accent-faint); border-radius: 9px; font-size: 13px; line-height: 1.6; }
+.topo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.topo-danger { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 6px; }
+.topo-danger small { font-size: 11.5px; color: var(--color-dim); }
+
+.topo-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.topo-step { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--color-muted); }
+.topo-step strong { font-weight: 500; color: var(--color-ink); display: block; }
+.topo-step small { font-size: 11.5px; display: block; margin-top: 1px; }
+.topo-step-dot { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--color-border); display: grid; place-items: center; flex-shrink: 0; margin-top: 1px; color: var(--color-paper); }
+.topo-step.is-done .topo-step-dot { background: var(--color-accent); border-color: var(--color-accent); }
+.topo-step.is-active .topo-step-dot { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-faint); }
+.topo-step.is-done strong { color: var(--color-muted); }
+
+.topo-fields { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.topo-field { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12.5px; }
+.topo-field dt { color: var(--color-muted); }
+.topo-field dd { margin: 0; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.topo-field code { font-family: var(--font-mono); font-size: 12px; padding: 4px 7px; border-radius: 5px; background: var(--color-paper); border: 1px solid var(--color-border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.topo-field span { flex: 1; min-width: 0; }
+
+.topo-secret-box { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--color-accent-dark); background: color-mix(in oklab, var(--color-accent-faint) 80%, transparent); }
+.topo-secret-box small { font-size: 11.5px; color: var(--color-muted); }
+.topo-secret > span { display: block; font-size: 12px; color: var(--color-muted); margin-bottom: 6px; }
+.topo-secret > div { display: flex; gap: 4px; align-items: center; }
+.topo-secret input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12.5px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-paper); color: var(--color-ink); }
+
+.topo-readings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.topo-readings > div { padding: 10px 12px; border-radius: 9px; border: 1px solid var(--color-border); background: var(--color-panel); display: flex; flex-direction: column; gap: 2px; color: var(--color-muted); }
+.topo-readings svg { color: var(--color-accent); }
+.topo-readings span { font-size: 11.5px; }
+.topo-readings strong { font-size: 20px; font-weight: 500; color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.topo-readings strong small { font-size: 11px; color: var(--color-muted); margin-left: 3px; }
+.topo-readings p { grid-column: 1 / -1; font-size: 12px; }
+.topo-readings .is-fresh { color: var(--color-accent); }
+.topo-readings .is-stale { color: var(--color-warning); }
+
+.topo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.topo-list-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--color-ink); text-align: left; cursor: pointer; }
+.topo-list-item:hover { background: var(--color-panel); border-color: var(--color-border); }
+.topo-list-item svg { color: var(--color-muted); flex-shrink: 0; }
+.topo-list-item > span { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.topo-list-item strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-list-item small { font-size: 11px; color: var(--color-muted); font-family: var(--font-mono); }
+.topo-list-item em { font-style: normal; font-size: 10.5px; letter-spacing: .4px; color: var(--color-dim); }
+.topo-list-item em.is-adopted { color: var(--color-accent); }
+
+.topo-legend { list-style: none; margin: 16px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.topo-legend li { display: flex; align-items: center; gap: 10px; }
+.topo-legend .edge { width: 34px; height: 0; border-top: 2px solid var(--color-border); }
+.topo-legend .edge-receiving { border-color: var(--color-accent); }
+.topo-legend .edge-ready { border-color: var(--color-blue); }
+.topo-legend .edge-adopted { border-color: var(--color-accent); }
+.topo-legend .edge-heard { border-color: var(--color-dim); border-top-style: dashed; }
+
+/* Dialogs */
+/* Two-column form: every column and control must be allowed to shrink, otherwise a long <select> option
+   widens the grid past the dialog and the buttons end up outside the opaque dialog background. */
+[data-slot="dialog-content"].topo-dialog { width: min(720px, calc(100% - 2rem)); max-width: min(720px, calc(100% - 2rem)); max-height: calc(100svh - 2rem); overflow-y: auto; }
+.topo-dialog form { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; min-width: 0; }
+.topo-dialog label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--color-muted); min-width: 0; }
+.topo-dialog input, .topo-dialog select { font: inherit; font-size: 13.5px; color: var(--color-ink); background: var(--color-paper); border: 1px solid var(--color-border); border-radius: 7px; padding: 9px 11px; min-width: 0; width: 100%; max-width: 100%; }
+.topo-dialog select { text-overflow: ellipsis; }
+.topo-dialog input:read-only { color: var(--color-muted); font-family: var(--font-mono); }
+.topo-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-width: 0; }
+.topo-form-grid > label { min-width: 0; }
+.topo-form-grid .span-2 { grid-column: 1 / -1; }
+@media (max-width: 560px) { .topo-form-grid { grid-template-columns: 1fr; } }
+.topo-bytes { font-size: 11.5px; color: var(--color-muted); margin-top: -6px; }
+.topo-bytes.is-over { color: var(--color-danger); }
+.topo-dialog input[aria-invalid="true"] { border-color: var(--color-danger); }
+.topo-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+[data-slot="alert-dialog-action"].is-danger { background: var(--color-danger); color: var(--color-paper); }
+
+/* Device events and verification status in the inspector */
+.topo-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.topo-event { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--color-border); background: var(--color-panel); font-size: 13px; }
+.topo-event svg { flex-shrink: 0; margin-top: 2px; color: var(--color-accent); }
+.topo-event > span { display: flex; flex-direction: column; min-width: 0; }
+.topo-event strong { font-weight: 500; }
+.topo-event small { font-size: 11.5px; color: var(--color-muted); overflow-wrap: anywhere; }
+.topo-event.is-tamper, .topo-event.is-button, .topo-event.is-leak { border-color: var(--color-danger-dark); background: color-mix(in oklab, var(--color-danger-dark) 55%, transparent); }
+.topo-event.is-tamper svg, .topo-event.is-button svg, .topo-event.is-leak svg { color: var(--color-danger); }
+.topo-verify { font-size: 12px; line-height: 1.6; padding: 8px 11px; border-radius: 8px; border: 1px dashed var(--color-warning-dark); color: var(--color-warning); }
+.topo-verify.is-verified { border-style: solid; border-color: var(--color-accent-dark); color: var(--color-accent); }
+.topo-readings .topo-raw { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 11px; color: var(--color-dim); overflow-wrap: anywhere; }
+.topo-log li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 7px; background: var(--color-panel); font-size: 12.5px; }
+.topo-log small { color: var(--color-muted); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.topo-log-type.is-tamper, .topo-log-type.is-button, .topo-log-type.is-leak, .topo-log-type.is-offline, .topo-log-type.is-threshold { color: var(--color-danger); }
+.topo-log-type.is-online, .topo-log-type.is-tamper_cleared, .topo-log-type.is-motion { color: var(--color-accent); }
+/* Registration rows with inline actions */
+.topo-reg { display: flex; align-items: center; gap: 2px; }
+.topo-reg .topo-list-item { flex: 1; min-width: 0; }
+.topo-reg.is-removed { opacity: .75; }
+.topo-list-item.is-static { cursor: default; }
+.topo-list-item.is-static:hover { background: transparent; border-color: transparent; }
+.topo-icon-btn.is-danger:hover { color: var(--color-danger); border-color: var(--color-danger-dark); }
+/* Product photos (manufacturer images on light subjects): give them a soft light plate so they read on the dark canvas */
+.topo-node-icon img.topo-photo { width: 100%; height: 100%; object-fit: contain; padding: 5px; border-radius: inherit; background: radial-gradient(circle at 50% 40%, #f4f7f6 0%, #cfd8d6 100%); }
+.topo-card-icon img.topo-photo { width: 100%; height: 100%; object-fit: contain; padding: 2px; background: #e9eeec; }
+.topo-product { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px; border: 1px solid var(--color-border); border-radius: 10px; background: radial-gradient(circle at 50% 35%, #f4f7f6 0%, #c9d3d0 100%); }
+.topo-product img { width: 150px; height: 150px; object-fit: contain; }
+.topo-product small { font-size: 11px; color: #4d5b5e; }
+/* Projects */
+.topo-projects { display: flex; align-items: center; gap: 8px; padding: 9px 22px; border-bottom: 1px solid var(--color-border); background: var(--color-sidebar); overflow-x: auto; }
+.topo-projects-label { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--color-muted); margin-right: 4px; white-space: nowrap; }
+.topo-project { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--color-border); background: transparent; color: var(--color-muted); font-size: 13px; cursor: pointer; white-space: nowrap; }
+.topo-project:hover { border-color: var(--color-muted); }
+.topo-project.is-on { color: var(--color-ink); border-color: var(--color-accent); background: var(--color-accent-faint); }
+.topo-project small { font-size: 11px; color: var(--color-dim); }
+.topo-project-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.topo-projects-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding-left: 12px; }
+.topo-colors { border: 0; padding: 0; margin: 0; display: flex; gap: 10px; align-items: center; }
+.topo-colors legend { font-size: 12.5px; color: var(--color-muted); margin-bottom: 6px; }
+.topo-colors label { flex-direction: row !important; cursor: pointer; }
+.topo-colors input { position: absolute; opacity: 0; width: 0 !important; height: 0; padding: 0 !important; }
+.topo-colors label > span:first-of-type { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; outline: 2px solid transparent; outline-offset: 2px; }
+.topo-colors label.is-on > span:first-of-type { outline-color: var(--color-ink); }
+.topo-colors input:focus-visible + span { outline-color: var(--color-accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.topo-node-project { margin-top: 3px; font-size: 10px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--color-border); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-project-select { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12.5px; color: var(--color-muted); }
+.topo-project-select select { font: inherit; font-size: 13px; color: var(--color-ink); background: var(--color-paper); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.topo-live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-warning); }
+.topo-live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.topo-live.is-on { color: var(--color-accent); }
+.topo-live.is-on i { animation: topo-pulse 2s infinite; }
+
+/* Lean top area (2026-09-20): one 42 px toolbar + one 34 px project row (final sizes are set further down); messages float over the canvas. */
+.topo { height: calc(100svh - var(--live-top-height, 72px)); }
+.topo-bar { gap: 14px; padding: 6px 16px; flex-wrap: nowrap; min-height: 44px; }
+h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
+.topo-bar-stats { gap: 12px; font-size: 12.5px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; min-width: 0; }
+.topo-bar-stats > span { cursor: default; }
+.topo-search { min-width: 150px; max-width: 220px; flex: 1; margin-left: auto; }
+.topo-search input { padding: 6px 0; }
+.topo-bar-actions { gap: 4px; margin-left: 0; }
+.topo-bar .topo-btn { padding: 6px 8px; }
+.topo-projects { padding: 4px 16px; gap: 6px; min-height: 36px; }
+.topo-projects-label { font-size: 10.5px; }
+.topo-project { padding: 3px 10px; font-size: 12.5px; }
+.topo-projects .topo-btn { padding: 4px 10px; font-size: 12.5px; }
+.topo-body { position: relative; }
+.topo-toasts { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; gap: 6px; width: min(720px, calc(100% - 40px)); pointer-events: none; }
+.topo-toasts:empty { display: none; }
+.topo-toasts .topo-alert { pointer-events: auto; border: 1px solid var(--color-border); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+@media (max-width: 1180px) { .topo-bar { flex-wrap: wrap; } .topo-bar-stats > span:nth-child(n+4) { display: none; } }
+.topo-bar { min-height: 42px; padding: 5px 16px; }
+.topo-bar .topo-btn { height: 30px; min-width: 32px; padding: 0 7px; justify-content: center; }
+.topo-search { height: 30px; }
+.topo-search input { padding: 0; line-height: 28px; }
+.topo-projects { min-height: 34px; padding: 3px 16px; }
+.topo-project { height: 26px; padding: 0 10px; line-height: 1; }
+.topo-projects .topo-btn, .topo-projects .topo-icon-btn { height: 26px; padding: 0 9px; }
+/* The shared 40 px touch target is kept on coarse pointers only; the toolbar is a desktop workspace. */
+@media (pointer: fine) {
+  .topo .topo-bar .topo-btn, .topo .topo-projects .topo-btn, .topo .topo-projects .topo-icon-btn, .topo button.topo-project { min-height: 0; }
+  .live-main.is-workspace .live-top button { min-height: 0; }
+}
+
+/* Roaming wearables */
+.topo-edge.edge-roam .react-flow__edge-path { stroke: var(--color-info, #80b7ff); stroke-dasharray: 3 5; opacity: .7; }
+.topo-edge.edge-roam.edge-here .react-flow__edge-path { stroke: var(--color-accent); stroke-dasharray: 8 4; stroke-width: 2.2; opacity: 1; }
+.topo-edge.edge-adopted.edge-away .react-flow__edge-path { opacity: .45; }
+.topo-node-tag.is-roam { background: #80b7ff; color: #0a1620; left: auto; right: -6px; top: auto; bottom: -6px; }
+.topo-node-zone { display: block; margin-top: 2px; font-size: 10.5px; color: var(--color-accent); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-check { display: flex !important; flex-direction: row !important; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel-raised); cursor: pointer; margin: 10px 0; }
+.topo-check input { width: 16px !important; height: 16px; margin-top: 3px; flex-shrink: 0; accent-color: var(--color-accent); }
+.topo-check span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.topo-check strong { font-size: 13px; font-weight: 500; color: var(--color-ink); }
+.topo-check small { font-size: 12px; line-height: 1.55; color: var(--color-muted); }
+.topo-legend .edge-roam { border-color: var(--color-accent); border-top-style: dashed; }
+
+.topo-canvas { position: relative; }
+.topo-canvas .topo-toasts { width: min(640px, calc(100% - 32px)); }
+
+/* Gateway discovery uses the same inventory and product imagery as registration. */
+.topo-discovery { min-width: 0; }
+.topo-discovery .topo-search { min-width: 0; width: 100%; }
+.topo-discovery-dialog { max-height: 85dvh; overflow-y: auto; }
+.topo-discovery-card { display: flex; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--color-border); }
+.topo-discovery-photo { width: 70px; height: 76px; flex-shrink: 0; display: grid; place-items: center; background: var(--color-panel-raised); border-radius: 8px; color: var(--color-muted); }
+.topo-discovery-photo img { width: 64px; height: 68px; object-fit: contain; }
+.topo-discovery-info { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; }
+.topo-discovery-info strong { font-size: 14px; }
+.topo-discovery-info small { color: var(--color-muted); font-size: 11px; line-height: 1.6; }
+.topo-discovery-info code { font-size: 12px; overflow-wrap: anywhere; }
+.topo-discovery-info .topo-btn { align-self: flex-start; margin-top: 5px; }
+
+/* Learned device signals ("สอนสัญญาณให้ระบบ"): the teaching wizard inside the device inspector. */
+.topo-learned { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 11px; border-radius: 8px; font-size: 12.5px; color: var(--color-blue); border: 1px solid var(--color-blue-dark); background: color-mix(in oklab, var(--color-blue-dark) 45%, transparent); }
+.topo-learned svg { flex-shrink: 0; }
+.topo-signals { display: flex; flex-direction: column; gap: 10px; }
+.topo-signal { display: flex; flex-direction: column; gap: 7px; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--color-border); background: var(--color-panel); }
+.topo-signal-head { display: flex; align-items: center; gap: 8px; }
+.topo-signal-head .topo-chip { display: inline-flex; align-items: center; gap: 5px; margin-top: 0; }
+.topo-signal-head small { flex: 1; min-width: 0; font-size: 11px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-signal-why { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--color-ink); }
+.topo-signal .topo-btn.is-small { align-self: flex-start; padding: 5px 9px; font-size: 12px; }
+.topo-signal-test { display: flex; flex-direction: column; gap: 3px; margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-muted); }
+.topo-signal-test strong { color: var(--color-ink); font-weight: 500; }
+.topo-signal-error { margin: 0; font-size: 12.5px; color: var(--color-danger); }
+.topo-signal-setup { display: flex; flex-direction: column; gap: 9px; }
+.topo-signal-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--color-muted); }
+.topo-signal-field select, .topo-signal-field input { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-paper); color: var(--color-ink); font-size: 13px; font-family: inherit; }
+.topo-signal-field select:focus-visible, .topo-signal-field input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.topo-signal-run { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--color-accent-dark); background: color-mix(in oklab, var(--color-accent-faint) 80%, transparent); }
+.topo-signal-phase { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; }
+.topo-signal-step { grid-column: 1; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: var(--color-muted); }
+.topo-signal-phase strong { grid-column: 1; font-size: 14px; font-weight: 600; color: var(--color-ink); }
+.topo-signal-count { grid-column: 2; grid-row: 1 / span 2; font-family: var(--font-mono); font-size: 30px; line-height: 1; color: var(--color-accent); font-variant-numeric: tabular-nums; }
+.topo-signal-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }
+.topo-signal-meters dt { font-size: 11px; color: var(--color-muted); }
+.topo-signal-meters dd { margin: 0; font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.topo-signal-result { display: flex; flex-direction: column; gap: 10px; }
+.topo-signal-empty { margin: 0; padding: 11px 13px; border-radius: 9px; font-size: 12.5px; line-height: 1.8; color: var(--color-warning); border: 1px solid var(--color-warning-dark); background: color-mix(in oklab, var(--color-warning-dark) 45%, transparent); }
+.topo-signal-candidate { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--color-border); background: var(--color-panel); cursor: pointer; }
+.topo-signal-candidate.is-chosen { border-color: var(--color-accent); background: var(--color-accent-faint); }
+.topo-signal-candidate input { margin-top: 2px; accent-color: var(--color-accent); flex-shrink: 0; }
+.topo-signal-candidate > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.topo-signal-candidate strong { font-size: 13px; font-weight: 500; line-height: 1.6; }
+.topo-signal-candidate small { font-size: 11px; color: var(--color-muted); }

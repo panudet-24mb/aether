@@ -1,0 +1,56 @@
+name: aether
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate a local .env first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate a local .env first}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-aether.sh:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aether"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: ../backend
+    image: aether-backend:local
+    entrypoint: ["/app/migrate"]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  api:
+    build: ../backend
+    image: aether-backend:local
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=disable
+      APP_ENV: development
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      ALLOW_REGISTRATION: "false"
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Generate a local .env first}
+      LISTEN_ADDR: ":8080"
+      # Development: browser pages, tests and curl all come from one loopback IP. Production default is 120.
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-600}
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+volumes:
+  postgres-data:

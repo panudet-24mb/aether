@@ -1,0 +1,7123 @@
+{
+ "openapi": "3.0.3",
+ "info": {
+  "title": "Aether Foundation API",
+  "version": "0.1.0",
+  "description": "Aether cloud/on-prem API: authenticated MQTT telemetry, persisted sensor history and Widget Studio."
+ },
+ "servers": [
+  {
+   "url": "http://localhost:8080",
+   "description": "Loopback development only; use HTTPS origin in production."
+  }
+ ],
+ "paths": {
+  "/health/live": {
+   "get": {
+    "summary": "Process/DB readiness",
+    "operationId": "get__health_live",
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "status"
+         ],
+         "additionalProperties": false
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/health/ready": {
+   "get": {
+    "summary": "Process/DB readiness",
+    "operationId": "get__health_ready",
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "status"
+         ],
+         "additionalProperties": false
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/auth/register": {
+   "post": {
+    "summary": "Development registration; production/onprem disabled",
+    "operationId": "post__api_v1_auth_register",
+    "security": [],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Account"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Registration"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "Origin",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Must equal configured APP_ORIGIN exactly."
+     }
+    ]
+   }
+  },
+  "/api/v1/auth/login": {
+   "post": {
+    "summary": "Login; sets HttpOnly refresh cookie",
+    "operationId": "post__api_v1_auth_login",
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AuthResult"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Login"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "Origin",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Must equal configured APP_ORIGIN exactly."
+     }
+    ]
+   }
+  },
+  "/api/v1/auth/refresh": {
+   "post": {
+    "summary": "Rotate refresh cookie; reuse revokes session family",
+    "operationId": "post__api_v1_auth_refresh",
+    "security": [
+     {
+      "refreshCookie": []
+     },
+     {
+      "developmentRefreshCookie": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AuthResult"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "Origin",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Must equal configured APP_ORIGIN exactly."
+     }
+    ]
+   }
+  },
+  "/api/v1/auth/logout": {
+   "post": {
+    "summary": "Revoke current session including access tokens",
+    "operationId": "post__api_v1_auth_logout",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "Origin",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Must equal configured APP_ORIGIN exactly."
+     }
+    ]
+   }
+  },
+  "/api/v1/me": {
+   "get": {
+    "summary": "Current authenticated membership, its role and the project scope enforced for it",
+    "operationId": "get__api_v1_me",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Me"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/catalog": {
+   "get": {
+    "summary": "Gateway models and device profiles this deployment accepts; verified=true only for hardware-captured golden tests",
+    "operationId": "get__api_v1_catalog",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "gateway_models": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string"
+             },
+             "brand": {
+              "type": "string"
+             },
+             "model": {
+              "type": "string"
+             },
+             "label": {
+              "type": "string"
+             },
+             "transport": {
+              "type": "string",
+              "enum": [
+               "mqtt",
+               "http"
+              ],
+              "description": "mqtt: per-gateway MQTT credentials; http: POST /ingest/gateways/{id}/packets with HTTP Basic. minew-mg4 is listed as mqtt and can also upload over HTTP."
+             },
+             "description": {
+              "type": "string"
+             },
+             "logo": {
+              "type": "string"
+             },
+             "verified": {
+              "type": "boolean"
+             },
+             "image": {
+              "type": "string",
+              "description": "Product photo path (manufacturer image, identification only)"
+             }
+            }
+           }
+          },
+          "device_profiles": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string"
+             },
+             "brand": {
+              "type": "string"
+             },
+             "model": {
+              "type": "string"
+             },
+             "label": {
+              "type": "string"
+             },
+             "radio": {
+              "type": "string",
+              "enum": [
+               "ble",
+               "any"
+              ]
+             },
+             "description": {
+              "type": "string"
+             },
+             "image": {
+              "type": "string"
+             },
+             "kinds": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             },
+             "metrics": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             },
+             "verified": {
+              "type": "boolean"
+             },
+             "info_name": {
+              "type": "string"
+             },
+             "notes": {
+              "type": "string"
+             },
+             "wearable": {
+              "type": "boolean"
+             },
+             "button": {
+              "type": "boolean"
+             },
+             "occupancy": {
+              "type": "boolean",
+              "description": "PIR sensor: the motion metric drives occupied / vacant events (vacant after 300 s without motion, raised by the periodic worker)."
+             },
+             "door": {
+              "type": "boolean",
+              "description": "Door contact: the door metric (1 open, 0 closed) drives door_open / door_closed. For minew-s4 it comes from a taught signal; no frame decoder exists."
+             }
+            }
+           }
+          },
+          "verification": {
+           "type": "string"
+          },
+          "alerts_shadow": {
+           "type": "boolean"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways": {
+   "get": {
+    "summary": "List tenant gateways",
+    "operationId": "get__api_v1_gateways",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Gateway"
+           }
+          }
+         },
+         "required": [
+          "items"
+         ],
+         "additionalProperties": false
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create gateway; owner/admin only",
+    "operationId": "post__api_v1_gateways",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/GatewayCreated"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NewGateway"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/revoke": {
+   "post": {
+    "summary": "Revoke gateway; owner/admin only",
+    "operationId": "post__api_v1_gateways_id_revoke",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/gateways/{id}/packets": {
+   "get": {
+    "summary": "Latest 20 raw packets; owner/admin only",
+    "operationId": "get__api_v1_gateways_id_packets",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Packet"
+           }
+          },
+          "decoded": {
+           "type": "boolean",
+           "enum": [
+            false
+           ]
+          }
+         },
+         "required": [
+          "items",
+          "decoded"
+         ],
+         "additionalProperties": false
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/devices": {
+   "get": {
+    "summary": "List tenant devices",
+    "operationId": "get__api_v1_devices",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Device"
+           }
+          }
+         },
+         "required": [
+          "items"
+         ],
+         "additionalProperties": false
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "removed",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "true"
+       ]
+      },
+      "description": "owner/admin: list withdrawn registrations instead of active ones"
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create device; owner/admin only",
+    "operationId": "post__api_v1_devices",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Device"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/NewDevice"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/state": {
+   "get": {
+    "summary": "Latest stored state; inaccessible or unseen returns 404",
+    "operationId": "get__api_v1_devices_id_state",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/State"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/ingest/gateways/{id}/packets": {
+   "post": {
+    "summary": "Store raw MG3 payload; no decoder yet; max 256 KiB",
+    "operationId": "post__ingest_gateways_id_packets",
+    "security": [
+     {
+      "gatewayBasic": []
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RawCaptureResult"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "oneOf": [
+         {
+          "type": "object",
+          "additionalProperties": true
+         },
+         {
+          "type": "array",
+          "items": {}
+         }
+        ]
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/ingest/gateways/{id}/telemetry": {
+   "post": {
+    "summary": "Generic environment profile only; timestamp within past 7 days / future 1 minute",
+    "operationId": "post__ingest_gateways_id_telemetry",
+    "security": [
+     {
+      "gatewayBasic": []
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TelemetryEvent"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Ingest"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/live": {
+   "get": {
+    "summary": "Live gateway diagnostics and persisted sensor history; owner/admin",
+    "operationId": "getLive",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Tenant-scoped persisted sensor history and latest diagnostic gateway window",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "gateways",
+          "server_time",
+          "deployment_mode",
+          "history_scope"
+         ],
+         "properties": {
+          "server_time": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "deployment_mode": {
+           "type": "string",
+           "enum": [
+            "cloud",
+            "onprem"
+           ]
+          },
+          "history_scope": {
+           "type": "string"
+          },
+          "gateways": {
+           "type": "array",
+           "items": {
+            "type": "object"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "range",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "1h",
+        "24h",
+        "7d"
+       ],
+       "default": "24h"
+      },
+      "description": "Latest 200 samples per sensor within range; latest reading retained even outside range"
+     }
+    ]
+   }
+  },
+  "/api/v1/templates": {
+   "get": {
+    "summary": "List workspace device template versions; owner/admin",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create immutable template version; built-in Minew decoder and optional temperature_high/humidity_high thresholds",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "version",
+         "decoder_id",
+         "definition"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "version": {
+          "type": "integer",
+          "minimum": 1
+         },
+         "decoder_id": {
+          "type": "string",
+          "enum": [
+           "minew-ffe1-a101@1"
+          ]
+         },
+         "definition": {
+          "type": "object",
+          "properties": {
+           "temperature_high": {
+            "type": "number",
+            "nullable": true
+           },
+           "humidity_high": {
+            "type": "number",
+            "nullable": true
+           }
+          },
+          "additionalProperties": false
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/streams/{external}/template": {
+   "post": {
+    "summary": "Name a discovered sensor stream and assign workspace template version; owner/admin",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "external",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "template_id"
+        ],
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "template_id": {
+          "type": "string",
+          "format": "uuid"
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/studio/items": {
+   "get": {
+    "summary": "List visible catalog items by kind",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     }
+    },
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "widget",
+        "decoder",
+        "dashboard"
+       ]
+      }
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create immutable widget/decoder version or private dashboard",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     },
+     "201": {
+      "description": "Success"
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/studio/sources": {
+   "get": {
+    "summary": "List recently observed BLE sources",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     }
+    }
+   }
+  },
+  "/api/v1/studio/items/{id}/save": {
+   "post": {
+    "summary": "Save owned dashboard with revision conflict detection",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     },
+     "409": {
+      "description": "Stale revision or inaccessible dashboard"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/studio/items/{id}/delete": {
+   "post": {
+    "summary": "Delete owned dashboard",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     },
+     "204": {
+      "description": "Success"
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/studio/test": {
+   "post": {
+    "summary": "Run bounded JavaScript with supplied test input",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     },
+     "422": {
+      "description": "JavaScript failed or resource limit exceeded"
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/studio/render": {
+   "post": {
+    "summary": "Render panels against tenant-authorized device data",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "400": {
+      "description": "Invalid input"
+     },
+     "401": {
+      "description": "Authentication required"
+     },
+     "403": {
+      "description": "Owner/admin role required"
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/events": {
+   "get": {
+    "summary": "Device event log (tamper, button, leak, motion, offline/online, threshold); newest first",
+    "operationId": "get__api_v1_events",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/alerts": {
+   "get": {
+    "summary": "Alerts by status (open|acknowledged|resolved|all); each item carries sos=true when it is an emergency button press (a critical alert whose event_type is button)",
+    "operationId": "get__api_v1_alerts",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/alerts/summary": {
+   "get": {
+    "summary": "Counts of open and acknowledged alerts",
+    "operationId": "get__api_v1_alerts_summary",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/alerts/{id}/ack": {
+   "post": {
+    "summary": "Acknowledge an open alert (owner/admin/operator)",
+    "operationId": "post__api_v1_alerts_id_ack",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/alerts/{id}/resolve": {
+   "post": {
+    "summary": "Resolve an alert with an optional note (owner/admin/operator)",
+    "operationId": "post__api_v1_alerts_id_resolve",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/rules": {
+   "get": {
+    "summary": "List alert rules; builtin=true marks the rules Aether seeded for the workspace (button/tamper), which can be edited or disabled like any other",
+    "operationId": "get__api_v1_rules",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create an alert rule (owner/admin)",
+    "operationId": "post__api_v1_rules",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "enabled": {
+          "type": "boolean"
+         },
+         "event_type": {
+          "type": "string",
+          "enum": [
+           "tamper",
+           "button",
+           "leak",
+           "motion",
+           "offline",
+           "threshold",
+           "zone",
+           "door",
+           "occupancy"
+          ],
+          "description": "door fires on door_open, occupancy on occupied"
+         },
+         "severity": {
+          "type": "string",
+          "enum": [
+           "info",
+           "warning",
+           "critical"
+          ]
+         },
+         "scope": {
+          "type": "object",
+          "properties": {
+           "external_ids": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "offline_after_sec": {
+            "type": "integer"
+           },
+           "metric": {
+            "type": "string"
+           },
+           "op": {
+            "type": "string",
+            "enum": [
+             ">",
+             ">=",
+             "<",
+             "<="
+            ]
+           },
+           "value": {
+            "type": "number"
+           },
+           "gateway_ids": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "format": "uuid"
+            }
+           },
+           "after_hours": {
+            "type": "object",
+            "description": "door / occupancy rules only: alert only when the event happens inside this Asia/Bangkok window. from > to crosses midnight and belongs to the day it starts on; from == to is the whole day.",
+            "required": [
+             "from",
+             "to"
+            ],
+            "properties": {
+             "from": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+             },
+             "to": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+             },
+             "days": {
+              "type": "array",
+              "maxItems": 7,
+              "uniqueItems": true,
+              "items": {
+               "type": "integer",
+               "minimum": 0,
+               "maximum": 6
+              },
+              "description": "0 = Sunday .. 6 = Saturday; empty = every day"
+             }
+            }
+           }
+          }
+         },
+         "channels": {
+          "type": "array",
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          }
+         },
+         "dedupe_sec": {
+          "type": "integer"
+         }
+        },
+        "required": [
+         "name",
+         "event_type",
+         "severity"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/rules/{id}/update": {
+   "post": {
+    "summary": "Replace an alert rule",
+    "operationId": "post__api_v1_rules_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "enabled": {
+          "type": "boolean"
+         },
+         "event_type": {
+          "type": "string",
+          "enum": [
+           "tamper",
+           "button",
+           "leak",
+           "motion",
+           "offline",
+           "threshold",
+           "zone",
+           "door",
+           "occupancy"
+          ],
+          "description": "door fires on door_open, occupancy on occupied"
+         },
+         "severity": {
+          "type": "string",
+          "enum": [
+           "info",
+           "warning",
+           "critical"
+          ]
+         },
+         "scope": {
+          "type": "object",
+          "properties": {
+           "external_ids": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           },
+           "offline_after_sec": {
+            "type": "integer"
+           },
+           "metric": {
+            "type": "string"
+           },
+           "op": {
+            "type": "string",
+            "enum": [
+             ">",
+             ">=",
+             "<",
+             "<="
+            ]
+           },
+           "value": {
+            "type": "number"
+           },
+           "gateway_ids": {
+            "type": "array",
+            "items": {
+             "type": "string",
+             "format": "uuid"
+            }
+           },
+           "after_hours": {
+            "type": "object",
+            "description": "door / occupancy rules only: alert only when the event happens inside this Asia/Bangkok window. from > to crosses midnight and belongs to the day it starts on; from == to is the whole day.",
+            "required": [
+             "from",
+             "to"
+            ],
+            "properties": {
+             "from": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+             },
+             "to": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+             },
+             "days": {
+              "type": "array",
+              "maxItems": 7,
+              "uniqueItems": true,
+              "items": {
+               "type": "integer",
+               "minimum": 0,
+               "maximum": 6
+              },
+              "description": "0 = Sunday .. 6 = Saturday; empty = every day"
+             }
+            }
+           }
+          }
+         },
+         "channels": {
+          "type": "array",
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          }
+         },
+         "dedupe_sec": {
+          "type": "integer"
+         }
+        },
+        "required": [
+         "name",
+         "event_type",
+         "severity"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/rules/{id}/delete": {
+   "post": {
+    "summary": "Delete an alert rule; existing alerts keep their history",
+    "operationId": "post__api_v1_rules_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/channels": {
+   "get": {
+    "summary": "List notification channels (secrets omitted)",
+    "operationId": "get__api_v1_channels",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create a webhook, LINE Messaging API or email channel",
+    "operationId": "post__api_v1_channels",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "kind": {
+          "type": "string",
+          "enum": [
+           "webhook",
+           "line",
+           "email"
+          ]
+         },
+         "enabled": {
+          "type": "boolean"
+         },
+         "config": {
+          "type": "object",
+          "additionalProperties": {
+           "type": "string"
+          }
+         },
+         "secret": {
+          "type": "string",
+          "description": "Webhook HMAC key or LINE channel access token; sealed at rest, never returned"
+         }
+        },
+        "required": [
+         "name",
+         "kind",
+         "config"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/channels/{id}/update": {
+   "post": {
+    "summary": "Enable or disable a notification channel",
+    "operationId": "post__api_v1_channels_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "enabled": {
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "enabled"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/channels/{id}/delete": {
+   "post": {
+    "summary": "Delete a notification channel",
+    "operationId": "post__api_v1_channels_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/channels/{id}/test": {
+   "post": {
+    "summary": "Send a synthetic test alert through the channel; 502 with detail on failure",
+    "operationId": "post__api_v1_channels_id_test",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/notifications": {
+   "get": {
+    "summary": "Delivery log with status, attempts and last error",
+    "operationId": "get__api_v1_notifications",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/update": {
+   "post": {
+    "summary": "Rename and/or move an active registration to another gateway of the same tenant (owner/admin); 409 when the target gateway already has that identity",
+    "operationId": "post__api_v1_devices_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "gateway_id": {
+          "type": "string",
+          "format": "uuid"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/remove": {
+   "post": {
+    "summary": "Withdraw a registration (soft removal); telemetry history is kept and the identity can be adopted again",
+    "operationId": "post__api_v1_devices_id_remove",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/restore": {
+   "post": {
+    "summary": "Restore a withdrawn registration; 409 when the identity is active again or the device quota is reached",
+    "operationId": "post__api_v1_devices_id_restore",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/projects": {
+   "get": {
+    "summary": "List projects of the tenant (active only; ?archived=true includes archived). Projects group gateways, and through them devices.",
+    "operationId": "get__api_v1_projects",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Project"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "archived",
+      "in": "query",
+      "schema": {
+       "type": "boolean"
+      }
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create a project (owner/admin); at most 50 active projects, names unique case-insensitively",
+    "operationId": "post__api_v1_projects",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Project"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "color": {
+          "type": "string",
+          "enum": [
+           "mint",
+           "blue",
+           "amber",
+           "coral",
+           "violet",
+           "slate"
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/projects/{id}/update": {
+   "post": {
+    "summary": "Rename, describe or recolour a project (owner/admin)",
+    "operationId": "post__api_v1_projects_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Project"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "color": {
+          "type": "string",
+          "enum": [
+           "mint",
+           "blue",
+           "amber",
+           "coral",
+           "violet",
+           "slate"
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/projects/{id}/archive": {
+   "post": {
+    "summary": "Archive a project (owner/admin); its gateways become unassigned, nothing is deleted",
+    "operationId": "post__api_v1_projects_id_archive",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/gateways/{id}/project": {
+   "post": {
+    "summary": "Move a gateway, and with it all its devices, to another project; null unassigns (owner/admin)",
+    "operationId": "post__api_v1_gateways_id_project",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "project_id"
+        ],
+        "properties": {
+         "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/ws": {
+   "get": {
+    "summary": "WebSocket change signals for the caller's tenant",
+    "description": "Signal stream for the authenticated workspace. It never carries data. A member whose project scope is narrowed receives the signal without gateway_id, so the stream cannot report which gateway in another project changed; the timing of tenant-wide activity is still observable. A session that owes a password change is refused.",
+    "operationId": "get__ws",
+    "responses": {
+     "101": {
+      "description": "Switching protocols"
+     },
+     "426": {
+      "description": "Not a WebSocket upgrade"
+     }
+    }
+   }
+  },
+  "/api/v1/presence/{external}": {
+   "get": {
+    "summary": "Where a tag is now: every gateway of the workspace that has heard the identity, and the one that hears it best. RSSI is a proximity hint, not a position.",
+    "operationId": "get__api_v1_presence_external",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "external",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[0-9a-fA-F]{12}$"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Presence"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/roaming": {
+   "post": {
+    "summary": "Follow a wearable across every gateway of the workspace (owner/admin). Roaming devices render from the gateway that hears them best, record an event once even when several gateways hear it, and go offline only when no gateway hears them.",
+    "operationId": "post__api_v1_devices_id_roaming",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "roaming"
+        ],
+        "properties": {
+         "roaming": {
+          "type": "boolean"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/assets": {
+   "get": {
+    "summary": "List every gateway and every active device of the workspace with its maintenance record (at most 500 rows; viewers may read)",
+    "operationId": "get__api_v1_assets",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/AssetRow"
+           }
+          },
+          "server_time": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "limit": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/assets/export.csv": {
+   "get": {
+    "summary": "Download the registry as UTF-8 CSV with a BOM (Excel-safe Thai); cells starting with = + - @ are neutralised",
+    "operationId": "get__api_v1_assets_export_csv",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "text/csv": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/assets/{kind}/{id}": {
+   "get": {
+    "summary": "One asset with its record, maintenance plans and last 100 log entries",
+    "operationId": "get__api_v1_assets_kind_id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AssetDetail"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "gateway",
+        "device"
+       ]
+      }
+     },
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create or replace the bookkeeping record of one asset (owner/admin)",
+    "operationId": "post__api_v1_assets_kind_id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AssetDetail"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "gateway",
+        "device"
+       ]
+      }
+     },
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "serial_no": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "asset_tag": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "location_note": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "vendor": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "purchased_at": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         },
+         "warranty_until": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         },
+         "battery_changed_at": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         },
+         "status": {
+          "type": "string",
+          "enum": [
+           "in_service",
+           "spare",
+           "repair",
+           "retired"
+          ]
+         },
+         "notes": {
+          "type": "string",
+          "maxLength": 4000
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/assets/{kind}/{id}/plans": {
+   "post": {
+    "summary": "Add a preventive maintenance plan to an asset (owner/admin; at most 20 per asset)",
+    "operationId": "post__api_v1_assets_kind_id_plans",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MaintenancePlan"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "gateway",
+        "device"
+       ]
+      }
+     },
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "title",
+         "kind",
+         "interval_days",
+         "next_due"
+        ],
+        "properties": {
+         "title": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "kind": {
+          "type": "string",
+          "enum": [
+           "pm",
+           "calibration",
+           "battery",
+           "inspection",
+           "other"
+          ]
+         },
+         "interval_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+         },
+         "next_due": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         },
+         "enabled": {
+          "type": "boolean"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/assets/{kind}/{id}/logs": {
+   "post": {
+    "summary": "Append a maintenance entry (owner/admin). With plan_id and a kind other than note the plan advances to performed_at + interval_days; kind=battery also stamps battery_changed_at",
+    "operationId": "post__api_v1_assets_kind_id_logs",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AssetDetail"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "kind",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "enum": [
+        "gateway",
+        "device"
+       ]
+      }
+     },
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "kind",
+         "title",
+         "performed_at"
+        ],
+        "properties": {
+         "plan_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         },
+         "kind": {
+          "type": "string",
+          "enum": [
+           "pm",
+           "ma",
+           "repair",
+           "battery",
+           "calibration",
+           "inspection",
+           "note"
+          ]
+         },
+         "title": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "detail": {
+          "type": "string",
+          "maxLength": 4000
+         },
+         "performed_by": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "cost": {
+          "type": "number",
+          "minimum": 0,
+          "nullable": true
+         },
+         "performed_at": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/plans/{id}/update": {
+   "post": {
+    "summary": "Edit a maintenance plan (owner/admin)",
+    "operationId": "post__api_v1_plans_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MaintenancePlan"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "title",
+         "kind",
+         "interval_days",
+         "next_due"
+        ],
+        "properties": {
+         "title": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "kind": {
+          "type": "string",
+          "enum": [
+           "pm",
+           "calibration",
+           "battery",
+           "inspection",
+           "other"
+          ]
+         },
+         "interval_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+         },
+         "next_due": {
+          "type": "string",
+          "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+          "description": "YYYY-MM-DD, or \"\" when not set"
+         },
+         "enabled": {
+          "type": "boolean"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/plans/{id}/delete": {
+   "post": {
+    "summary": "Delete a maintenance plan (owner/admin); the history it produced is kept",
+    "operationId": "post__api_v1_plans_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations": {
+   "get": {
+    "summary": "List the tenant's automation flows with the studio's block catalogue",
+    "operationId": "get__api_v1_automations",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Automation"
+           }
+          },
+          "catalog": {
+           "type": "object",
+           "description": "Block types, event types, operators, severities and limits; command_available is false because Aether has no downlink to devices."
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create a flow (owner/admin); at most 100 per workspace. A body with enabled=true is validated first and answers 400 with per-block problems.",
+    "operationId": "post__api_v1_automations",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Automation"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "definition"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 120
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "enabled": {
+          "type": "boolean"
+         },
+         "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         },
+         "definition": {
+          "$ref": "#/components/schemas/AutomationDefinition"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/automations/{id}": {
+   "get": {
+    "summary": "Read one flow",
+    "operationId": "get__api_v1_automations_id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Automation"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations/{id}/save": {
+   "post": {
+    "summary": "Save a new revision (owner/admin); a stale revision is 409",
+    "operationId": "post__api_v1_automations_id_save",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Automation"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "definition",
+         "revision"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 120
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "enabled": {
+          "type": "boolean"
+         },
+         "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         },
+         "definition": {
+          "$ref": "#/components/schemas/AutomationDefinition"
+         },
+         "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The revision the editor started from."
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations/{id}/enable": {
+   "post": {
+    "summary": "Switch a flow on or off (owner/admin). Enabling revalidates the definition and answers 400 with per-block problems; a flow containing action.command can never be enabled.",
+    "operationId": "post__api_v1_automations_id_enable",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Automation"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "enabled"
+        ],
+        "properties": {
+         "enabled": {
+          "type": "boolean"
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations/{id}/delete": {
+   "post": {
+    "summary": "Delete a flow and its run history (owner/admin)",
+    "operationId": "post__api_v1_automations_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations/{id}/runs": {
+   "get": {
+    "summary": "Recent evaluations of one flow, newest first",
+    "operationId": "get__api_v1_automations_id_runs",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/AutomationRun"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "default": 50,
+       "maximum": 200
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/automations/validate": {
+   "post": {
+    "summary": "Check a definition without storing it; returns one problem per offending block so the studio can outline it",
+    "operationId": "post__api_v1_automations_validate",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "ok": {
+           "type": "boolean"
+          },
+          "problems": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/AutomationProblem"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "enabled": {
+          "type": "boolean"
+         },
+         "definition": {
+          "$ref": "#/components/schemas/AutomationDefinition"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/automations/{id}/test": {
+   "post": {
+    "summary": "Dry run against the workspace's real current readings (owner/admin). Nothing is executed: no alert is opened, no notification queued, no run recorded.",
+    "operationId": "post__api_v1_automations_id_test",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "dry_run": {
+           "type": "boolean"
+          },
+          "executed": {
+           "type": "boolean"
+          },
+          "result": {
+           "$ref": "#/components/schemas/AutomationResult"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "external_id"
+        ],
+        "properties": {
+         "external_id": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "gateway_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "event_type": {
+          "type": "string",
+          "description": "Fires trigger.event blocks; supply this or metric_value."
+         },
+         "metric_value": {
+          "type": "number",
+          "nullable": true,
+          "description": "Fires trigger.metric blocks whose comparison it satisfies."
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/sites": {
+   "get": {
+    "summary": "List buildings with floor metadata (layouts omitted)",
+    "operationId": "get__api_v1_sites",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Site"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create a building with a first floor (owner/admin)",
+    "operationId": "post__api_v1_sites",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Site"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}": {
+   "get": {
+    "summary": "One building with the full drawing and placements of every floor",
+    "operationId": "get__api_v1_sites_id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Site"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/sites/{id}/update": {
+   "post": {
+    "summary": "Rename a building or move it to a project (owner/admin)",
+    "operationId": "post__api_v1_sites_id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "description": {
+          "type": "string",
+          "maxLength": 500
+         },
+         "project_id": {
+          "type": "string",
+          "format": "uuid",
+          "nullable": true
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/archive": {
+   "post": {
+    "summary": "Archive a building; its placements are released, no asset is deleted (owner/admin)",
+    "operationId": "post__api_v1_sites_id_archive",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/sites/{id}/floors": {
+   "post": {
+    "summary": "Add a floor (owner/admin)",
+    "operationId": "post__api_v1_sites_id_floors",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Floor"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "level",
+         "width_m",
+         "depth_m",
+         "ceiling_m",
+         "revision",
+         "layout",
+         "placements"
+        ],
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "level": {
+          "type": "integer",
+          "minimum": -20,
+          "maximum": 200
+         },
+         "width_m": {
+          "type": "number"
+         },
+         "depth_m": {
+          "type": "number"
+         },
+         "ceiling_m": {
+          "type": "number"
+         },
+         "revision": {
+          "type": "integer",
+          "description": "revision the editor loaded; 409 when stale"
+         },
+         "layout": {
+          "$ref": "#/components/schemas/FloorLayout"
+         },
+         "placements": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+           "$ref": "#/components/schemas/FloorPlacement"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/floors/{id}/save": {
+   "post": {
+    "summary": "Replace a floor's metadata, drawing and placements in one transaction. An asset stands in one place: placing it here removes it from any other floor.",
+    "operationId": "post__api_v1_floors_id_save",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "revision": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name",
+         "level",
+         "width_m",
+         "depth_m",
+         "ceiling_m",
+         "revision",
+         "layout",
+         "placements"
+        ],
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "level": {
+          "type": "integer",
+          "minimum": -20,
+          "maximum": 200
+         },
+         "width_m": {
+          "type": "number"
+         },
+         "depth_m": {
+          "type": "number"
+         },
+         "ceiling_m": {
+          "type": "number"
+         },
+         "revision": {
+          "type": "integer",
+          "description": "revision the editor loaded; 409 when stale"
+         },
+         "layout": {
+          "$ref": "#/components/schemas/FloorLayout"
+         },
+         "placements": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+           "$ref": "#/components/schemas/FloorPlacement"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/floors/{id}/delete": {
+   "post": {
+    "summary": "Delete a floor with its drawing and placements (owner/admin)",
+    "operationId": "post__api_v1_floors_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/floors/{id}/image": {
+   "post": {
+    "summary": "Set or clear (empty string) the scanned plan to trace over. PNG, JPEG or WebP up to 192 KiB; the type is detected from the bytes.",
+    "operationId": "post__api_v1_floors_id_image",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "data_base64"
+        ],
+        "properties": {
+         "data_base64": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "summary": "The scanned plan of a floor",
+    "operationId": "get__api_v1_floors_id_image",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Image bytes",
+      "content": {
+       "image/*": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/auth/password": {
+   "post": {
+    "summary": "Replace the signed-in user's own password; verifies the current one, revokes their other sessions in every workspace and clears must_change_password. While that flag is set this is the only mutating route the session may reach.",
+    "operationId": "post__api_v1_auth_password",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "current_password",
+         "new_password"
+        ],
+        "properties": {
+         "current_password": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "new_password": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 128
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "Origin",
+      "in": "header",
+      "required": true,
+      "schema": {
+       "type": "string"
+      },
+      "description": "Must equal configured APP_ORIGIN exactly."
+     }
+    ]
+   }
+  },
+  "/api/v1/members": {
+   "get": {
+    "summary": "List the members of the workspace (owner/admin)",
+    "operationId": "get__api_v1_members",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Member"
+           }
+          },
+          "roles": {
+           "type": "array",
+           "items": {
+            "type": "string",
+            "enum": [
+             "owner",
+             "admin",
+             "operator",
+             "viewer"
+            ]
+           }
+          },
+          "max_members": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Add a member (owner/admin; an admin can never grant owner). The email must either be new or belong to an identity that is a member of no workspace at all; an identity that still belongs to one is refused with a plain 409, so the route cannot be used to probe whether an address has an account. At most 200 members.",
+    "operationId": "post__api_v1_members",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Member"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "email",
+         "role",
+         "password"
+        ],
+        "properties": {
+         "email": {
+          "type": "string",
+          "maxLength": 254,
+          "description": "Normalised to lower case."
+         },
+         "name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Defaults to the local part of the address."
+         },
+         "role": {
+          "type": "string",
+          "enum": [
+           "owner",
+           "admin",
+           "operator",
+           "viewer"
+          ]
+         },
+         "password": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 128,
+          "description": "Initial password, handed over in person: there is no email delivery. The member can do nothing but replace it (POST /api/v1/auth/password) until they have."
+         },
+         "project_ids": {
+          "type": "array",
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "maxItems": 50,
+          "description": "Projects this member may see. Empty means every project of the workspace."
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/members/{user_id}/update": {
+   "post": {
+    "summary": "Change a member's role and project access (owner/admin). Nobody may edit their own membership, an admin may not touch an owner or grant owner, and the last owner may not be demoted.",
+    "operationId": "post__api_v1_members__user_id__update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "role"
+        ],
+        "properties": {
+         "role": {
+          "type": "string",
+          "enum": [
+           "owner",
+           "admin",
+           "operator",
+           "viewer"
+          ]
+         },
+         "project_ids": {
+          "type": "array",
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "maxItems": 50,
+          "description": "Projects this member may see. Empty means every project of the workspace."
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/members/{user_id}/remove": {
+   "post": {
+    "summary": "Remove a member and every session they hold in this workspace (owner/admin). The last owner may not be removed.",
+    "operationId": "post__api_v1_members__user_id__remove",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/members/{user_id}/reset-password": {
+   "post": {
+    "summary": "Set a new password for a member and revoke their sessions (owner/admin). 409 when that identity also belongs to another workspace.",
+    "operationId": "post__api_v1_members__user_id__reset_password",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "password"
+        ],
+        "properties": {
+         "password": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 128
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/signals/sessions": {
+   "post": {
+    "summary": "Start teaching a signal (owner/admin). Phase 1 records what the device broadcasts at rest, phase 2 what it broadcasts while the operator triggers it; the difference becomes the candidate matchers. The identity must already have been heard by the gateway.",
+    "operationId": "post__api_v1_signals_sessions",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "gateway_id",
+         "external_id",
+         "event_type"
+        ],
+        "properties": {
+         "gateway_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "external_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{12}$"
+         },
+         "event_type": {
+          "type": "string",
+          "enum": [
+           "button",
+           "tamper",
+           "leak",
+           "motion",
+           "door",
+           "custom"
+          ]
+         },
+         "label": {
+          "type": "string",
+          "maxLength": 64
+         },
+         "baseline_sec": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 180,
+          "default": 20
+         },
+         "trigger_sec": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 180,
+          "default": 20
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SignalSession"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/sessions/{id}": {
+   "get": {
+    "summary": "Live per-phase counters while the session runs, and the ranked candidates once both phases are over.",
+    "operationId": "get__api_v1_signals_sessions_id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SignalSession"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/sessions/{id}/advance": {
+   "post": {
+    "summary": "End the baseline phase early and start the trigger phase now (owner/admin). The trigger window keeps the length the operator chose.",
+    "operationId": "post__api_v1_signals_sessions_id_advance",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SignalSession"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/sessions/{id}/cancel": {
+   "post": {
+    "summary": "Abandon a teaching session (owner/admin).",
+    "operationId": "post__api_v1_signals_sessions_id_cancel",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/sessions/{id}/confirm": {
+   "post": {
+    "summary": "Store one of the candidates as a signature (owner/admin). From then on ingest raises that event type for the device, edge-triggered: once per transition into the matched state, not once per uplink.",
+    "operationId": "post__api_v1_signals_sessions_id_confirm",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "candidate_index",
+         "scope"
+        ],
+        "properties": {
+         "candidate_index": {
+          "type": "integer",
+          "minimum": 0
+         },
+         "scope": {
+          "type": "string",
+          "enum": [
+           "device",
+           "profile"
+          ]
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Signal"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals": {
+   "get": {
+    "summary": "Every learned signature of the workspace.",
+    "operationId": "get__api_v1_signals",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Signal"
+           }
+          },
+          "event_types": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          },
+          "max": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/{id}/delete": {
+   "post": {
+    "summary": "Delete a signature (owner/admin). Events it already raised are kept.",
+    "operationId": "post__api_v1_signals_id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/signals/{id}/test": {
+   "post": {
+    "summary": "Replay the last ten minutes of the covered identities' raw history through the matcher and report how many uplinks would have fired (owner/admin). This is how false positives are found before the signature is trusted.",
+    "operationId": "post__api_v1_signals_id_test",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SignalTest"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "securitySchemes": {
+   "bearerAuth": {
+    "type": "http",
+    "scheme": "bearer",
+    "bearerFormat": "JWT"
+   },
+   "gatewayBasic": {
+    "type": "http",
+    "scheme": "basic",
+    "description": "Gateway UUID as username and one-time-displayed token as password; HTTPS required outside loopback."
+   },
+   "refreshCookie": {
+    "type": "apiKey",
+    "in": "cookie",
+    "name": "__Host-aether_refresh"
+   },
+   "developmentRefreshCookie": {
+    "type": "apiKey",
+    "in": "cookie",
+    "name": "aether_refresh_dev"
+   }
+  },
+  "schemas": {
+   "Error": {
+    "type": "object",
+    "properties": {
+     "error": {
+      "type": "string"
+     },
+     "request_id": {
+      "type": "string"
+     },
+     "detail": {
+      "type": "string",
+      "enum": [
+       "password_change_required"
+      ],
+      "description": "Machine-readable reason, currently only password_change_required: the session was issued an initial or reset password and must replace it through POST /api/v1/auth/password before any other route answers. Sent with 403."
+     }
+    },
+    "required": [
+     "error",
+     "request_id"
+    ],
+    "additionalProperties": false
+   },
+   "Login": {
+    "type": "object",
+    "properties": {
+     "email": {
+      "type": "string",
+      "format": "email"
+     },
+     "password": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 128
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     }
+    },
+    "required": [
+     "email",
+     "password"
+    ],
+    "additionalProperties": false
+   },
+   "Registration": {
+    "type": "object",
+    "properties": {
+     "email": {
+      "type": "string",
+      "format": "email"
+     },
+     "password": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 128
+     },
+     "name": {
+      "type": "string"
+     },
+     "tenant_name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "email",
+     "password",
+     "name",
+     "tenant_name"
+    ],
+    "additionalProperties": false
+   },
+   "Account": {
+    "type": "object",
+    "properties": {
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "user": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "format": "uuid"
+       },
+       "email": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "id",
+       "email",
+       "name"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "required": [
+     "tenant_id",
+     "user"
+    ],
+    "additionalProperties": false
+   },
+   "AuthResult": {
+    "type": "object",
+    "properties": {
+     "access_token": {
+      "type": "string"
+     },
+     "token_type": {
+      "type": "string",
+      "enum": [
+       "Bearer"
+      ]
+     },
+     "expires_in": {
+      "type": "integer",
+      "maximum": 900
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "user_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "must_change_password": {
+      "type": "boolean",
+      "description": "The password was handed over out of band. Until it is replaced through POST /api/v1/auth/password every route except that one, POST /api/v1/auth/logout and GET /api/v1/me answers 403 with detail password_change_required, and the WebSocket refuses the session."
+     }
+    },
+    "required": [
+     "access_token",
+     "token_type",
+     "expires_in",
+     "tenant_id",
+     "user_id",
+     "must_change_password"
+    ],
+    "additionalProperties": false
+   },
+   "Me": {
+    "type": "object",
+    "properties": {
+     "user_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "owner",
+       "admin",
+       "operator",
+       "viewer"
+      ]
+     },
+     "deployment_mode": {
+      "type": "string",
+      "enum": [
+       "cloud",
+       "onprem"
+      ]
+     },
+     "email": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "project_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "nullable": true,
+      "description": "Projects the caller may see, or null when they see every project."
+     },
+     "must_change_password": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "user_id",
+     "tenant_id",
+     "email",
+     "name",
+     "role",
+     "project_ids",
+     "must_change_password",
+     "deployment_mode"
+    ],
+    "additionalProperties": false
+   },
+   "NewGateway": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+     },
+     "model": {
+      "type": "string",
+      "enum": [
+       "minew-mg3",
+       "generic-http"
+      ]
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true,
+      "description": "Optional project to create the gateway in"
+     }
+    },
+    "required": [
+     "name",
+     "model"
+    ],
+    "additionalProperties": false
+   },
+   "Gateway": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "model": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     }
+    },
+    "required": [
+     "id",
+     "tenant_id",
+     "name",
+     "model",
+     "created_at"
+    ],
+    "additionalProperties": false
+   },
+   "GatewayCreated": {
+    "type": "object",
+    "properties": {
+     "gateway": {
+      "$ref": "#/components/schemas/Gateway"
+     },
+     "token": {
+      "type": "string",
+      "description": "Shown once; store securely. Never log."
+     },
+     "credential_display": {
+      "type": "string"
+     },
+     "capture_path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "gateway",
+     "token",
+     "credential_display",
+     "capture_path"
+    ],
+    "additionalProperties": false
+   },
+   "NewDevice": {
+    "type": "object",
+    "properties": {
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "profile_id": {
+      "type": "string",
+      "enum": [
+       "generic-environment@1",
+       "minew-s1-pending@1"
+      ]
+     }
+    },
+    "required": [
+     "gateway_id",
+     "name",
+     "external_id",
+     "profile_id"
+    ],
+    "additionalProperties": false
+   },
+   "Device": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "profile_id": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "roaming": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "id",
+     "tenant_id",
+     "gateway_id",
+     "name",
+     "external_id",
+     "profile_id",
+     "created_at"
+    ],
+    "additionalProperties": false
+   },
+   "Metrics": {
+    "type": "object",
+    "minProperties": 1,
+    "additionalProperties": false,
+    "properties": {
+     "temperature": {
+      "type": "number",
+      "minimum": -100,
+      "maximum": 200
+     },
+     "humidity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "battery": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+     }
+    }
+   },
+   "Ingest": {
+    "type": "object",
+    "properties": {
+     "device_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "ts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "metrics": {
+      "$ref": "#/components/schemas/Metrics"
+     }
+    },
+    "required": [
+     "device_id",
+     "ts",
+     "metrics"
+    ],
+    "additionalProperties": false
+   },
+   "State": {
+    "type": "object",
+    "properties": {
+     "device_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "ts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "metrics": {
+      "$ref": "#/components/schemas/Metrics"
+     }
+    },
+    "required": [
+     "device_id",
+     "ts",
+     "metrics"
+    ],
+    "additionalProperties": false
+   },
+   "TelemetryEvent": {
+    "type": "object",
+    "properties": {
+     "schema": {
+      "type": "string",
+      "enum": [
+       "telemetry.v1"
+      ]
+     },
+     "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "device_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "profile_id": {
+      "type": "string"
+     },
+     "ts": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "received_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "metrics": {
+      "$ref": "#/components/schemas/Metrics"
+     }
+    },
+    "required": [
+     "schema",
+     "tenant_id",
+     "device_id",
+     "profile_id",
+     "ts",
+     "received_at",
+     "metrics"
+    ],
+    "additionalProperties": false
+   },
+   "RawCaptureResult": {
+    "type": "object",
+    "properties": {
+     "packet_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "stored": {
+      "type": "boolean",
+      "enum": [
+       true
+      ]
+     },
+     "decoded": {
+      "type": "boolean",
+      "enum": [
+       false
+      ]
+     }
+    },
+    "required": [
+     "packet_id",
+     "stored",
+     "decoded"
+    ],
+    "additionalProperties": false
+   },
+   "Packet": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "received_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "payload": {
+      "oneOf": [
+       {
+        "type": "object",
+        "additionalProperties": true
+       },
+       {
+        "type": "array",
+        "items": {}
+       }
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "gateway_id",
+     "received_at",
+     "payload"
+    ],
+    "additionalProperties": false
+   },
+   "Project": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "description": {
+      "type": "string",
+      "maxLength": 500
+     },
+     "color": {
+      "type": "string",
+      "enum": [
+       "mint",
+       "blue",
+       "amber",
+       "coral",
+       "violet",
+       "slate"
+      ]
+     },
+     "gateway_count": {
+      "type": "integer"
+     },
+     "archived_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "Presence": {
+    "type": "object",
+    "properties": {
+     "external_id": {
+      "type": "string"
+     },
+     "roaming": {
+      "type": "boolean"
+     },
+     "current": {
+      "type": "object",
+      "properties": {
+       "gateway_id": {
+        "type": "string",
+        "format": "uuid"
+       },
+       "gateway_name": {
+        "type": "string"
+       },
+       "project": {
+        "type": "string"
+       },
+       "last_seen": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "rssi": {
+        "type": "integer",
+        "nullable": true
+       },
+       "fresh": {
+        "type": "boolean",
+        "description": "heard within the last 60 s"
+       },
+       "current": {
+        "type": "boolean"
+       }
+      },
+      "nullable": true,
+      "description": "strongest RSSI among fresh sightings; null when no gateway hears the tag"
+     },
+     "sightings": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "gateway_id": {
+         "type": "string",
+         "format": "uuid"
+        },
+        "gateway_name": {
+         "type": "string"
+        },
+        "project": {
+         "type": "string"
+        },
+        "last_seen": {
+         "type": "string",
+         "format": "date-time"
+        },
+        "rssi": {
+         "type": "integer",
+         "nullable": true
+        },
+        "fresh": {
+         "type": "boolean",
+         "description": "heard within the last 60 s"
+        },
+        "current": {
+         "type": "boolean"
+        }
+       }
+      }
+     },
+     "server_time": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "AssetRow": {
+    "type": "object",
+    "description": "One registry line: operational identity merged with the tenant's record and its plan summary.",
+    "properties": {
+     "asset_kind": {
+      "type": "string",
+      "enum": [
+       "gateway",
+       "device"
+      ]
+     },
+     "asset_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "model": {
+      "type": "string",
+      "description": "gateway model id, or device profile id"
+     },
+     "external_id": {
+      "type": "string",
+      "description": "BLE identity of a device; empty for a gateway"
+     },
+     "gateway_id": {
+      "type": "string"
+     },
+     "gateway_name": {
+      "type": "string"
+     },
+     "project_name": {
+      "type": "string"
+     },
+     "last_seen": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     },
+     "battery": {
+      "type": "number",
+      "nullable": true,
+      "description": "newest decoded battery percentage"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "in_service",
+       "spare",
+       "repair",
+       "retired"
+      ]
+     },
+     "serial_no": {
+      "type": "string"
+     },
+     "asset_tag": {
+      "type": "string"
+     },
+     "location_note": {
+      "type": "string"
+     },
+     "warranty_until": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "battery_changed_at": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "notes": {
+      "type": "string"
+     },
+     "next_due": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "overdue_count": {
+      "type": "integer"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "AssetRecord": {
+    "type": "object",
+    "description": "The tenant's editable bookkeeping row for one asset.",
+    "properties": {
+     "asset_kind": {
+      "type": "string",
+      "enum": [
+       "gateway",
+       "device"
+      ]
+     },
+     "asset_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "serial_no": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "asset_tag": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "location_note": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "vendor": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "purchased_at": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "warranty_until": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "battery_changed_at": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "in_service",
+       "spare",
+       "repair",
+       "retired"
+      ]
+     },
+     "notes": {
+      "type": "string",
+      "maxLength": 4000
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "MaintenancePlan": {
+    "type": "object",
+    "description": "A recurring maintenance round; a log bound to it moves next_due forward by interval_days.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "asset_kind": {
+      "type": "string",
+      "enum": [
+       "gateway",
+       "device"
+      ]
+     },
+     "asset_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "title": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "pm",
+       "calibration",
+       "battery",
+       "inspection",
+       "other"
+      ]
+     },
+     "interval_days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3650
+     },
+     "next_due": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "last_done": {
+      "type": "string",
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "YYYY-MM-DD, or \"\" when not set"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "MaintenanceLog": {
+    "type": "object",
+    "description": "One entry of the append-only maintenance history; it is never updated or deleted.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "asset_kind": {
+      "type": "string",
+      "enum": [
+       "gateway",
+       "device"
+      ]
+     },
+     "asset_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "plan_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "pm",
+       "ma",
+       "repair",
+       "battery",
+       "calibration",
+       "inspection",
+       "note"
+      ]
+     },
+     "title": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "detail": {
+      "type": "string",
+      "maxLength": 4000
+     },
+     "performed_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "performed_by": {
+      "type": "string",
+      "maxLength": 128
+     },
+     "cost": {
+      "type": "number",
+      "minimum": 0,
+      "nullable": true
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "AssetDetail": {
+    "type": "object",
+    "description": "Everything the asset drawer shows in one round trip.",
+    "properties": {
+     "asset": {
+      "$ref": "#/components/schemas/AssetRow"
+     },
+     "record": {
+      "$ref": "#/components/schemas/AssetRecord"
+     },
+     "plans": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/MaintenancePlan"
+      }
+     },
+     "logs": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/MaintenanceLog"
+      },
+      "description": "the 100 most recent entries"
+     }
+    }
+   },
+   "AutomationNode": {
+    "type": "object",
+    "required": [
+     "id",
+     "type"
+    ],
+    "description": "One block. `type` is one of trigger.event, trigger.metric, cond.time, cond.device, cond.zone, logic.all, logic.any, action.alert, action.notify, action.command.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 64
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "trigger.event",
+       "trigger.metric",
+       "cond.time",
+       "cond.device",
+       "cond.zone",
+       "logic.all",
+       "logic.any",
+       "action.alert",
+       "action.notify",
+       "action.command"
+      ]
+     },
+     "position": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       }
+      }
+     },
+     "data": {
+      "type": "object",
+      "description": "Block settings; only the fields of the block's own type are read.",
+      "properties": {
+       "event_types": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "external_ids": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "gateway_ids": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "format": "uuid"
+        }
+       },
+       "external_id": {
+        "type": "string"
+       },
+       "metric": {
+        "type": "string",
+        "description": "temperature, humidity, battery, rssi, or any decoded metric key"
+       },
+       "op": {
+        "type": "string",
+        "enum": [
+         ">",
+         ">=",
+         "<",
+         "<="
+        ]
+       },
+       "value": {
+        "type": "number"
+       },
+       "for_sec": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3600
+       },
+       "max_age_sec": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 86400
+       },
+       "from": {
+        "type": "string",
+        "example": "08:00"
+       },
+       "to": {
+        "type": "string",
+        "example": "17:00"
+       },
+       "days": {
+        "type": "array",
+        "items": {
+         "type": "integer",
+         "minimum": 0,
+         "maximum": 6
+        }
+       },
+       "severity": {
+        "type": "string",
+        "enum": [
+         "info",
+         "warning",
+         "critical"
+        ]
+       },
+       "title": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "channel_ids": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "format": "uuid"
+        }
+       },
+       "message": {
+        "type": "string",
+        "maxLength": 400
+       },
+       "label": {
+        "type": "string",
+        "maxLength": 200
+       }
+      }
+     }
+    }
+   },
+   "AutomationEdge": {
+    "type": "object",
+    "required": [
+     "id",
+     "source",
+     "target"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 64
+     },
+     "source": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "sourceHandle": {
+      "type": "string",
+      "enum": [
+       "true",
+       "false"
+      ],
+      "description": "Required on an edge leaving a condition block; absent everywhere else."
+     }
+    }
+   },
+   "AutomationDefinition": {
+    "type": "object",
+    "description": "The block graph. At most 40 nodes, 80 edges and 32 KiB of JSON.",
+    "properties": {
+     "nodes": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/AutomationNode"
+      }
+     },
+     "edges": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/AutomationEdge"
+      }
+     }
+    }
+   },
+   "Automation": {
+    "type": "object",
+    "description": "One stored 'if this, then that' flow. Evaluated inside the packet transaction on every uplink of the tenant.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "definition": {
+      "$ref": "#/components/schemas/AutomationDefinition"
+     },
+     "revision": {
+      "type": "integer",
+      "description": "Bumped on every save; a save carrying a stale revision is rejected with 409."
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "last_fired_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     },
+     "fire_count": {
+      "type": "integer",
+      "format": "int64"
+     }
+    }
+   },
+   "AutomationProblem": {
+    "type": "object",
+    "description": "One validation failure, addressed to the block or edge the studio should highlight.",
+    "properties": {
+     "node_id": {
+      "type": "string"
+     },
+     "edge_id": {
+      "type": "string"
+     },
+     "code": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    }
+   },
+   "AutomationResult": {
+    "type": "object",
+    "description": "Per-block trace of one evaluation.",
+    "properties": {
+     "nodes": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string",
+       "enum": [
+        "true",
+        "false",
+        "idle",
+        "ran",
+        "blocked"
+       ]
+      }
+     },
+     "actions": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "node_id": {
+         "type": "string"
+        },
+        "type": {
+         "type": "string"
+        },
+        "severity": {
+         "type": "string"
+        },
+        "title": {
+         "type": "string"
+        },
+        "channel_ids": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "message": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "blocked": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Action blocks that were reached but cannot execute (action.command)."
+     }
+    }
+   },
+   "AutomationRun": {
+    "type": "object",
+    "description": "One recorded evaluation; the newest 200 per flow are kept.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "automation_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "trigger_node": {
+      "type": "string"
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "fired",
+       "skipped",
+       "error"
+      ]
+     },
+     "detail": {
+      "type": "object"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "FloorLayout": {
+    "type": "object",
+    "properties": {
+     "walls": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "points": {
+         "type": "array",
+         "items": {
+          "type": "array",
+          "items": {
+           "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] in metres, origin top-left, y down"
+         }
+        },
+        "thickness": {
+         "type": "number",
+         "minimum": 0.05,
+         "maximum": 1
+        },
+        "closed": {
+         "type": "boolean"
+        }
+       }
+      }
+     },
+     "zones": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "room",
+          "corridor",
+          "ward",
+          "restricted",
+          "storage",
+          "outdoor",
+          "other"
+         ]
+        },
+        "color": {
+         "type": "string",
+         "enum": [
+          "mint",
+          "blue",
+          "amber",
+          "coral",
+          "violet",
+          "slate"
+         ]
+        },
+        "points": {
+         "type": "array",
+         "items": {
+          "type": "array",
+          "items": {
+           "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "[x, y] in metres, origin top-left, y down"
+         }
+        },
+        "gateway_ids": {
+         "type": "array",
+         "items": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "description": "gateways covering the zone; roaming wearables whose zone is one of them count as inside"
+        },
+        "note": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "type": {
+         "type": "string",
+         "enum": [
+          "door",
+          "window",
+          "stairs",
+          "elevator",
+          "exit",
+          "label",
+          "desk",
+          "bed",
+          "rack",
+          "extinguisher"
+         ]
+        },
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        },
+        "w": {
+         "type": "number"
+        },
+        "h": {
+         "type": "number"
+        },
+        "rot": {
+         "type": "number"
+        },
+        "text": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "background": {
+      "type": "object",
+      "nullable": true,
+      "properties": {
+       "opacity": {
+        "type": "number"
+       },
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "width_m": {
+        "type": "number"
+       },
+       "locked": {
+        "type": "boolean"
+       }
+      }
+     }
+    }
+   },
+   "FloorPlacement": {
+    "type": "object",
+    "properties": {
+     "asset_kind": {
+      "type": "string",
+      "enum": [
+       "gateway",
+       "device"
+      ]
+     },
+     "asset_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "x": {
+      "type": "number"
+     },
+     "y": {
+      "type": "number"
+     },
+     "z": {
+      "type": "number",
+      "description": "mounting height in metres"
+     }
+    }
+   },
+   "Floor": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "site_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "name": {
+      "type": "string"
+     },
+     "level": {
+      "type": "integer"
+     },
+     "width_m": {
+      "type": "number"
+     },
+     "depth_m": {
+      "type": "number"
+     },
+     "ceiling_m": {
+      "type": "number"
+     },
+     "revision": {
+      "type": "integer"
+     },
+     "has_image": {
+      "type": "boolean"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "layout": {
+      "$ref": "#/components/schemas/FloorLayout"
+     },
+     "placements": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/FloorPlacement"
+      }
+     }
+    }
+   },
+   "Site": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "name": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "floors": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/Floor"
+      }
+     }
+    }
+   },
+   "Member": {
+    "type": "object",
+    "properties": {
+     "user_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "email": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "owner",
+       "admin",
+       "operator",
+       "viewer"
+      ]
+     },
+     "project_ids": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "maxItems": 50,
+      "description": "Projects this member may see. Empty means every project of the workspace."
+     },
+     "must_change_password": {
+      "type": "boolean"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "last_seen_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     }
+    },
+    "required": [
+     "user_id",
+     "email",
+     "name",
+     "role",
+     "project_ids",
+     "must_change_password",
+     "created_at"
+    ],
+    "additionalProperties": false
+   },
+   "SignalMatcher": {
+    "type": "object",
+    "description": "How a learned signal is recognised in a raw advertisement. frame: an AD structure / Minew frame version that only appears while the device is triggered. byte: a byte at a fixed offset inside an identified frame, compared under a mask. prefix: an exact raw-payload prefix, used only when the advertisement cannot be split into AD structures at all.",
+    "required": [
+     "kind"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "frame",
+       "byte",
+       "prefix"
+      ]
+     },
+     "frame": {
+      "type": "string",
+      "description": "Frame key, e.g. ffe1:a1:0x22 (Minew FFE1 0xA1 version 0x22), feaa:0x00 (Eddystone-UID), ibeacon."
+     },
+     "offset": {
+      "type": "integer",
+      "description": "Index into the frame payload (0 = the first identifying byte of the frame)."
+     },
+     "mask": {
+      "type": "integer",
+      "description": "0xff is an exact byte comparison; a single-bit mask matches one flag bit."
+     },
+     "value": {
+      "type": "integer"
+     },
+     "prefix": {
+      "type": "string",
+      "description": "Lowercase hex prefix of the whole advertisement."
+     }
+    }
+   },
+   "SignalCandidate": {
+    "type": "object",
+    "description": "One explanation of the difference between the two capture phases, ranked and described in Thai so an operator can check it against the device in their hand.",
+    "properties": {
+     "matcher": {
+      "$ref": "#/components/schemas/SignalMatcher"
+     },
+     "description": {
+      "type": "string"
+     },
+     "trigger_hits": {
+      "type": "integer",
+      "description": "How many trigger-phase advertisements this matcher matches (the evidence for it)."
+     },
+     "confidence": {
+      "type": "string",
+      "enum": [
+       "high",
+       "medium",
+       "low"
+      ]
+     }
+    }
+   },
+   "SignalPhase": {
+    "type": "object",
+    "description": "What one capture window collected, so the operator can see whether anything reached the gateway at all before the analysis reports no difference.",
+    "properties": {
+     "observations": {
+      "type": "integer",
+      "description": "Archived advertisement rows in the window."
+     },
+     "distinct": {
+      "type": "integer",
+      "description": "How many different raw payloads those rows held."
+     },
+     "from": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "until": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "active": {
+      "type": "boolean"
+     }
+    }
+   },
+   "SignalSession": {
+    "type": "object",
+    "description": "One teaching run: phase 1 records the device at rest, phase 2 while the operator triggers it.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "event_type": {
+      "type": "string",
+      "enum": [
+       "button",
+       "tamper",
+       "leak",
+       "motion",
+       "door",
+       "custom"
+      ]
+     },
+     "label": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "baseline",
+       "trigger",
+       "finished",
+       "confirmed",
+       "cancelled"
+      ]
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "baseline": {
+      "$ref": "#/components/schemas/SignalPhase"
+     },
+     "trigger": {
+      "$ref": "#/components/schemas/SignalPhase"
+     },
+     "candidates": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/SignalCandidate"
+      },
+      "description": "Populated once both phases are over. Empty means nothing distinguished them; verdict then says so plainly and what to check next. No signature is ever invented."
+     },
+     "verdict": {
+      "type": "string"
+     }
+    }
+   },
+   "Signal": {
+    "type": "object",
+    "description": "A confirmed signature, evaluated on every uplink and edge-triggered exactly like the decoded tamper/leak flags.",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "scope": {
+      "type": "string",
+      "enum": [
+       "device",
+       "profile"
+      ],
+      "description": "device: this tag only. profile: every tag registered with the same profile, so teaching one B10 teaches all of them."
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "profile_id": {
+      "type": "string"
+     },
+     "event_type": {
+      "type": "string",
+      "enum": [
+       "button",
+       "tamper",
+       "leak",
+       "motion",
+       "door",
+       "custom"
+      ]
+     },
+     "matcher": {
+      "$ref": "#/components/schemas/SignalMatcher"
+     },
+     "description": {
+      "type": "string"
+     },
+     "verified": {
+      "type": "boolean"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "SignalTest": {
+    "type": "object",
+    "description": "How a signature would have behaved against the last ten minutes of recorded raw history: the check for false positives before trusting it.",
+    "properties": {
+     "uplinks": {
+      "type": "integer"
+     },
+     "matches": {
+      "type": "integer"
+     },
+     "since": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "last_match": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "verdict": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

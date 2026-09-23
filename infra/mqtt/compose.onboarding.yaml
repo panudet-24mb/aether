@@ -1,0 +1,28 @@
+# Adds self-service MQTT credentials; retains legacy hardware/simulator accounts.
+services:
+  api:
+    environment:
+      MQTT_PUBLIC_HOST: ${MQTT_BIND_IP}
+      MQTT_PUBLIC_PORT: ${MQTT_PUBLIC_PORT:-1883}
+      MQTT_PUBLIC_SCHEME: ${MQTT_PUBLIC_SCHEME:-tcp}
+  mqtt:
+    volumes:
+      - ../.secrets/mqtt/runtime:/mosquitto/runtime:ro
+  mqtt-provisioner:
+    image: aether-backend:local
+    entrypoint: ["/app/mqtt-provisioner"]
+    user: "${MQTT_UID}:${MQTT_GID}"
+    pid: "service:mqtt"
+    environment:
+      DATABASE_URL: postgresql://aether_mqtt_provisioner:${MQTT_PROVISION_DB_PASSWORD:?Run prepare-onboarding.py}@postgres:5432/aether?sslmode=disable
+    volumes:
+      - ../.secrets/mqtt/broker/passwords:/run/mqtt-base/passwords:ro
+      - ../.secrets/mqtt/broker/acl:/run/mqtt-base/acl:ro
+      - ../.secrets/mqtt/runtime:/run/mqtt-runtime
+    depends_on:
+      mqtt:
+        condition: service_started
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped

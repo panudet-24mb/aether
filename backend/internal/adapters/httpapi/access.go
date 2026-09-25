@@ -7,12 +7,30 @@ import (
 	"strings"
 )
 
-var accessModules = map[string]bool{"live": true, "connect": true, "alerts": true, "assets": true, "floorplan": true, "automation": true, "studio": true, "team": true}
+var accessModules = map[string]bool{"live": true, "connect": true, "alerts": true, "assets": true, "floorplan": true, "automation": true, "studio": true, "team": true, "control": true}
+
+// routeHead is the first segment after /api/v1/, normalised the way a router might match it: lower case,
+// duplicate and trailing slashes ignored. The gate must classify exactly what the router dispatches, or a
+// request spelled /API/v1//Commands/ would reach a handler while looking like no module at all.
+func routeHead(path string) string {
+	parts := []string{}
+	for _, part := range strings.Split(strings.ToLower(path), "/") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) >= 2 && parts[0] == "api" && parts[1] == "v1" {
+		parts = parts[2:]
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
 
 // These are restrictions on the existing role, never an elevation of that role.
 func moduleFor(path, method string) string {
-	path = strings.TrimPrefix(path, "/api/v1/")
-	head := strings.Split(path, "/")[0]
+	head := routeHead(path)
 	switch head {
 	case "sites", "floors":
 		return "floorplan"
@@ -26,6 +44,9 @@ func moduleFor(path, method string) string {
 		return "alerts"
 	case "studio":
 		return "studio"
+	case "commands":
+		// Switching devices is its own module: an owner can let a member watch the live view but not operate it.
+		return "control"
 	case "gateways", "devices", "mqtt", "discovery", "templates":
 		if method != "GET" || head == "discovery" {
 			return "connect"

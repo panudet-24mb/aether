@@ -45,3 +45,16 @@ func TestSwitchOutputs(t *testing.T) {
 		t.Fatalf("title %q", got)
 	}
 }
+
+// A change the device reports in answer to an Aether command names that command; the other gang in the same
+// report changed on the wall.
+func TestSwitchEventNamesItsCommand(t *testing.T) {
+	now := time.Now()
+	_, st := Detect(State{}, switchReading(0, 0), nil, now)
+	r := switchReading(1, 1)
+	r.Commands = map[int]string{1: "11111111-1111-4111-8111-111111111111"}
+	evs, _ := Detect(st, r, nil, now.Add(time.Second))
+	if len(evs) != 2 || evs[0].Detail["source"] != "command" || evs[0].Detail["command_id"] != "11111111-1111-4111-8111-111111111111" || evs[1].Detail["source"] != "external" || evs[1].Detail["command_id"] != nil {
+		t.Fatalf("attribution: %v", evs)
+	}
+}

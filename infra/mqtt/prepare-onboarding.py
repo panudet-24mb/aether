@@ -19,4 +19,21 @@ p=broker/'mosquitto.conf';old=p.read_text();backup=root/'.secrets/mqtt/mosquitto
 if not backup.exists():backup.write_text(old);backup.chmod(0o600)
 new=old.replace('password_file /mosquitto/config/passwords','password_file /mosquitto/runtime/passwords').replace('acl_file /mosquitto/config/acl','acl_file /mosquitto/runtime/acl')
 if new!=old:p.chmod(0o600);p.write_text(new);p.chmod(0o400)
+# mqtt-commander: its own broker account (the provisioner grants it write on aether/z2m/+/+/set only). Its line is
+# kept in step with MQTT_COMMANDER_PASSWORD (added, or replaced when it no longer verifies); no other line is touched.
+import json,sys
+sys.path.insert(0,str(root/'infra/prod'))
+from setup import sync_password_line
+ckey='MQTT_COMMANDER_PASSWORD'
+text=envfile.read_text()
+if ckey not in cfg:
+ cfg[ckey]=secrets.token_urlsafe(32);envfile.write_text(text.rstrip()+'\n'+ckey+'='+cfg[ckey]+'\n');envfile.chmod(0o600)
+sync_password_line(broker/'passwords','aether-commander',cfg[ckey])
+cdir=root/'.secrets/mqtt/commander';cdir.mkdir(exist_ok=True,mode=0o700)
+ca=cdir/'ca.crt'
+if ca.exists():ca.chmod(0o600)
+ca.write_bytes((broker/'ca.crt').read_bytes());ca.chmod(0o444)
+conf=cdir/'commander.json'
+if conf.exists():conf.chmod(0o600)
+conf.write_text(json.dumps({'broker_url':'ssl://mqtt:8883','username':'aether-commander','password':cfg[ckey],'client_id':'aether-commander-dev','ca_file':'/run/mqtt/ca.crt','bindings':[]}));conf.chmod(0o444)
 print('Onboarding runtime prepared; legacy credentials preserved. Start with compose.onboarding.yaml.')

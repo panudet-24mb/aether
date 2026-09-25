@@ -272,6 +272,29 @@ python3 infra/prod/setup.py <flag ชุดเดิมที่ใช้ติ�
 docker compose --env-file .env.prod -f infra/prod/compose.yaml restart mqtt
 ```
 
+### 4.8 สั่งงานอุปกรณ์ Zigbee (mqtt-commander)
+
+ตั้งแต่ migration `00029` Aether สั่งงานอุปกรณ์ที่ต่อผ่าน Zigbee2MQTT ได้ (เปิด/ปิดสวิตช์ ความสว่างไฟ ตำแหน่งม่าน กลอน ฯลฯ ดู `docs/platform/zigbee2mqtt.md`) ผ่าน service ใหม่ `mqtt-commander` ซึ่งมีบัญชี broker ของตัวเอง (`aether-commander`) ที่ **เขียนได้เฉพาะ `aether/z2m/+/+/set`** เท่านั้น
+
+อัปเกรดเครื่องที่ติดตั้งไว้แล้ว (ลำดับสำคัญ):
+
+```sh
+git pull
+# 1) setup.py สร้างรหัสของ aether-commander, hash แล้ว "ต่อท้าย" broker/passwords เดิม (ไม่ hash รายการเดิมซ้ำ)
+#    และเขียน <secrets>/mqtt/commander/commander.json — รันซ้ำได้
+python3 infra/prod/setup.py <flag ชุดเดิมที่ใช้ติดตั้ง>
+# 2) build แล้วเปิดทุก service: migrate รัน 00029, provisioner เพิ่มสิทธิ์ของ aether-commander เองภายในไม่กี่วินาที
+docker compose --env-file .env.prod -f infra/prod/compose.yaml build
+docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d
+# 3) ตรวจ
+docker compose --env-file .env.prod -f infra/prod/compose.yaml ps mqtt-commander        # healthy
+docker compose --env-file .env.prod -f infra/prod/compose.yaml logs mqtt-commander --tail 5   # "MQTT commander ready"
+```
+
+ไม่ต้อง restart `mqtt`: provisioner เขียนไฟล์ runtime ใหม่และ SIGHUP broker เอง ถ้า `mqtt-commander` ต่อ broker ไม่ได้ (not authorised) แปลว่า provisioner ยังไม่ได้อ่านรหัสใหม่ ให้ `restart mqtt-provisioner`
+
+ผู้สั่งงานได้: owner, admin, operator (เฉพาะโปรเจกต์ของตัวเอง) · viewer สั่งไม่ได้ · ปิดสิทธิ์รายคนได้ที่หน้าทีม → โมดูล "สั่งงานอุปกรณ์"
+
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 
 `setup.py` ตั้ง `ALERTS_SHADOW=true` ให้ตั้งแต่ต้น หมายความว่า: **บันทึก event ทุกอย่างลงฐานข้อมูลตามปกติ แต่ไม่เปิด alert ไม่ส่ง LINE/webhook/อีเมล และไม่รัน automation**

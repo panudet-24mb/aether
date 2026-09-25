@@ -58,7 +58,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	// TRUSTED_PROXIES is X-Forwarded-For believed (the proxy must overwrite, not append, that header), so the
 	// per-IP rate limits apply to real clients and cannot be dodged by sending the header directly.
 	trust := fiber.TrustProxyConfig{Proxies: cfg.TrustedProxies}
-	api := fiber.New(fiber.Config{AppName: "Aether API", TrustProxy: len(cfg.TrustedProxies) > 0, TrustProxyConfig: trust, ProxyHeader: proxyHeader(cfg), EnableIPValidation: true, BodyLimit: 256 * 1024, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, Immutable: true, ErrorHandler: func(c fiber.Ctx, e error) error {
+	api := fiber.New(fiber.Config{AppName: "Aether API", TrustProxy: len(cfg.TrustedProxies) > 0, TrustProxyConfig: trust, ProxyHeader: proxyHeader(cfg), EnableIPValidation: true, CaseSensitive: true, BodyLimit: 256 * 1024, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, Immutable: true, ErrorHandler: func(c fiber.Ctx, e error) error {
 		code, message := 500, "internal_error"
 		switch {
 		case errors.Is(e, domain.ErrInvalid):
@@ -71,6 +71,8 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 			code, message = 404, "not_found"
 		case errors.Is(e, domain.ErrConflict):
 			code, message = 409, "conflict"
+		case errors.Is(e, domain.ErrRateLimited):
+			code, message = 429, "rate_limited"
 		default:
 			var f *fiber.Error
 			if errors.As(e, &f) {
@@ -79,6 +81,11 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 			} else {
 				slog.Error("request failed", "request_id", c.GetRespHeader("X-Request-ID"), "error_type", "internal")
 			}
+		}
+		// A reason narrows a client error the caller can act on (e.g. a command refused because the device is "offline").
+		var reason domain.ReasonError
+		if code < 500 && errors.As(e, &reason) {
+			message = reason.Reason
 		}
 		return c.Status(code).JSON(fiber.Map{"error": message, "request_id": c.GetRespHeader("X-Request-ID")})
 	}})
@@ -97,7 +104,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 		c.SetContext(ctx)
 		return c.Next()
 	})
-	api.Use(cors.New(cors.Config{AllowOrigins: []string{cfg.Origin}, AllowMethods: []string{"GET", "POST", "OPTIONS"}, AllowHeaders: []string{"Authorization", "Content-Type"}, AllowCredentials: true}))
+	api.Use(cors.New(cors.Config{AllowOrigins: []string{cfg.Origin}, AllowMethods: []string{"GET", "POST", "OPTIONS"}, AllowHeaders: []string{"Authorization", "Content-Type", "Idempotency-Key"}, AllowCredentials: true}))
 	api.Get("/openapi.json", func(c fiber.Ctx) error { c.Type("json"); return c.Send(spec.OpenAPI) })
 	api.Get("/health/live", func(c fiber.Ctx) error { return c.JSON(fiber.Map{"status": "ok"}) })
 	api.Get("/health/ready", func(c fiber.Ctx) error {
@@ -207,6 +214,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	automationRoutes(secured, service)
 	floorplanRoutes(secured, service)
 	assetRoutes(secured, service)
+	commandRoutes(secured, service)
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})

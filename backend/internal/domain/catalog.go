@@ -45,7 +45,7 @@ type DeviceProfile struct {
 	Door bool `json:"door,omitempty"`
 	// Gangs is the number of switch outputs the largest variant of this profile has (1..4); 0 for sensors.
 	Gangs int `json:"gangs,omitempty"`
-	// Actuator marks devices Aether may (in a later phase) switch; today their state is only displayed.
+	// Actuator marks devices Aether may switch (POST /api/v1/commands, docs/platform/zigbee2mqtt.md).
 	Actuator bool `json:"actuator,omitempty"`
 	// Z2MModels are the Zigbee2MQTT `definition.model` values this profile covers.
 	Z2MModels []string `json:"z2m_models,omitempty"`
@@ -54,6 +54,9 @@ type DeviceProfile struct {
 
 // Z2MGatewayModel is the gateway model whose MQTT account publishes a Zigbee2MQTT topic tree.
 const Z2MGatewayModel = "zigbee2mqtt"
+
+// Z2MGenericProfile is the profile of a Zigbee2MQTT device no more specific profile matches.
+const Z2MGenericProfile = "zigbee2mqtt-device@1"
 
 // ButtonProfileIDs lists the profiles whose tags may raise a button event.
 func ButtonProfileIDs() []string {
@@ -108,7 +111,12 @@ var DeviceProfiles = []DeviceProfile{
 	// catch-all Tuya model id, so it only matches when its exposes actually contain switch outputs.
 	{ID: "tuya-ts001x-switch@1", Brand: "Tuya", Model: "TS001x", Label: "Tuya Zigbee wall switch · 1–4 ช่อง", Radio: "zigbee", Kinds: []string{"switch"}, Metrics: []string{"สถานะเปิด/ปิดแต่ละช่อง", "linkquality"}, Verified: false, Gangs: 4, Actuator: true,
 		Z2MModels:   []string{"TS0011", "TS0012", "TS0013", "TS0014", "TS0601"},
-		Description: "สวิตช์ผนังแบบสัมผัส ไม่ใช้สายกลาง ผ่าน Zigbee2MQTT · แสดงสถานะเปิด/ปิดแต่ละช่องและการกดที่ผนัง · ยังสั่งเปิด/ปิดจาก Aether ไม่ได้ในเฟสนี้ · ยังไม่ยืนยันกับเครื่องจริง"},
+		Description: "สวิตช์ผนังแบบสัมผัส ไม่ใช้สายกลาง ผ่าน Zigbee2MQTT · แสดงสถานะเปิด/ปิดแต่ละช่องและการกดที่ผนัง · สั่งเปิด/ปิดแต่ละช่องจาก Aether ได้ · ยังไม่ยืนยันกับเครื่องจริง"},
+	// Any other device Zigbee2MQTT supports. What it can do is read from its own definition (the exposes the bridge
+	// publishes), so a light, curtain, lock or thermostat can be registered and commanded without a catalog entry
+	// of its own; its readings are not decoded into Aether metrics yet.
+	{ID: Z2MGenericProfile, Brand: "Zigbee2MQTT", Model: "Zigbee device", Label: "อุปกรณ์ Zigbee ทั่วไป (Zigbee2MQTT)", Radio: "zigbee", Kinds: []string{"zigbee"}, Metrics: []string{"ตามความสามารถที่ Zigbee2MQTT ประกาศ (exposes)"}, Verified: false, Actuator: true,
+		Description: "อุปกรณ์ใดก็ได้ที่ Zigbee2MQTT รองรับ เช่น หลอดไฟ ม่าน กลอนประตู หัววาล์ว · สั่งงานได้ตามคุณสมบัติที่อุปกรณ์ประกาศว่าตั้งค่าได้ · ยังไม่ยืนยันกับเครื่องจริง"},
 	{ID: "generic-ble-beacon@1", Image: "/devices/generic-ble-beacon.png", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
 		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
 	{ID: "generic-environment@1", Image: "/devices/generic-environment.png", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,

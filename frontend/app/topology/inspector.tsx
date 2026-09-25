@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, Battery, BellRing, Bluetooth, Check, Copy, DoorOpen, Download, Droplets, Eye, EyeOff, ExternalLink, GraduationCap, KeyRound, Link2, PanelRightClose, Pencil, RotateCcw, Unlink, Radio, RadioTower, RefreshCw, ShieldAlert, ShieldOff, Thermometer, Trash2, Wifi, X } from "lucide-react";
 import DiscoveryList from "./discovery";
 import SignalPanel, { type LearnedSignal, type SignalClient } from "./signals";
+import DeviceControlsPanel, { type CommandClient } from "./device-controls";
 import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project } from "./api";
 import { deviceProfile, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
 import { HEALTH_LABEL } from "./nodes";
@@ -40,8 +41,8 @@ export type InspectorProps = {
   onRestoreRegistration: (registration: Device) => void;
   /** Collapses the whole panel (distinct from onClose, which only clears the selection). */
   onHide: () => void;
-  /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") to run its own calls. */
-  client: SignalClient;
+  /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") and the device controls. */
+  client: SignalClient & CommandClient;
 };
 
 /** Clipboard API needs a secure context; on-prem LAN over plain HTTP falls back to a selection + execCommand copy. */
@@ -592,9 +593,12 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
             {fresh ? "รับข้อมูลล่าสุด" : "ข้อมูลเก่า / รอข้อมูลใหม่"} · {time}
           </p>
         </div>
-      ) : (
+      ) : zigbee ? null : (
         <p className="topo-note">ยังไม่มีเฟรมที่ Aether ถอดรหัสได้จากอุปกรณ์นี้ · เห็นเพียง BLE advertisement ดิบ</p>
       )}
+
+      {/* A registered Zigbee2MQTT device can be commanded: its controls come from its own definition. */}
+      {reg && zigbee && <DeviceControlsPanel client={p.client} deviceId={reg.id} refreshKey={r?.received_at} />}
 
       {d.log.length > 0 && (
         <>

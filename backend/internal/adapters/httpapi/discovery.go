@@ -76,6 +76,12 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 						break
 					}
 				}
+				// Anything else Zigbee2MQTT supports (it has a definition, hence a model) is still a real device: it
+				// registers as the generic Zigbee profile, which commands it from its own definition. A device Z2M
+				// does not support has no definition and gets no profile.
+				if d.Source == "z2m" && d.Profile == nil && d.Model != "" {
+					d.Profile = domain.DeviceProfileByID(domain.Z2MGenericProfile)
+				}
 				if !all && !minewDevice(d) {
 					hidden[g.ID]++
 					total++

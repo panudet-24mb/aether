@@ -14,10 +14,12 @@ What it creates
   <secrets>/mqtt/broker/    mosquitto.conf (no 1883 listener), broker certificate, base credentials
   <secrets>/mqtt/runtime/   the password/ACL files that mqtt-provisioner rewrites for each gateway
   <secrets>/mqtt/collector/ CA + collector.json for the ingest worker
+  <secrets>/mqtt/commander/ CA + commander.json for mqtt-commander (write-only on aether/z2m/+/+/set)
   <env-file>                every setting the compose file interpolates (mode 0600)
 """
 import argparse
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -53,6 +55,40 @@ def copy(src: pathlib.Path, dst: pathlib.Path, mode: int = 0o444):
     shutil.copyfile(src, dst)
     dst.chmod(mode)
 
+
+
+def mosquitto_hash(password: str) -> str:
+    """A Mosquitto 2.x password hash ($7$: PBKDF2-HMAC-SHA512, 64-byte key), as mosquitto_passwd writes it."""
+    salt = secrets.token_bytes(12)
+    key = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 101, 64)
+    return "$7$101$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(key).decode()
+
+
+def mosquitto_verify(encoded: str, password: str) -> bool:
+    m = re.fullmatch(r"\$7\$(\d+)\$([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+)", encoded)
+    if not m or not 1 <= int(m.group(1)) <= 10_000_000:
+        return False
+    key = hashlib.pbkdf2_hmac("sha512", password.encode(), base64.b64decode(m.group(2)), int(m.group(1)), 64)
+    return secrets.compare_digest(key, base64.b64decode(m.group(3)))
+
+
+def sync_password_line(path: pathlib.Path, user: str, password: str) -> str:
+    """Make `user`'s line in a Mosquitto password file verify `password`, touching no other line. Returns
+    kept | added | replaced. The file is rewritten in place so bind mounts of it keep seeing it."""
+    lines = path.read_text().splitlines()
+    mine = [i for i, line in enumerate(lines) if line.startswith(user + ":")]
+    if len(mine) == 1 and mosquitto_verify(lines[mine[0]].split(":", 1)[1], password):
+        return "kept"
+    entry = user + ":" + mosquitto_hash(password)
+    status = "replaced" if mine else "added"
+    lines = [line for i, line in enumerate(lines) if i not in mine] + [entry]
+    path.chmod(0o600)
+    with open(path, "r+") as f:
+        f.seek(0)
+        f.write("\n".join(lines) + "\n")
+        f.truncate()
+    path.chmod(0o400)
+    return status
 
 def own(path: pathlib.Path, uid: int):
     """Give a file to the container uid that must read it. Only possible as root, which is how the
@@ -240,7 +276,8 @@ def main() -> int:
     broker = mq / "broker"
     runtime = mq / "runtime"
     collector = mq / "collector"
-    for d in (mq, broker, collector):
+    commander = mq / "commander"
+    for d in (mq, broker, collector, commander):
         d.mkdir(exist_ok=True)
         d.chmod(0o711)
     runtime.mkdir(exist_ok=True)
@@ -253,6 +290,7 @@ def main() -> int:
         created.append("MQTT CA (10 years)")
     copy(mq / "ca.crt", broker / "ca.crt")
     copy(mq / "ca.crt", collector / "ca.crt")
+    copy(mq / "ca.crt", commander / "ca.crt")
 
     sans = san_entry(mqtt_host) + ",DNS:mqtt"
     if not (broker / "server.crt").exists():
@@ -289,6 +327,17 @@ def main() -> int:
         created.append("broker credentials for the ingest worker")
     else:
         kept.append("broker credentials")
+
+    # mqtt-commander's account (write-only on aether/z2m/+/+/set, see the provisioner). Its line in the password
+    # file is kept in step with MQTT_COMMANDER_PASSWORD: added when missing, replaced when it no longer verifies
+    # (the password was regenerated), and left alone otherwise. Only that line is ever written; every other entry
+    # stays byte for byte, and the file keeps its inode (the provisioner bind-mounts it).
+    commander_password = secret("MQTT_COMMANDER_PASSWORD", lambda: secrets.token_urlsafe(32))
+    status = sync_password_line(broker / "passwords", "aether-commander", commander_password)
+    if status == "kept":
+        kept.append("command publisher credentials")
+    else:
+        created.append("broker credentials for the command publisher (" + status + ")")
 
     # Base ACL. mqtt-provisioner appends one block per gateway created in the UI, plus the
     # collector's wildcard read on /aether/gateways/+/status.
@@ -344,6 +393,14 @@ connection_messages true
         "ca_file": "/run/mqtt/ca.crt",
         "bindings": [{"topic": reserved_topic, "gateway_id": reserved_gateway, "token": reserved_token}],
     }), 0o400)
+    write(commander / "commander.json", json.dumps({
+        "broker_url": "ssl://mqtt:8883",
+        "username": "aether-commander",
+        "password": commander_password,
+        "client_id": "aether-commander-prod",
+        "ca_file": "/run/mqtt/ca.crt",
+        "bindings": [],
+    }), 0o400)
 
     # Each private file goes to the single uid that reads it.
     own(broker / "server.key", mqtt_uid)
@@ -352,6 +409,7 @@ connection_messages true
     for name in ("passwords", "acl"):
         own(runtime / name, mqtt_uid)
     own(collector / "collector.json", BACKEND_UID)
+    own(commander / "commander.json", BACKEND_UID)
     # postgres/server.key is read only by the root-run `prepare` service, which installs a copy
     # owned by uid 999 into the postgres-certs volume; it is never mounted into postgres itself.
 
@@ -419,6 +477,7 @@ connection_messages true
         "JWT_SIGNING_KEY": jwt_key,
         "CHANNEL_SEAL_KEY": seal_key,
         "MQTT_INGEST_PASSWORD": ingest_password,
+        "MQTT_COMMANDER_PASSWORD": commander_password,
         "MQTT_RESERVED_GATEWAY_ID": reserved_gateway,
         "MQTT_RESERVED_TOKEN": reserved_token,
         "OWNER_EMAIL": a.email or old.get("OWNER_EMAIL", ""),

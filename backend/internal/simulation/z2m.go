@@ -3,6 +3,8 @@ package simulation
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 )
 
 // Virtual Zigbee2MQTT bridge: what a coordinator with three Tuya no-neutral touch wall switches (1, 2 and 4 gang)
@@ -146,4 +148,183 @@ func Z2MMessages(base string, step int, announce bool) []Z2MMessage {
 		out = append(out, Z2MMessage{Topic: Z2MTopic(base, s, ""), Payload: Z2MState(s, states[i], 90+i*20)})
 	}
 	return out
+}
+
+// Z2MActuator is a simulated non-switch device: its definition's exposes (as Zigbee2MQTT publishes them) and its
+// state when the bridge starts.
+type Z2MActuator struct {
+	IEEE, Name, Model, Vendor, ModelID, Manufacturer, PowerSource string
+	Exposes                                                       string
+	Initial                                                       map[string]any
+}
+
+// Z2MActuators are one device of each kind Aether can command besides switches, with realistic exposes taken
+// from their zigbee2mqtt.io device pages (synthetic until real captures replace them).
+var Z2MActuators = []Z2MActuator{
+	{IEEE: "0x0017880100000001", Name: "ห้องประชุม/โคมไฟสี", Model: "9290022166", Vendor: "Philips", ModelID: "LCA001", Manufacturer: "Signify Netherlands B.V.", PowerSource: "Mains (single phase)",
+		Exposes: `[{"type":"light","features":[
+  {"type":"binary","name":"state","label":"State","property":"state","access":7,"value_on":"ON","value_off":"OFF","value_toggle":"TOGGLE"},
+  {"type":"numeric","name":"brightness","label":"Brightness","property":"brightness","access":7,"value_min":0,"value_max":254},
+  {"type":"numeric","name":"color_temp","label":"Color temp","property":"color_temp","access":7,"unit":"mired","value_min":153,"value_max":500},
+  {"type":"composite","name":"color_xy","label":"Color (X/Y)","property":"color","access":7,"features":[
+    {"type":"numeric","name":"x","label":"X","property":"x","access":7},{"type":"numeric","name":"y","label":"Y","property":"y","access":7}]},
+  {"type":"composite","name":"color_hs","label":"Color (HS)","property":"color","access":7,"features":[
+    {"type":"numeric","name":"hue","label":"Hue","property":"hue","access":7},{"type":"numeric","name":"saturation","label":"Saturation","property":"saturation","access":7}]}]},
+ {"type":"enum","name":"effect","label":"Effect","property":"effect","access":2,"values":["blink","breathe","okay","channel_change","finish_effect","stop_effect"]},
+ {"type":"numeric","name":"linkquality","label":"Linkquality","property":"linkquality","access":1,"unit":"lqi","value_min":0,"value_max":255}]`,
+		Initial: map[string]any{"state": "OFF", "brightness": 0, "color_temp": 370, "color": map[string]any{"x": 0.4573, "y": 0.41}}},
+	{IEEE: "0xa4c1380000000010", Name: "ม่านห้องผู้บริหาร", Model: "TS130F", Vendor: "Tuya", ModelID: "TS130F", Manufacturer: "_TZ3000_simcurtain", PowerSource: "Mains (single phase)",
+		Exposes: `[{"type":"cover","features":[
+  {"type":"enum","name":"state","label":"State","property":"state","access":3,"values":["OPEN","CLOSE","STOP"]},
+  {"type":"numeric","name":"position","label":"Position","property":"position","access":7,"unit":"%","value_min":0,"value_max":100}]},
+ {"type":"numeric","name":"linkquality","label":"Linkquality","property":"linkquality","access":1,"unit":"lqi","value_min":0,"value_max":255}]`,
+		Initial: map[string]any{"position": 0, "state": "CLOSE"}},
+	{IEEE: "0x000d6f0000000020", Name: "ประตูห้องเซิร์ฟเวอร์", Model: "YRD226HA2619", Vendor: "Yale", ModelID: "YRD226 TSDB", Manufacturer: "Yale", PowerSource: "Battery",
+		Exposes: `[{"type":"lock","features":[
+  {"type":"binary","name":"state","label":"State","property":"state","access":7,"value_on":"LOCK","value_off":"UNLOCK"},
+  {"type":"enum","name":"lock_state","label":"Lock state","property":"lock_state","access":1,"values":["not_fully_locked","locked","unlocked"]}]},
+ {"type":"numeric","name":"battery","label":"Battery","property":"battery","access":5,"unit":"%","value_min":0,"value_max":100},
+ {"type":"numeric","name":"linkquality","label":"Linkquality","property":"linkquality","access":1,"unit":"lqi","value_min":0,"value_max":255}]`,
+		Initial: map[string]any{"state": "LOCK", "lock_state": "locked", "battery": 87}},
+	{IEEE: "0xa4c1380000000030", Name: "หัววาล์วหม้อน้ำ", Model: "TS0601_thermostat", Vendor: "Tuya", ModelID: "TS0601", Manufacturer: "_TZE200_simtrv", PowerSource: "Battery",
+		Exposes: `[{"type":"climate","features":[
+  {"type":"numeric","name":"occupied_heating_setpoint","label":"Occupied heating setpoint","property":"occupied_heating_setpoint","access":7,"unit":"°C","value_min":5,"value_max":35,"value_step":0.5},
+  {"type":"numeric","name":"local_temperature","label":"Local temperature","property":"local_temperature","access":5,"unit":"°C"},
+  {"type":"enum","name":"system_mode","label":"System mode","property":"system_mode","access":7,"values":["off","heat","auto"]}]},
+ {"type":"binary","name":"child_lock","label":"Child lock","property":"child_lock","access":7,"value_on":"LOCK","value_off":"UNLOCK"},
+ {"type":"numeric","name":"linkquality","label":"Linkquality","property":"linkquality","access":1,"unit":"lqi","value_min":0,"value_max":255}]`,
+		Initial: map[string]any{"occupied_heating_setpoint": 20, "local_temperature": 24.5, "system_mode": "heat", "child_lock": "UNLOCK"}},
+}
+
+// Z2MBridgeDevicesAll is bridge/devices for the whole virtual network: the switches of Z2MBridgeDevices plus
+// Z2MActuators.
+func Z2MBridgeDevicesAll() []byte {
+	var devices []json.RawMessage
+	_ = json.Unmarshal(Z2MBridgeDevices(), &devices)
+	for _, a := range Z2MActuators {
+		b, _ := json.Marshal(map[string]any{
+			"ieee_address": a.IEEE, "type": "Router", "friendly_name": a.Name, "supported": true, "network_address": 2000,
+			"model_id": a.ModelID, "manufacturer": a.Manufacturer, "power_source": a.PowerSource, "interview_completed": true, "disabled": false,
+			"definition": map[string]any{"model": a.Model, "vendor": a.Vendor, "description": a.Model, "exposes": json.RawMessage(a.Exposes)},
+		})
+		devices = append(devices, b)
+	}
+	b, _ := json.Marshal(devices)
+	return b
+}
+
+// FakeBridge is a stateful virtual Zigbee2MQTT bridge: it applies /set commands to its devices and publishes
+// the new state, as Zigbee2MQTT does once a device acknowledges. DropCommands makes it ignore every command (a
+// device that never answers), so the timeout path can be exercised too.
+type FakeBridge struct {
+	Base         string
+	DropCommands bool
+
+	mu       sync.Mutex
+	switches [][]bool
+	states   map[string]map[string]any
+}
+
+func NewFakeBridge(base string) *FakeBridge {
+	b := &FakeBridge{Base: base, switches: Z2MStep(0), states: map[string]map[string]any{}}
+	for _, a := range Z2MActuators {
+		s := map[string]any{}
+		for k, v := range a.Initial {
+			s[k] = v
+		}
+		b.states[a.IEEE] = s
+	}
+	return b
+}
+
+// Step is what the bridge publishes at one step: the retained announcement first (step 0), a press on the wall
+// of the first switch's gang 1 every 20 steps, and every device's state.
+func (b *FakeBridge) Step(step int) []Z2MMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := []Z2MMessage{}
+	if step == 0 {
+		out = append(out, Z2MMessage{Topic: b.Base + "/bridge/state", Payload: Z2MOnline(true), Retain: true},
+			Z2MMessage{Topic: b.Base + "/bridge/devices", Payload: Z2MBridgeDevicesAll(), Retain: true})
+		for _, s := range Z2MSwitches {
+			out = append(out, Z2MMessage{Topic: Z2MTopic(b.Base, s, "availability"), Payload: Z2MOnline(true), Retain: true})
+		}
+		for _, a := range Z2MActuators {
+			out = append(out, Z2MMessage{Topic: b.Base + "/" + a.Name + "/availability", Payload: Z2MOnline(true), Retain: true})
+		}
+	} else if step%20 == 0 {
+		b.switches[0][0] = !b.switches[0][0]
+	}
+	for i, s := range Z2MSwitches {
+		out = append(out, Z2MMessage{Topic: Z2MTopic(b.Base, s, ""), Payload: Z2MState(s, b.switches[i], 90+i*20)})
+	}
+	for _, a := range Z2MActuators {
+		out = append(out, b.actuatorState(a))
+	}
+	return out
+}
+
+func (b *FakeBridge) actuatorState(a Z2MActuator) Z2MMessage {
+	m := map[string]any{"linkquality": 150, "aether_source": "simulated", "device": map[string]any{"ieeeAddr": a.IEEE, "friendlyName": a.Name, "model": a.Model}}
+	for k, v := range b.states[a.IEEE] {
+		m[k] = v
+	}
+	p, _ := json.Marshal(m)
+	return Z2MMessage{Topic: b.Base + "/" + a.Name, Payload: p}
+}
+
+// Apply handles one message on <base>/<ieee or friendly name>/set and returns the state the bridge publishes in
+// answer (nothing for a dropped command, an unknown device or a malformed payload). Values are applied as
+// given; TOGGLE flips a binary state.
+func (b *FakeBridge) Apply(topic string, payload []byte) []Z2MMessage {
+	rest, ok := strings.CutPrefix(topic, b.Base+"/")
+	if !ok || !strings.HasSuffix(rest, "/set") || b.DropCommands {
+		return nil
+	}
+	device := strings.TrimSuffix(rest, "/set")
+	var set map[string]any
+	if json.Unmarshal(payload, &set) != nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, s := range Z2MSwitches {
+		if device != s.IEEE && device != s.Name {
+			continue
+		}
+		for g := range s.Endpoints {
+			if v, ok := set[s.property(g)].(string); ok {
+				switch strings.ToUpper(v) {
+				case "ON":
+					b.switches[i][g] = true
+				case "OFF":
+					b.switches[i][g] = false
+				case "TOGGLE":
+					b.switches[i][g] = !b.switches[i][g]
+				}
+			}
+		}
+		return []Z2MMessage{{Topic: Z2MTopic(b.Base, s, ""), Payload: Z2MState(s, b.switches[i], 90+i*20)}}
+	}
+	for _, a := range Z2MActuators {
+		if device != a.IEEE && device != a.Name {
+			continue
+		}
+		state := b.states[a.IEEE]
+		for k, v := range set {
+			if v == "TOGGLE" {
+				if state[k] == "ON" {
+					v = "OFF"
+				} else {
+					v = "ON"
+				}
+			}
+			state[k] = v
+			if k == "position" { // a cover reports where it went and that it stopped there
+				state["state"] = "STOP"
+			}
+		}
+		return []Z2MMessage{b.actuatorState(a)}
+	}
+	return nil
 }

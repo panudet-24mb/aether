@@ -6,6 +6,7 @@ import "../topology/topology.css";
 import "./overview.css";
 import { ApiError, createClientFrom, type DeviceEventRow, type LiveSensor, type Reading, type Snapshot } from "../topology/api";
 import { deviceProfile, formatMAC, suggestProfile, switchGangs } from "../topology/catalog";
+import DeviceControlsPanel from "../topology/device-controls";
 import { PROJECT_COLORS } from "../topology/projects";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
@@ -20,6 +21,8 @@ type Thresholds = { temperature_high: number | null; humidity_high: number | nul
 type Sensor = LiveSensor & { thresholds?: Thresholds };
 type Status = "alert" | "online" | "stale" | "offline";
 type Card = {
+  /** The registration id (core.devices), when the card is a registered device: commands target it. */
+  deviceId?: string;
   profileId?: string; key: string; external: string; name: string; kind: string; model: string; image: string | null; registered: boolean; wearable: boolean;
   gatewayId: string; gatewayName: string; projectId: string | null; zone: string | null;
   status: Status; reasons: string[]; reading: Reading | null; history: Reading[]; thresholds?: Thresholds; templateId?: string | null; simulated: boolean;
@@ -172,7 +175,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
         // Office kinds win over the profile's first kind: the MSP01 profile lists motion + environment.
         const kind = isDoorSensor(profile, merged) ? "door" : isOccupancySensor(profile, merged) ? "occupancy" : profile?.kinds?.[0] ?? sensor.model ?? "info";
         cards.set(ext, {
-          profileId: reg.profile_id, key: ext, external: ext, name: reg?.name ?? sensor.name, kind, model: profile ? `${profile.brand} ${profile.model}` : (sensor.model ?? ""), image: profile?.image ?? null,
+          deviceId: reg.id, profileId: reg.profile_id, key: ext, external: ext, name: reg?.name ?? sensor.name, kind, model: profile ? `${profile.brand} ${profile.model}` : (sensor.model ?? ""), image: profile?.image ?? null,
           registered: !!reg, wearable: !!reg?.roaming || !!profile?.wearable, gatewayId: home, gatewayName: gatewayBy.get(home)?.name ?? g.gateway.name, projectId: gatewayBy.get(home)?.project_id ?? null,
           zone: reg?.roaming ? (gatewayBy.get(reg.zone_gateway_id ?? "")?.name ?? null) : null, status: "online", reasons: [], reading: merged, history: sensor.history, thresholds: sensor.thresholds, templateId: sensor.template_id, simulated: sensor.latest.source === "simulated", sos: false, samples: [...sensor.history, sensor.latest], reportedOffline: sensor.liveness === "reported" ? !!sensor.offline : undefined,
         });
@@ -183,7 +186,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       const ext = d.external_id.toLowerCase();
       if (cards.has(ext)) continue;
       const profile = deviceProfile(d.profile_id), gw = gatewayBy.get(d.gateway_id);
-      cards.set(ext, { profileId: d.profile_id, key: ext, external: ext, name: d.name, kind: isDoorSensor(profile, null) ? "door" : isOccupancySensor(profile, null) ? "occupancy" : profile?.kinds?.[0] ?? "environment", model: profile ? `${profile.brand} ${profile.model}` : "", image: profile?.image ?? null, registered: true, wearable: !!d.roaming || !!profile?.wearable, gatewayId: d.gateway_id, gatewayName: gw?.name ?? "", projectId: gw?.project_id ?? null, zone: null, status: "offline", reasons: ["ไม่มีข้อมูลในช่วงล่าสุด"], reading: null, history: [], simulated: false, sos: false, samples: [] });
+      cards.set(ext, { deviceId: d.id, profileId: d.profile_id, key: ext, external: ext, name: d.name, kind: isDoorSensor(profile, null) ? "door" : isOccupancySensor(profile, null) ? "occupancy" : profile?.kinds?.[0] ?? "environment", model: profile ? `${profile.brand} ${profile.model}` : "", image: profile?.image ?? null, registered: true, wearable: !!d.roaming || !!profile?.wearable, gatewayId: d.gateway_id, gatewayName: gw?.name ?? "", projectId: gw?.project_id ?? null, zone: null, status: "offline", reasons: ["ไม่มีข้อมูลในช่วงล่าสุด"], reading: null, history: [], simulated: false, sos: false, samples: [] });
     }
     for (const c of cards.values()) {
       const r = c.reading, m = (r?.metrics ?? {}) as Record<string, number>, age = r ? now - Date.parse(r.received_at) : Infinity;
@@ -445,6 +448,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                   {opened.wearable && <div><strong>{opened.zone ?? "—"}</strong>โซนปัจจุบัน</div>}
                 </div>
                 {openedComfort && <p className="topo-note">{COMFORT_NOTE} · นอกช่วงนี้แสดงเป็น ร้อน / เย็น / ชื้น / แห้ง</p>}
+                {opened.deviceId && opened.external.startsWith("0x") && <DeviceControlsPanel client={client} deviceId={opened.deviceId} refreshKey={opened.reading?.received_at} />}
                 {opened.occupancy && (
                   <>
                     <h3>การใช้ห้อง 24 ชม.</h3>

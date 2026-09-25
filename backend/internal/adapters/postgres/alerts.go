@@ -705,7 +705,11 @@ func (r *Repository) PruneAlertData(ctx context.Context, tenant string) error {
 		if e := tx.Exec(`DELETE FROM core.alerts WHERE status='resolved' AND id IN (SELECT id FROM core.alerts WHERE status='resolved' ORDER BY opened_at DESC,id DESC OFFSET 2000)`).Error; e != nil {
 			return e
 		}
-		return tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events ORDER BY occurred_at DESC,id DESC OFFSET 5000) AND NOT EXISTS(SELECT 1 FROM core.alerts a WHERE a.event_id=e.id)`).Error
+		if e := tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events ORDER BY occurred_at DESC,id DESC OFFSET 5000) AND NOT EXISTS(SELECT 1 FROM core.alerts a WHERE a.event_id=e.id)`).Error; e != nil {
+			return e
+		}
+		// Settled commands are kept 90 days (the audit log keeps who sent them for as long as it lives).
+		return tx.Exec(`DELETE FROM core.device_commands WHERE created_at<now()-interval '90 days' AND status NOT IN ('pending','sent')`).Error
 	})
 }
 

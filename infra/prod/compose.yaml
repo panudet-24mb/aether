@@ -332,6 +332,40 @@ services:
         limits:
           memory: 512m
 
+  # Publishes queued device commands (core.device_commands) to Zigbee2MQTT bridges. Its broker account may only
+  # WRITE aether/z2m/+/+/set (no subscription, no bridge/request/*); it claims and commits each command before
+  # publishing it, so a command is delivered at most once and never late. See docs/platform/zigbee2mqtt.md.
+  mqtt-commander:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    entrypoint: ["/app/mqtt-commander"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      MQTT_CONFIG_FILE: /run/mqtt/commander.json
+    volumes:
+      - ${AETHER_SECRETS_DIR}/mqtt/commander:/run/mqtt:ro
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    healthcheck:
+      test: ["CMD", "/app/mqtt-commander", "health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+    <<: *hardened
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
   # Renders broker credentials for gateways created in the web UI and SIGHUPs Mosquitto through a
   # shared PID namespace. It never gets a Docker socket and can only read password hashes.
   mqtt-provisioner:

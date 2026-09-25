@@ -110,12 +110,16 @@ func saveZ2MDevices(tx *gorm.DB, tenant, gateway string, payload []byte, now tim
 	present := make([]string, 0, len(devices))
 	for _, d := range devices {
 		gangs, _ := json.Marshal(d.Gangs)
-		if e := tx.Exec(`INSERT INTO core.z2m_devices(tenant_id,gateway_id,ieee,friendly_name,type,model,vendor,model_id,manufacturer,power_source,supported,gangs,updated_at,removed_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,NULL)
+		exposes := d.Exposes
+		if len(exposes) == 0 {
+			exposes = json.RawMessage("[]")
+		}
+		if e := tx.Exec(`INSERT INTO core.z2m_devices(tenant_id,gateway_id,ieee,friendly_name,type,model,vendor,model_id,manufacturer,power_source,supported,gangs,exposes,updated_at,removed_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?,NULL)
     ON CONFLICT(tenant_id,gateway_id,ieee) DO UPDATE SET friendly_name=EXCLUDED.friendly_name,type=EXCLUDED.type,model=EXCLUDED.model,vendor=EXCLUDED.vendor,
       model_id=EXCLUDED.model_id,manufacturer=EXCLUDED.manufacturer,power_source=EXCLUDED.power_source,supported=EXCLUDED.supported,gangs=EXCLUDED.gangs,
-      updated_at=EXCLUDED.updated_at,removed_at=NULL`,
-			tenant, gateway, d.IEEE, d.FriendlyName, d.Type, d.Model, d.Vendor, d.ModelID, d.Manufacturer, d.PowerSource, d.Supported, string(gangs), now).Error; e != nil {
+      exposes=EXCLUDED.exposes,updated_at=EXCLUDED.updated_at,removed_at=NULL`,
+			tenant, gateway, d.IEEE, d.FriendlyName, d.Type, d.Model, d.Vendor, d.ModelID, d.Manufacturer, d.PowerSource, d.Supported, string(gangs), string(exposes), now).Error; e != nil {
 			return e
 		}
 		present = append(present, d.IEEE)
@@ -156,12 +160,13 @@ func z2mDevice(tx *gorm.DB, gateway, name string, payload []byte) (zigbee2mqtt.D
 		FriendlyName string          `gorm:"column:friendly_name"`
 		Model        string          `gorm:"column:model"`
 		Gangs        json.RawMessage `gorm:"column:gangs"`
+		Exposes      json.RawMessage `gorm:"column:exposes"`
 	}
-	if e := tx.Raw(`SELECT ieee,friendly_name,model,gangs FROM core.z2m_devices WHERE gateway_id=? AND removed_at IS NULL AND (friendly_name=? OR ieee=?)
+	if e := tx.Raw(`SELECT ieee,friendly_name,model,gangs,exposes FROM core.z2m_devices WHERE gateway_id=? AND removed_at IS NULL AND (friendly_name=? OR ieee=?)
     ORDER BY (ieee=?) DESC LIMIT 1`, gateway, name, ieee, ieee).Scan(&rows).Error; e != nil || len(rows) == 0 {
 		return zigbee2mqtt.Device{}, false, e
 	}
-	d := zigbee2mqtt.Device{IEEE: rows[0].IEEE, FriendlyName: rows[0].FriendlyName, Model: rows[0].Model}
+	d := zigbee2mqtt.Device{IEEE: rows[0].IEEE, FriendlyName: rows[0].FriendlyName, Model: rows[0].Model, Exposes: rows[0].Exposes}
 	if e := json.Unmarshal(rows[0].Gangs, &d.Gangs); e != nil {
 		return zigbee2mqtt.Device{}, false, e
 	}
@@ -173,9 +178,33 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 	if e != nil || !ok {
 		return e // a group or a device bridge/devices has not listed yet: the diagnostic copy is all there is
 	}
+	// The last reported value of every settable property (a toggle is resolved from it), and the commands this
+	// report answers, in the same transaction as the report itself. This holds for any device, not only switches.
+	// The definition is parsed once per message; the stored state is only written when a value changed.
+	features, _ := zigbee2mqtt.Features(d.Exposes)
+	settable := zigbee2mqtt.SettableValuesIn(features, payload)
+	if len(settable) > 0 {
+		merged, _ := json.Marshal(settable)
+		if e := tx.Exec(`UPDATE core.z2m_devices SET state=state||?::jsonb WHERE gateway_id=? AND ieee=? AND state IS DISTINCT FROM state||?::jsonb`, string(merged), gateway, d.IEEE, string(merged)).Error; e != nil {
+			return e
+		}
+	}
+	confirmed, e := confirmCommands(tx, tenant, gateway, d.IEEE, features, settable, now)
+	if e != nil {
+		return e
+	}
 	reading, ok := zigbee2mqtt.ParseState(payload, d, now)
 	if !ok {
 		return nil
+	}
+	// A confirmed command on a gang's property makes that gang's switch event name the command.
+	for _, g := range d.Gangs {
+		if id := confirmed[g.Property]; id != "" {
+			if reading.Commands == nil {
+				reading.Commands = map[int]string{}
+			}
+			reading.Commands[g.Gang] = id
+		}
 	}
 	view := minew.View{Sensors: []minew.Sensor{{ID: d.IEEE, Name: d.FriendlyName, Kind: zigbee2mqtt.KindSwitch, Model: d.Model, Latest: reading}}}
 	// Every state message is a sample: a switch legitimately repeats ON, OFF, ON with identical payloads.

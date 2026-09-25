@@ -7,11 +7,38 @@ const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Machine-readable refusal the server gives for some requests (e.g. a command: "offline", "in_flight"). */
+  reason?: string;
+  constructor(status: number, message: string, reason?: string) {
     super(message);
     this.status = status;
+    this.reason = reason;
   }
 }
+
+/** One settable feature of a Zigbee2MQTT device, straight from its definition's exposes (zigbee2mqtt.io/guide/usage/exposes). */
+export type ControlFeature = {
+  type: "binary" | "numeric" | "enum" | "composite";
+  name?: string;
+  label?: string;
+  property: string;
+  endpoint?: string;
+  access: number;
+  unit?: string;
+  value_on?: unknown;
+  value_off?: unknown;
+  value_toggle?: unknown;
+  value_min?: number;
+  value_max?: number;
+  value_step?: number;
+  values?: unknown[];
+  features?: ControlFeature[];
+  /** The specific type the feature sits in (light, cover, lock, climate, switch, fan). */
+  group?: string;
+};
+export type DeviceControls = { device_id: string; gateway_id: string; ieee: string; online: boolean; can_command: boolean; state: Record<string, unknown>; features: ControlFeature[] };
+export type CommandStatus = "pending" | "sent" | "confirmed" | "timeout" | "expired" | "failed";
+export type Command = { id: string; device_id: string; property: string; requested: "set" | "toggle"; value: unknown; status: CommandStatus; error?: string; created_at: string; settled_at?: string };
 
 export type Gateway = { id: string; name: string; model: string; created_at: string; project_id?: string | null };
 export type Project = { id: string; name: string; description: string; color: string; gateway_count: number; created_at: string };
@@ -89,11 +116,11 @@ type Settled<T> = { status: "fulfilled"; value: T } | { status: "rejected"; reas
 
 export function createClient(getToken: () => string, refresh: () => Promise<boolean>) {
   let slow: { at: number; gateways: Settled<Gateway[]>; sources: Settled<Source[]>; devices: Settled<Device[]>; settings: Settled<MQTTSettings>; catalog: Settled<CatalogResponse>; removed: Settled<Device[]>; projects: Settled<Project[]> } | null = null;
-  async function call<T>(path: string, body?: unknown): Promise<T> {
+  async function call<T>(path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
     const send = () =>
       fetch(`${API}/api/v1${path}`, {
         method: body === undefined ? "GET" : "POST",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json", ...extraHeaders },
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: "no-store",
         signal: AbortSignal.timeout(15000),
@@ -103,13 +130,15 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     if (!r.ok) {
       // Some endpoints explain the failure (e.g. a channel test); prefer that over the generic status text.
       let detail = "";
+      let reason: string | undefined;
       try {
-        const body = (await r.json()) as { detail?: unknown };
+        const body = (await r.json()) as { detail?: unknown; error?: unknown };
         if (typeof body.detail === "string") detail = body.detail;
+        if (typeof body.error === "string") reason = body.error;
       } catch {
         // no JSON body
       }
-      throw new ApiError(r.status, detail ? `${describe(r.status)} · ${detail}` : describe(r.status));
+      throw new ApiError(r.status, detail ? `${describe(r.status)} · ${detail}` : describe(r.status), reason);
     }
     if (r.status === 204) return undefined as T;
     return (await r.json()) as T;
@@ -150,6 +179,15 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     updateDevice: (id: string, change: { name?: string; gateway_id?: string }) => call<Device>(`/devices/${id}/update`, change),
     removeDevice: (id: string) => call<void>(`/devices/${id}/remove`, {}),
     restoreDevice: (id: string) => call<void>(`/devices/${id}/restore`, {}),
+    /** What a Zigbee2MQTT device lets Aether set, its last values, and whether this member may command it. */
+    deviceControls: (id: string) => call<DeviceControls>(`/devices/${id}/controls`),
+    /**
+     * Queues a command (202). `key` is a fresh UUID per click: a retry with the same key returns the same command.
+     * The result is `pending`; only the device's own report makes it `confirmed`, so callers must poll `command`.
+     */
+    sendCommand: (key: string, input: { device_id: string; property: string; value?: unknown; action?: "set" | "toggle" }) =>
+      call<Command>("/commands", input, { "Idempotency-Key": key }),
+    command: (id: string) => call<Command>(`/commands/${id}`),
 
     /**
      * Loads everything the canvas needs. The API is rate-limited per IP (120/min), so slow-changing data

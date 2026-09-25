@@ -28,6 +28,9 @@ type Reading struct {
 	RSSI        *int               `json:"rssi"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	Beacon      *Beacon            `json:"beacon,omitempty"`
+	// Commands names, per switch gang, the Aether command this report confirmed (Zigbee2MQTT). It is never
+	// stored with the sample; the alerts engine uses it to tell a commanded change from a press on the wall.
+	Commands map[int]string `json:"-"`
 }
 type Sensor struct {
 	TemplateID *string                   `json:"template_id"`

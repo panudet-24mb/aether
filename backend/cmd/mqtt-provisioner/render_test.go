@@ -18,11 +18,24 @@ func TestRenderPerModel(t *testing.T) {
 	minew := "\nuser gw-11111111-1111-4111-8111-111111111111\ntopic write /aether/gateways/11111111-1111-4111-8111-111111111111/status\ntopic write /aether/gateways/11111111-1111-4111-8111-111111111111/response\ntopic read /aether/gateways/11111111-1111-4111-8111-111111111111/action\n"
 	z2m := "\nuser gw-22222222-2222-4222-8222-222222222222\ntopic readwrite aether/z2m/22222222-2222-4222-8222-222222222222/#\n"
 	ingest := "# base\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\n"
-	if a != ingest+minew+z2m {
+	commander := "\nuser aether-commander\ntopic write aether/z2m/+/+/set\n"
+	if a != ingest+commander+minew+z2m {
 		t.Fatalf("acl:\n%s", a)
 	}
 	// A Zigbee2MQTT account never gets the Minew topics, and no account reaches another gateway's tree.
 	if strings.Count(a, "aether/z2m/22222222") != 1 || strings.Contains(a, "gw-22222222-2222-4222-8222-222222222222\ntopic write /aether") {
 		t.Fatalf("z2m isolation:\n%s", a)
+	}
+}
+
+// The commander's grant is exactly one write pattern: no read (it subscribes to nothing), no bridge requests.
+func TestRenderCommanderIsWriteOnly(t *testing.T) {
+	_, a := render("", "", nil)
+	block := a[strings.Index(a, "user aether-commander"):]
+	if next := strings.Index(block[1:], "\nuser "); next >= 0 {
+		block = block[:next+1]
+	}
+	if strings.TrimSpace(block) != "user aether-commander\ntopic write aether/z2m/+/+/set" || strings.Contains(block, "read") || strings.Contains(block, "bridge") || strings.Contains(block, "#") {
+		t.Fatalf("commander grant:\n%s", block)
 	}
 }

@@ -64,6 +64,7 @@ Runtime ACL rendered by `mqtt-provisioner` per gateway model (2026-09-23):
 | | read | `/aether/gateways/<id>/action` |
 | `gw-<id>` (Zigbee2MQTT gateway) | readwrite | `aether/z2m/<id>/#` (Zigbee2MQTT subscribes to its own `base_topic/#`, so a narrower read rule would make its SUBSCRIBE fail; it still cannot reach another gateway's tree or `/aether/gateways/...`) |
 | `aether-ingest` (collector) | read | `/aether/gateways/+/status`, `aether/z2m/+/#` |
+| `aether-commander` (mqtt-commander) | write | `aether/z2m/+/+/set` only: device commands, addressed by IEEE. No read, no subscription, no `bridge/request/*`. |
 
 See `docs/platform/zigbee2mqtt.md` for the Zigbee topic tree.
 - Collector validates the broker CA/hostname and requires TLS 1.2 or newer. Broker has packet, queue, connection and memory bounds, persistent volume, plaintext only via explicit dev opt-in, non-root UID and dropped capabilities.

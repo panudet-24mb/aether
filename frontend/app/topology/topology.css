@@ -384,3 +384,13 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .topo-gangs { display: flex; flex-wrap: wrap; gap: 6px; }
 .topo-gang { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--color-border); font-size: 12px; }
 .topo-gang.is-on { border-color: var(--color-accent-dark); background: color-mix(in oklab, var(--color-accent-faint) 80%, transparent); font-weight: 600; }
+/* Device controls (Zigbee2MQTT commands): one row per settable property, a status line under it. */
+.topo-controls { display: grid; gap: 10px; margin-top: 12px; }
+.topo-gang-controls { display: grid; gap: 8px; }
+.topo-control, .topo-gang-control { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 10px; }
+.topo-control .topo-actions, .topo-gang-control .topo-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.topo-control input[type="range"] { flex: 1 1 140px; min-width: 0; }
+.topo-control input[type="number"] { width: 84px; }
+.topo-cmd-status { font-size: 12px; opacity: 0.8; }
+.topo-cmd-status.is-confirmed { color: var(--color-accent-dark); opacity: 1; }
+.topo-cmd-status.is-timeout, .topo-cmd-status.is-failed, .topo-cmd-status.is-expired { color: var(--color-danger); opacity: 1; }

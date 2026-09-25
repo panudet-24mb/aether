@@ -26,3 +26,22 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
+  # Publishes queued device commands to Zigbee2MQTT bridges (write-only on aether/z2m/+/+/set).
+  # prepare-onboarding.py creates its broker account and .secrets/mqtt/commander/commander.json.
+  mqtt-commander:
+    image: aether-backend:local
+    entrypoint: ["/app/mqtt-commander"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=disable
+      MQTT_CONFIG_FILE: /run/mqtt/commander.json
+    volumes:
+      - ../.secrets/mqtt/commander:/run/mqtt:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mqtt:
+        condition: service_started
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped

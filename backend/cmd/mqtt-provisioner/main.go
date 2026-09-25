@@ -27,10 +27,15 @@ const z2mModel = "zigbee2mqtt"
 // render builds the runtime password and ACL files from the static base files and the enrolled gateways.
 // A Minew-style gateway may write only its own status/response topics and read its action topic. A Zigbee2MQTT
 // bridge owns its whole tree aether/z2m/<id>/#: it must SUBSCRIBE to its own base_topic/# (Z2M subscribes to
-// exactly that), so the narrower "read …/+/set" would make its subscription fail. The collector reads both.
+// exactly that), so the narrower "read …/+/set" would make its subscription fail. The collector reads both, and
+// the commander writes only …/<ieee>/set.
 func render(basePasswords, baseACL string, accounts []account) (string, string) {
 	p := strings.TrimSpace(basePasswords) + "\n"
 	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\n"
+	// mqtt-commander may only WRITE device command topics (aether/z2m/<gateway>/<ieee>/set): no subscription at
+	// all, and no bridge/request/* (so it can never permit joins or remove devices). Without its password in the
+	// base file the block is inert.
+	a += "\nuser aether-commander\ntopic write aether/z2m/+/+/set\n"
 	for _, c := range accounts {
 		p += "gw-" + c.ID + ":" + c.Hash + "\n"
 		if c.Model == z2mModel {

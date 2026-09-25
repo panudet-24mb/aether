@@ -148,7 +148,12 @@ func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time)
 			if now == 1 {
 				t = domain.EventSwitchOn
 			}
-			emit(t, map[string]any{"gang": gang, "source": "external"})
+			// "external" is a press on the wall or another Zigbee controller: Zigbee cannot tell them apart.
+			detail := map[string]any{"gang": gang, "source": "external"}
+			if id := r.Commands[gang]; id != "" {
+				detail["source"], detail["command_id"] = "command", id
+			}
+			emit(t, detail)
 		}
 		next.Outputs[key] = now
 	}

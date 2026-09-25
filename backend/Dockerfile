@@ -9,6 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/api ./cmd/api && \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mqtt ./cmd/mqtt && \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/simulator ./cmd/simulator
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mqtt-provisioner ./cmd/mqtt-provisioner
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mqtt-commander ./cmd/mqtt-commander
 FROM alpine:3.23 AS javascript
 RUN apk add --no-cache python3 py3-pip python3-dev build-base && python3 -m pip install --break-system-packages --no-cache-dir --target=/python quickjs==1.19.4
 FROM alpine:3.23

@@ -99,6 +99,10 @@ type Repository interface {
 	DeviceState(context.Context, domain.Principal, string) (domain.State, error)
 	CapturePacket(context.Context, string, string, json.RawMessage) (string, error)
 	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
+	QueueCommand(context.Context, domain.Principal, domain.CommandRequest) (domain.Command, bool, error)
+	ListCommands(context.Context, domain.Principal, string, int) ([]domain.Command, error)
+	GetCommand(context.Context, domain.Principal, string) (domain.Command, error)
+	DeviceControls(context.Context, domain.Principal, string) (domain.DeviceControls, error)
 	ListPackets(context.Context, domain.Principal, string) ([]domain.Packet, error)
 	StoreTelemetry(context.Context, string, string, string, time.Time, map[string]float64) (domain.TelemetryEvent, error)
 

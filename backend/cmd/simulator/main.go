@@ -92,7 +92,7 @@ func run() error {
 		packet, banner = simulation.MOSPacket, "SIMULATION: virtual Minew MOS kit via MG4 (S1, MSP01, C10, MBT01, S4 with a SYNTHETIC door frame); no hardware commands"
 	case "z2m":
 		// The config's topic is the gateway's Zigbee2MQTT base_topic (aether/z2m/<gateway id>).
-		z2m, banner = true, "SIMULATION: virtual Zigbee2MQTT bridge (Tuya TS0011, TS0012, TS0014 wall switches); gang 1 of the first switch is pressed every 20 steps"
+		z2m, banner = true, "SIMULATION: virtual Zigbee2MQTT bridge (Tuya TS0011, TS0012, TS0014 wall switches, a colour bulb, a curtain, a lock, a thermostat); gang 1 of the first switch is pressed every 20 steps; /set commands are applied"
 	default:
 		return fmt.Errorf("SIMULATOR_KIT must be mhs, mos or z2m")
 	}
@@ -141,9 +141,24 @@ func run() error {
 	timer := time.NewTicker(5 * time.Second)
 	defer timer.Stop()
 	fmt.Println(banner)
+	var bridge *simulation.FakeBridge
+	if z2m {
+		// Like Zigbee2MQTT, the virtual bridge listens on its own tree for /set and answers with the new state.
+		// SIMULATOR_DROP_COMMANDS=true makes every device ignore commands, to watch them time out in the UI.
+		bridge = simulation.NewFakeBridge(cfg.Topic)
+		bridge.DropCommands = os.Getenv("SIMULATOR_DROP_COMMANDS") == "true"
+		t := client.Subscribe(cfg.Topic+"/+/set", 1, func(c mqtt.Client, m mqtt.Message) {
+			for _, reply := range bridge.Apply(m.Topic(), m.Payload()) {
+				c.Publish(reply.Topic, 1, false, reply.Payload)
+			}
+		})
+		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+			return fmt.Errorf("simulator command subscription failed")
+		}
+	}
 	for step := 0; ; step++ {
 		if z2m {
-			for _, m := range simulation.Z2MMessages(cfg.Topic, step, step == 0) {
+			for _, m := range bridge.Step(step) {
 				t := client.Publish(m.Topic, 1, m.Retain, m.Payload)
 				if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
 					return fmt.Errorf("simulator publish failed")

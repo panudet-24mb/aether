@@ -41,7 +41,7 @@ def mqtt_runtime(root, temporary, image, build_env, config, test_env):
         return name
 
     try:
-        for name in ("mqtt", "mqtt-provisioner"):
+        for name in ("mqtt", "mqtt-provisioner", "mqtt-commander"):
             subprocess.run(["go", "build", "-o", str(folder / name), "./cmd/" + name],
                            cwd=root / "backend", env=build_env, check=True)
         base, runtime = folder / "base", folder / "runtime"
@@ -50,6 +50,11 @@ def mqtt_runtime(root, temporary, image, build_env, config, test_env):
         salt = secrets.token_bytes(12)
         hashed = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 100000, 64)
         row = "aether-ingest:$7$100000$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(hashed).decode() + "\n"
+        # mqtt-commander's account, hashed the same way; the provisioner grants it write on aether/z2m/+/+/set only.
+        commander_password = secrets.token_urlsafe(32)
+        commander_salt = secrets.token_bytes(12)
+        commander_hash = hashlib.pbkdf2_hmac("sha512", commander_password.encode(), commander_salt, 100000, 64)
+        row += "aether-commander:$7$100000$" + base64.b64encode(commander_salt).decode() + "$" + base64.b64encode(commander_hash).decode() + "\n"
         for directory in (base, runtime):
             private(directory / "passwords", row)
             private(directory / "acl", "user aether-ingest\ntopic read /aether/gateways/+/status\n")
@@ -71,6 +76,13 @@ def mqtt_runtime(root, temporary, image, build_env, config, test_env):
             "broker_url": "ssl://" + broker + ":8883", "username": "aether-ingest", "password": password,
             "client_id": prefix + "-collector", "ca_file": "/test/server.crt", "bindings": [],
         }))
+        private(folder / "commander.json", json.dumps({
+            "broker_url": "ssl://" + broker + ":8883", "username": "aether-commander", "password": commander_password,
+            "client_id": prefix + "-commander", "ca_file": "/test/server.crt", "bindings": [],
+        }))
+        start("commander", "/test/mqtt-commander", [(folder, "/test", True)], {
+            "DATABASE_URL": test_env["TEST_DATABASE_URL"], "MQTT_CONFIG_FILE": "/test/commander.json",
+        })
         collector = start("collector", "/test/mqtt", [(folder, "/test", True)], {
             "DATABASE_URL": test_env["TEST_DATABASE_URL"], "APP_ENV": "test",
             "APP_ORIGIN": "http://localhost:3000", "DEPLOYMENT_MODE": "onprem",

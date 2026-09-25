@@ -40,6 +40,9 @@ type Device struct {
 	PowerSource  string
 	Supported    bool
 	Gangs        []Gang
+	// Exposes is the definition's exposes array exactly as Zigbee2MQTT published it ("[]" when absent or over
+	// MaxExposes). Commands are validated against it (features.go); a generic ingest can build on it later.
+	Exposes json.RawMessage
 }
 
 type expose struct {
@@ -61,9 +64,9 @@ type bridgeDevice struct {
 	PowerSource  string `json:"power_source"`
 	Disabled     bool   `json:"disabled"`
 	Definition   *struct {
-		Model   string   `json:"model"`
-		Vendor  string   `json:"vendor"`
-		Exposes []expose `json:"exposes"`
+		Model   string          `json:"model"`
+		Vendor  string          `json:"vendor"`
+		Exposes json.RawMessage `json:"exposes"`
 	} `json:"definition"`
 }
 
@@ -82,13 +85,19 @@ func ParseBridgeDevices(b []byte) (devices []Device, truncated bool, err error) 
 			continue
 		}
 		d := Device{IEEE: ieee, FriendlyName: clip(r.FriendlyName, 128), Type: clip(r.Type, 32), ModelID: clip(r.ModelID, 64),
-			Manufacturer: clip(r.Manufacturer, 64), PowerSource: clip(r.PowerSource, 64), Supported: r.Supported, Gangs: []Gang{}}
+			Manufacturer: clip(r.Manufacturer, 64), PowerSource: clip(r.PowerSource, 64), Supported: r.Supported, Gangs: []Gang{}, Exposes: json.RawMessage("[]")}
 		if d.FriendlyName == "" {
 			d.FriendlyName = ieee
 		}
 		if r.Definition != nil {
 			d.Model, d.Vendor = clip(r.Definition.Model, 64), clip(r.Definition.Vendor, 64)
-			d.Gangs = gangs(r.Definition.Exposes)
+			var exposes []expose
+			if json.Unmarshal(r.Definition.Exposes, &exposes) == nil {
+				d.Gangs = gangs(exposes)
+				if len(r.Definition.Exposes) <= MaxExposes {
+					d.Exposes = compact(r.Definition.Exposes)
+				}
+			}
 		}
 		if len(out) == MaxDevices {
 			return out, true, nil

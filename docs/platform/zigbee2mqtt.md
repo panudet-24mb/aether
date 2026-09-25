@@ -1,4 +1,4 @@
-# Zigbee2MQTT gateways (phase 1: ingest and display)
+# Zigbee2MQTT gateways (phase 1: ingest and display; phase 2: commands)
 
 Status 2026-09-23: implemented and tested against a simulated bridge. **Not yet verified with real hardware.** The gateway model and the `tuya-ts001x-switch@1` profile stay `Verified: false` until a captured `bridge/devices` from the real coordinator replaces the synthetic fixtures.
 
@@ -86,11 +86,75 @@ A friendly name may contain `/`. Devices are always resolved to their IEEE addre
    ```
 3. `mqtt-provisioner` renders the new ACL lines (collector read on `aether/z2m/+/#`, per-model gateway rules) by itself within seconds of starting.
 
+## Commands (phase 2, 2026-09-25)
+
+Aether can set **any settable property of any device Zigbee2MQTT supports**, not only switch gangs: a gang (`state_l1`, `state_left`), a light (`state`, `brightness`, `color_temp`, `color`), a curtain (`position`), a lock (`state` LOCK/UNLOCK), a thermostat (`system_mode`, `occupied_heating_setpoint`), and so on. What a device accepts is read from its own definition: `bridge/devices` → `definition.exposes`, stored per device in `core.z2m_devices.exposes` (migration `00029`).
+
+**Registering.** A Tuya TS001x switch registers as `tuya-ts001x-switch@1`. Any other supported device (one with a definition) registers as the generic `zigbee2mqtt-device@1` profile, which discovery suggests. Readings of non-switch devices are not decoded into Aether metrics yet (a later step); commands work regardless.
+
+**Request.**
+```
+POST /api/v1/commands          Idempotency-Key: <uuid generated per click>
+{"device_id":"…","property":"brightness","value":128}
+{"device_id":"…","property":"state_l1","action":"toggle"}
+→ 202 {"id":…,"status":"pending","value":128,…}
+GET  /api/v1/commands/:id      GET /api/v1/commands?device_id=…      GET /api/v1/devices/:id/controls
+```
+`/devices/:id/controls` returns the device's settable features (flattened from its exposes), the last reported value of each, whether it is online, and `can_command` for this member. The UI renders controls from it:
+- binary: ON/OFF buttons (a switch's gangs as one row);
+- numeric: a slider and number field with min, max, step and unit;
+- enum: a dropdown;
+- colour composites: a colour picker mapped to `{hue,saturation}` or `{x,y}`.
+
+Other composites are listed as not settable from the page yet.
+
+**Validation** (`internal/adapters/zigbee2mqtt/features.go`):
+- **The feature.** It must exist, found recursively inside `light` / `switch` / `cover` / `lock` / `climate` / `fan` including endpoint-suffixed properties, and must have `access & 2` (settable).
+- **Binary.** The value must be `value_on`, `value_off` or `value_toggle`.
+- **Numeric.** A JSON number within `value_min`..`value_max` and on `value_step`.
+- **Enum.** One of `values`.
+- **Composite.** Every settable part is given and valid, and nothing else is.
+- **Refusals** are 400 with a reason: `unknown_property`, `not_settable`, `unsupported_feature` (text or list), `value`, or `not_toggleable`.
+- **Toggle** is allowed on binary features only. It is resolved **server-side** into the explicit opposite of the last reported value (`z2m_devices.state`, updated from every state report). A toggle with no known value is refused as 409 `state_unknown`. Aether never publishes `TOGGLE`, so a duplicate delivery changes nothing.
+
+**Lifecycle** (`core.device_commands`, a transactional outbox):
+1. `pending`: the row is inserted in the member's own transaction under RLS (project scope) with `expires_at = now + 10 s`, and the action is audited (`device.command`).
+2. `sent`: `mqtt-commander` claims it (`FOR UPDATE SKIP LOCKED`), **commits**, and then publishes `{"<property>": <value>}` to `aether/z2m/<gateway>/<ieee>/set` (QoS 1, not retained). A crash between the two loses the publish and never repeats it. `sent_at` is set when the broker accepted the publish. Publishing is paced per gateway at 5/s with bursts of 10: the commander claims from a gateway only what its bucket allows at that moment and never waits. The rest stays pending for the next sweep and still expires on time, so one busy gateway delays no other.
+3. `confirmed`: the collector, in the same transaction as the device's next state report that carries the property with the desired value, marks it confirmed. Numbers match within `max(value_step, 1 % of the range)`; composites compare the parts that were sent. Switch events caused by it carry `source: "command"` and `command_id`; changes on the wall stay `source: "external"`.
+4. `timeout` if no such report arrives within 10 s. A matching report within 60 s after that still confirms it (the row notes "confirmed after the timeout"). That does not happen if the property was reported with another value in between, for example a press on the wall: the command is then `superseded` and stays `timeout`. A late confirmation never names itself in the switch event, which stays `external`. `expired` if it was never claimed before `expires_at` (never published). `failed` if the broker refused the publish.
+
+**Refused before queueing** (409 with a reason):
+- `offline`: availability says offline, the bridge is offline, or the stream is offline
+- `in_flight`: a command for the same device and property is still pending or sent (also enforced by a partial unique index)
+- `not_paired`: the device left `bridge/devices`
+- `gateway_unavailable`: the gateway is revoked or is not a Zigbee2MQTT gateway
+- `idempotency_key_reused`: the same key was sent with a different request
+
+Also refused:
+- 429 `rate_limited`: the workspace has queued 60 commands in the last minute, or the member has sent 20 in the last minute. The workspace count is taken across all projects (`core.command_count_since`, a definer function), so members of different projects share one budget.
+- 404: the device is outside the member's projects
+
+**Who may command:**
+- Owner, admin and operator may, within their projects. Viewers never may.
+- The access module **`control`** lets an owner restrict a member to read-only (`/members/:id/access {"control":"read"}`).
+- The rule is checked twice: by the HTTP access gate and again inside the command service, so it holds whatever route reaches the service.
+- The access gate normalises the path it classifies (case, duplicate and trailing slashes), and the router is case-sensitive. `/API/v1/Commands` cannot slip past a closed module; this applies to every module.
+- `GET /devices/:id/controls` reports `can_command` accordingly, and the UI hides the buttons.
+- A plain set never accepts `value_toggle`; a toggle must be requested as `action: "toggle"`.
+
+**Services and ACL:**
+- `mqtt-commander` is its own container.
+- Its broker account `aether-commander` has exactly `topic write aether/z2m/+/+/set`. It has no read and no subscription, and cannot publish `bridge/request/*`, so it can never permit joins or remove devices.
+- It connects with a clean session. It wakes on `NOTIFY aether_command` and polls every 2 s as a fallback.
+
 ## Not in this phase
 
-Switching outputs from Aether (the downlink), the command outbox, the `mqtt-commander` service and automation actions are phase 2/3. The profile is marked `Actuator` already, but no command path exists.
+- Automation actions (phase 3).
+- Generic ingest of every exposed property into Aether metrics and events, and importing the full device catalog; the stored `exposes` is the base for both.
 
 ## Testing without hardware
+
+- Commands: the simulator's bridge (`simulation.FakeBridge`) also contains a Philips colour bulb, a Tuya TS130F curtain, a Yale lock and a Tuya thermostat with realistic exposes, subscribes to its own `…/+/set`, applies each command and publishes the new state. `SIMULATOR_DROP_COMMANDS=true` makes it ignore commands (watch them time out). Tests: `internal/adapters/zigbee2mqtt/features_test.go` (validation, toggle, tolerance), `internal/commander` (at-most-once dispatch, pacing), `tests/commands_test.go` (the full loop through the FakeBridge, lifecycle, permissions).
 
 - `SIMULATOR_KIT=z2m`, with the simulator's `topic` set to the gateway's base topic, publishes a virtual bridge: TS0011, TS0012 and TS0014 plus one unsupported device. Gang 1 of the first switch is "pressed" every 20 steps.
 - `go run ./cmd/simulator sample-z2m <step> [base_topic]` prints the messages of one step.

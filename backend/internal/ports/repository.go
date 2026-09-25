@@ -2,6 +2,7 @@ package ports
 
 import (
 	"aether/backend/internal/adapters/minew"
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/automation"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/signals"
@@ -66,6 +67,7 @@ type Repository interface {
 	EnrollMQTT(context.Context, domain.Principal, string, string, bool) error
 	MQTTStates(context.Context, domain.Principal) ([]domain.MQTTState, error)
 	MQTTGatewayTenant(context.Context, string) (string, error)
+	GatewayModel(context.Context, domain.Principal, string) (string, error)
 	BLEHistory(context.Context, domain.Principal, string, string, time.Time) ([]studio.Observation, error)
 	StudioList(context.Context, domain.Principal, string) ([]studio.Item, error)
 	StudioGet(context.Context, domain.Principal, string) (studio.Item, error)
@@ -96,6 +98,7 @@ type Repository interface {
 	RestoreDevice(context.Context, domain.Principal, string) error
 	DeviceState(context.Context, domain.Principal, string) (domain.State, error)
 	CapturePacket(context.Context, string, string, json.RawMessage) (string, error)
+	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
 	ListPackets(context.Context, domain.Principal, string) ([]domain.Packet, error)
 	StoreTelemetry(context.Context, string, string, string, time.Time, map[string]float64) (domain.TelemetryEvent, error)
 

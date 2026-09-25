@@ -45,6 +45,8 @@ export type DeviceEntity = {
   registrations: Device[];
   /** Wearable followed across gateways (any registration has roaming on). */
   roaming: boolean;
+  /** Zigbee2MQTT devices report their own availability: true/false once reported, null for BLE (silence-based). */
+  reportedOffline: boolean | null;
 };
 
 export type Topology = {
@@ -101,7 +103,7 @@ export function buildTopology(s: Snapshot, serverTime = s.serverTime): Topology 
     const key = external.toLowerCase();
     let d = devices.get(key);
     if (!d) {
-      d = { external: key, name: "", simulated: false, kind: null, model: null, events: [], log: [], heard: [], reading: null, templateId: null, registrations: [], roaming: false };
+      d = { external: key, name: "", simulated: false, kind: null, model: null, events: [], log: [], heard: [], reading: null, templateId: null, registrations: [], roaming: false, reportedOffline: null };
       devices.set(key, d);
     }
     return d;
@@ -127,6 +129,7 @@ export function buildTopology(s: Snapshot, serverTime = s.serverTime): Topology 
       }
       if (sensor.model ?? sensor.latest.model) d.model = sensor.model ?? sensor.latest.model ?? null;
       if (sensor.template_id) d.templateId = sensor.template_id;
+      if (sensor.liveness === "reported") d.reportedOffline = !!sensor.offline;
       const link = d.heard.find((h) => h.gatewayId === g.gateway.id);
       const heard: HeardLink = { gatewayId: g.gateway.id, rssi: sensor.latest.rssi, receivedAt: sensor.latest.received_at, decoded: true };
       if (link) Object.assign(link, heard);

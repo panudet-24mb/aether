@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"aether/backend/internal/domain"
+	"aether/backend/internal/security"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -118,6 +121,18 @@ func tenantLimit(tx *gorm.DB, column string) (int64, error) {
 		return 0, domain.ErrNotFound
 	}
 	return rows[0].N, nil
+}
+
+// dataError maps a PostgreSQL data exception (SQLSTATE class 22: invalid text such as NUL, bad jsonb, numeric
+// out of range, …) to domain.ErrInvalid. Ingest treats ErrInvalid as permanent and acknowledges the message; any
+// other error is retried and finally not acknowledged, so a poison message would be redelivered forever and stall
+// the ordered collector for every tenant.
+func dataError(e error) error {
+	var pg *pgconn.PgError
+	if errors.As(e, &pg) && strings.HasPrefix(pg.Code, "22") {
+		return domain.ErrInvalid
+	}
+	return e
 }
 
 func classify(e error) error {
@@ -398,6 +413,9 @@ func (r *Repository) CreateDevice(ctx context.Context, p domain.Principal, d dom
 		} else if n >= limit {
 			return domain.ErrConflict
 		}
+		if e := profileFitsGateway(tx, d.ProfileID, d.GatewayID); e != nil {
+			return e
+		}
 		res := tx.Exec(`INSERT INTO core.devices(id,tenant_id,gateway_id,name,external_id,profile_id) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM core.gateways WHERE id=? AND revoked_at IS NULL)`, d.ID, p.TenantID, d.GatewayID, d.Name, d.ExternalID, d.ProfileID, d.GatewayID)
 		if res.Error != nil {
 			return res.Error
@@ -411,6 +429,19 @@ func (r *Repository) CreateDevice(ctx context.Context, p domain.Principal, d dom
 		return audit(tx, p, "device.created", d.ID)
 	})
 	return classify(e)
+}
+
+// profileFitsGateway refuses a registration whose radio the gateway cannot hear: a Zigbee switch under a BLE
+// gateway, or a BLE tag under a Zigbee2MQTT coordinator. An unknown gateway is left to the caller's own check.
+func profileFitsGateway(tx *gorm.DB, profile, gateway string) error {
+	var model []string
+	if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=?`, gateway).Scan(&model).Error; e != nil {
+		return e
+	}
+	if len(model) == 1 && !domain.ProfileAllowedOn(profile, model[0]) {
+		return domain.ErrInvalid
+	}
+	return nil
 }
 func (r *Repository) ListDevices(ctx context.Context, p domain.Principal) ([]domain.Device, error) {
 	out := []domain.Device{}
@@ -479,7 +510,7 @@ func (r *Repository) CapturePacket(ctx context.Context, tenant, gateway string, 
 				return e
 			}
 		}
-		if e := saveSamples(tx, tenant, gateway, view, payload, now, r.opts); e != nil {
+		if e := saveSamples(tx, tenant, gateway, view, security.Digest(string(payload)), now, r.opts); e != nil {
 			return e
 		}
 		// Alerting must never cost telemetry: a failure here rolls back only the alert work, not the packet.
@@ -497,7 +528,7 @@ func (r *Repository) CapturePacket(ctx context.Context, tenant, gateway string, 
 		}
 		return tx.Exec(`DELETE FROM core.gateway_packets WHERE gateway_id=? AND id IN (SELECT id FROM core.gateway_packets WHERE gateway_id=? ORDER BY received_at DESC,id DESC OFFSET 100)`, gateway, gateway).Error
 	})
-	return id, e
+	return id, dataError(e)
 }
 func (r *Repository) ListPackets(ctx context.Context, p domain.Principal, gateway string) ([]domain.Packet, error) {
 	out := []domain.Packet{}
@@ -590,6 +621,9 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 			}
 			if n != 1 {
 				return domain.ErrNotFound
+			}
+			if e := profileFitsGateway(tx, d.ProfileID, *gateway); e != nil {
+				return e
 			}
 			d.GatewayID = *gateway
 			action = "device.moved"

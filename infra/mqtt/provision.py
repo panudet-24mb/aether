@@ -57,7 +57,7 @@ require_certificate false
 persistence true
 persistence_location /mosquitto/data/
 autosave_interval 30
-max_packet_size 262144
+max_packet_size 1048576
 max_queued_messages 1000
 max_queued_bytes 16777216
 max_inflight_messages 20

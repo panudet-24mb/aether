@@ -5,7 +5,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import "../topology/topology.css";
 import "./overview.css";
 import { ApiError, createClientFrom, type DeviceEventRow, type LiveSensor, type Reading, type Snapshot } from "../topology/api";
-import { deviceProfile, formatMAC, suggestProfile } from "../topology/catalog";
+import { deviceProfile, formatMAC, suggestProfile, switchGangs } from "../topology/catalog";
 import { PROJECT_COLORS } from "../topology/projects";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
@@ -30,11 +30,13 @@ type Card = {
   /** Smart office (MOS kit): set for PIR occupancy sensors and door sensors respectively. */
   occupancy?: Occupancy;
   door?: DoorState;
+  /** Zigbee2MQTT devices report their own availability; when set it decides online/offline instead of freshness. */
+  reportedOffline?: boolean;
 };
 export type OverviewTarget = "alerts" | "connect" | "assets" | "floorplan" | "studio";
 
 const FRESH_MS = 60000, STALE_MS = 15 * 60000, LOW_BATTERY = 20;
-const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์" };
+const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์", switch: "สวิตช์ไฟ" };
 const KIND_ICON: Record<string, typeof Thermometer> = { occupancy: PersonStanding, door: DoorOpen, environment: Thermometer, motion: Move, tamper: ShieldAlert, beacon: Bluetooth, leak: Droplets };
 const EVENT_LABEL: Record<string, string> = { tamper: "ป้ายถูกถอด", tamper_cleared: "tamper กลับสู่ปกติ", button: "กดปุ่ม", leak: "พบน้ำรั่ว", leak_cleared: "น้ำรั่วหาย", motion: "เริ่มเคลื่อนไหว", motion_stopped: "หยุดเคลื่อนไหว", offline: "ขาดการติดต่อ", online: "กลับมาออนไลน์", threshold: "ค่าเกินเกณฑ์", threshold_cleared: "ค่ากลับเข้าเกณฑ์", zone: "เข้าโซนใหม่", automation: "ออโตเมชันทำงาน", door_open: "เปิดประตู", door_closed: "ปิดประตู", occupied: "มีคนในพื้นที่", vacant: "ไม่มีคนแล้ว" };
 const EVENT_TONE: Record<string, string> = { tamper: "bad", button: "bad", leak: "bad", offline: "bad", threshold: "warn", motion: "warn", zone: "info", door_open: "info", occupied: "info" };
@@ -172,7 +174,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
         cards.set(ext, {
           profileId: reg.profile_id, key: ext, external: ext, name: reg?.name ?? sensor.name, kind, model: profile ? `${profile.brand} ${profile.model}` : (sensor.model ?? ""), image: profile?.image ?? null,
           registered: !!reg, wearable: !!reg?.roaming || !!profile?.wearable, gatewayId: home, gatewayName: gatewayBy.get(home)?.name ?? g.gateway.name, projectId: gatewayBy.get(home)?.project_id ?? null,
-          zone: reg?.roaming ? (gatewayBy.get(reg.zone_gateway_id ?? "")?.name ?? null) : null, status: "online", reasons: [], reading: merged, history: sensor.history, thresholds: sensor.thresholds, templateId: sensor.template_id, simulated: sensor.latest.source === "simulated", sos: false, samples: [...sensor.history, sensor.latest],
+          zone: reg?.roaming ? (gatewayBy.get(reg.zone_gateway_id ?? "")?.name ?? null) : null, status: "online", reasons: [], reading: merged, history: sensor.history, thresholds: sensor.thresholds, templateId: sensor.template_id, simulated: sensor.latest.source === "simulated", sos: false, samples: [...sensor.history, sensor.latest], reportedOffline: sensor.liveness === "reported" ? !!sensor.offline : undefined,
         });
       }
     }
@@ -185,7 +187,10 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
     }
     for (const c of cards.values()) {
       const r = c.reading, m = (r?.metrics ?? {}) as Record<string, number>, age = r ? now - Date.parse(r.received_at) : Infinity;
-      if (age > STALE_MS) { c.status = "offline"; if (r) c.reasons.push(`เงียบมา ${ago(r.received_at, now)}`); }
+      // A wall switch is silent until someone flips it: Zigbee2MQTT's availability report, not the age of the last
+      // state, says whether it is reachable.
+      if (c.reportedOffline !== undefined) { if (c.reportedOffline) { c.status = "offline"; c.reasons.push("Zigbee2MQTT รายงานว่าขาดการติดต่อ"); } }
+      else if (age > STALE_MS) { c.status = "offline"; if (r) c.reasons.push(`เงียบมา ${ago(r.received_at, now)}`); }
       else if (age > FRESH_MS) { c.status = "stale"; c.reasons.push(`ข้อมูลล่าสุด ${ago(r!.received_at, now)} ที่แล้ว`); }
       const events = eventsBy.get(c.external) ?? [];
       if (c.kind === "occupancy") c.occupancy = occupancyOf(c.samples, events, now);
@@ -270,6 +275,11 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
     if (c.kind === "environment") {
       const comfort = comfortOf(r?.temperature, r?.humidity);
       return <span className="ov-value">{number(r?.temperature, 1)}<small>°C</small> <em>{number(r?.humidity)}<small>%</small></em>{comfort && c.status !== "offline" && <b className={`ov-comfort ${comfort.ok ? "is-ok" : "is-off"}`} title={COMFORT_NOTE}>{comfort.label}</b>}</span>;
+    }
+    if (c.kind === "switch") {
+      const gangs = switchGangs(m);
+      if (c.status === "offline" || !gangs.length) return <span className="ov-value is-muted">{c.status === "offline" ? "ขาดการติดต่อ" : "รอสถานะ"}</span>;
+      return <span className="ov-value">{gangs.filter(([, on]) => on).length}<small>/{gangs.length} ช่องเปิด</small> <em className="is-plain">{gangs.map(([gang, on]) => `${gang}:${on ? "เปิด" : "ปิด"}`).join(" ")}</em></span>;
     }
     if (c.kind === "tamper") return <span className={`ov-value ${m.tamper === 1 ? "is-bad" : ""}`}>{m.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</span>;
     if (c.kind === "leak") return <span className={`ov-value ${m.leak === 1 ? "is-bad" : ""}`}>{m.leak === 1 ? "น้ำรั่ว" : "แห้ง"}</span>;
@@ -422,8 +432,13 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                   {opened.door && <><div className={opened.door.leftOpen ? "is-warn" : ""}><strong>{doorText(opened.door, now)}</strong>สถานะประตู</div><div><strong>{opened.door.countPartial ? "≥ " : ""}{opened.door.openCountToday} ครั้ง</strong>เปิดวันนี้</div>{opened.reading?.metrics?.door_open_count != null && <div><strong>{opened.reading.metrics.door_open_count} ครั้ง</strong>ตัวนับเปิดของอุปกรณ์</div>}</>}
                   {(opened.kind === "environment" || (opened.kind === "occupancy" && Number.isFinite(opened.reading?.temperature))) && <><div><strong>{number(opened.reading?.temperature, 1)} °C</strong>อุณหภูมิ</div><div><strong>{number(opened.reading?.humidity)} %</strong>ความชื้น</div></>}
                   {openedComfort && <div className={openedComfort.ok ? "is-ok" : "is-warn"} title={COMFORT_NOTE}><strong>{openedComfort.label}</strong>ความสบาย</div>}
+                  {opened.kind === "switch" ? <>
+                    {switchGangs(opened.reading?.metrics).map(([gang, on]) => <div key={gang} className={on ? "is-ok" : ""}><strong>{on ? "เปิด" : "ปิด"}</strong>ช่อง {gang}</div>)}
+                    <div><strong>{opened.reading?.metrics?.linkquality ?? "—"}</strong>สัญญาณ Zigbee (LQI)</div>
+                  </> : <>
                   <div><strong>{number(opened.reading?.battery)}%</strong>แบตเตอรี่</div>
                   <div><strong>{opened.reading?.rssi ?? "—"} dBm</strong>RSSI</div>
+                  </>}
                   {deviceProfile(opened.profileId ?? "")?.kinds?.includes("motion") && !opened.occupancy && <div><strong>{number(opened.reading?.metrics?.accel_g, 2)} g</strong>ความเร่ง</div>}
                   {opened.kind === "tamper" && <div><strong>{opened.reading?.metrics?.tamper == null ? "—" : opened.reading.metrics.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</strong>สถานะกันถอด</div>}
                   {deviceProfile(opened.profileId ?? "")?.model === "B10" && <div><strong>{(snapshot?.events ?? []).filter((e) => e.external_id.toLowerCase() === opened.external && e.event_type === "button").map((e) => new Date(e.occurred_at).toLocaleTimeString("th-TH"))[0] ?? "ยังไม่พบเหตุการณ์"}</strong>กดปุ่มล่าสุด</div>}

@@ -22,7 +22,7 @@ export type Beacon = { type: "ibeacon" | "eddystone_uid" | "eddystone_tlm"; uuid
 export type Reading = {
   source?: string;
   received_at: string;
-  /** environment | motion | tamper | leak | light | beacon | info; missing on samples stored before multi-frame decoding (= environment). */
+  /** environment | motion | tamper | leak | light | beacon | info | switch; missing on samples stored before multi-frame decoding (= environment). */
   kind?: string;
   model?: string;
   frames?: string[];
@@ -33,7 +33,7 @@ export type Reading = {
   metrics?: Record<string, number>;
   beacon?: Beacon;
 };
-export type LiveSensor = { id: string; name: string; kind?: string; model?: string; template_id?: string | null; latest: Reading; history: Reading[] };
+export type LiveSensor = { id: string; name: string; kind?: string; model?: string; template_id?: string | null; latest: Reading; history: Reading[]; /** "reported": online/offline come from the device's availability reports (Zigbee2MQTT), not from silence. */ liveness?: "reported"; offline?: boolean };
 export type LiveGateway = { gateway: Gateway; last_packet_at: string | null; packet_count: number; observation_count: number; nearby_devices: number; sensors: LiveSensor[] };
 export type Live = { gateways: LiveGateway[]; server_time: string; deployment_mode: string };
 export type MQTTSettings = { host: string; port: number; scheme: string; tls: boolean; qos: number; keep_alive: number; /** Present only when the server opted in to an unencrypted listener for gateways without TLS. */ plaintext?: { port: number; scheme: string } };
@@ -42,9 +42,14 @@ export type MQTTCredentials = MQTTSettings & {
   username: string;
   password: string;
   client_id: string;
-  post_topic: string;
-  subscribe_topic: string;
-  reply_topic: string;
+  /** Minew-style gateways: the three fixed topics. */
+  post_topic?: string;
+  subscribe_topic?: string;
+  reply_topic?: string;
+  /** Zigbee2MQTT gateways: the base topic, the server URL and a ready-made configuration.yaml mqtt section. */
+  base_topic?: string;
+  server?: string;
+  z2m_yaml?: string;
 };
 export type GatewayCreated = { gateway: Gateway; token: string; capture_path: string };
 export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string };

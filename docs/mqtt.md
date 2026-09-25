@@ -55,6 +55,17 @@ The second command performs a clearly marked synthetic test: trusted TLS connect
 ## Security and delivery behavior
 
 - Anonymous access disabled. Gateway account may publish only its status/response and read only its action topic. Collector may read only this gateway's status; it has no command publish access.
+
+Runtime ACL rendered by `mqtt-provisioner` per gateway model (2026-09-23):
+
+| Account | Access | Topics |
+|---|---|---|
+| `gw-<id>` (Minew-style gateway) | write | `/aether/gateways/<id>/status`, `/aether/gateways/<id>/response` |
+| | read | `/aether/gateways/<id>/action` |
+| `gw-<id>` (Zigbee2MQTT gateway) | readwrite | `aether/z2m/<id>/#` (Zigbee2MQTT subscribes to its own `base_topic/#`, so a narrower read rule would make its SUBSCRIBE fail; it still cannot reach another gateway's tree or `/aether/gateways/...`) |
+| `aether-ingest` (collector) | read | `/aether/gateways/+/status`, `aether/z2m/+/#` |
+
+See `docs/platform/zigbee2mqtt.md` for the Zigbee topic tree.
 - Collector validates the broker CA/hostname and requires TLS 1.2 or newer. Broker has packet, queue, connection and memory bounds, persistent volume, plaintext only via explicit dev opt-in, non-root UID and dropped capabilities.
 - Exact topic-to-gateway mapping is server-owned. Each message revalidates the registered gateway credential and tenant activity through the existing backend before a tenant-scoped database transaction. Payload tenant IDs are never used for routing.
 - Backend gateway revocation immediately prevents storage of new packets. **Broker login revocation is separate:** remove its broker password/ACL and restart the broker to disconnect existing sessions. Static broker credentials are not automatically synchronized to the database.

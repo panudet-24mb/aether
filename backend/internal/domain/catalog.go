@@ -24,7 +24,7 @@ type DeviceProfile struct {
 	Brand       string   `json:"brand"`
 	Model       string   `json:"model"`
 	Label       string   `json:"label"`
-	Radio       string   `json:"radio"` // ble | any
+	Radio       string   `json:"radio"` // ble | zigbee | any
 	Description string   `json:"description"`
 	Image       string   `json:"image,omitempty"`
 	Kinds       []string `json:"kinds"`   // reading kinds the device is expected to produce
@@ -42,9 +42,18 @@ type DeviceProfile struct {
 	// Occupancy marks PIR sensors whose `motion` metric drives occupied / vacant (see alerts.OccupancyHoldSec).
 	Occupancy bool `json:"occupancy,omitempty"`
 	// Door marks door/window contact sensors whose state is the `door` metric (1 = open, 0 = closed).
-	Door  bool   `json:"door,omitempty"`
-	Notes string `json:"notes,omitempty"`
+	Door bool `json:"door,omitempty"`
+	// Gangs is the number of switch outputs the largest variant of this profile has (1..4); 0 for sensors.
+	Gangs int `json:"gangs,omitempty"`
+	// Actuator marks devices Aether may (in a later phase) switch; today their state is only displayed.
+	Actuator bool `json:"actuator,omitempty"`
+	// Z2MModels are the Zigbee2MQTT `definition.model` values this profile covers.
+	Z2MModels []string `json:"z2m_models,omitempty"`
+	Notes     string   `json:"notes,omitempty"`
 }
+
+// Z2MGatewayModel is the gateway model whose MQTT account publishes a Zigbee2MQTT topic tree.
+const Z2MGatewayModel = "zigbee2mqtt"
 
 // ButtonProfileIDs lists the profiles whose tags may raise a button event.
 func ButtonProfileIDs() []string {
@@ -64,6 +73,10 @@ var GatewayModels = []GatewayModel{
 	// timestamps (server time only) and parses every row on its own, so both are harmless. Not yet verified with
 	// a captured MG4 uplink.
 	{ID: "minew-mg4", Brand: "Minew", Model: "MG4", Label: "Minew MG4 · Rechargeable gateway", Transport: "mqtt", Description: "Rechargeable BLE → Wi‑Fi gateway (ชุด MOS smart office) · ส่ง BLE advertisement เข้า Aether ผ่าน MQTT แบบ JSON-Long · อัปโหลดทาง HTTP ก็ได้โดยใช้เส้นทาง Generic HTTP (POST /ingest/gateways/<id>/packets + HTTP Basic) · ยังไม่ยืนยันกับเครื่องจริง", Logo: "/brands/minew.png", Image: "/devices/minew-mg4.png", Verified: false},
+	// Zigbee2MQTT on a local host next to a Zigbee coordinator (e.g. SMLIGHT SLZB-06M). It connects out to this
+	// broker over TLS with a per-gateway account and publishes under aether/z2m/<gateway id>. Not yet verified
+	// with a captured bridge/devices payload from real hardware.
+	{ID: Z2MGatewayModel, Brand: "Zigbee2MQTT", Model: "Zigbee coordinator", Label: "Zigbee2MQTT", Transport: "mqtt", Description: "Zigbee coordinator (เช่น SLZB-06M) + Zigbee2MQTT บนเครื่องในอาคาร · ส่งสถานะอุปกรณ์ Zigbee เข้า Aether ผ่าน MQTT over TLS · ไม่ใช้ Tuya cloud · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
 	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Image: "/devices/generic-http-gateway.png", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
 }
 
@@ -90,6 +103,12 @@ var DeviceProfiles = []DeviceProfile{
 	{ID: "minew-s4-pending@1", Image: "/devices/minew-s4.png", Brand: "Minew", Model: "S4", Label: "Minew S4 · Door sensor", Radio: "ble", Kinds: []string{"door"}, Metrics: []string{"door (open / closed)", "battery"}, Verified: false, InfoName: "S4", Door: true,
 		Description: "เซนเซอร์ประตูแม่เหล็ก · รูปแบบเฟรมยังไม่มีเอกสารสาธารณะ Aether จึงไม่ถอดรหัสเอง · สถานะเปิด/ปิดมาจากการ \"สอนสัญญาณ\" (เปิด–ปิดประตูให้ระบบเรียนรู้) · ยังไม่ยืนยันกับเครื่องจริง",
 		Notes:       "เฟรมที่ไม่รู้จักแสดงใน unknown ของ reading · สอนสัญญาณ door ก่อนใช้งาน"},
+	// Tuya no-neutral touch wall switches as Zigbee2MQTT exposes them: TS0011 `state`, TS0012 `state_left/right`,
+	// TS0013 `state_left/center/right`, TS0014 `state_l1..l4` (zigbee2mqtt.io/devices/TS001*.html). TS0601 is a
+	// catch-all Tuya model id, so it only matches when its exposes actually contain switch outputs.
+	{ID: "tuya-ts001x-switch@1", Brand: "Tuya", Model: "TS001x", Label: "Tuya Zigbee wall switch · 1–4 ช่อง", Radio: "zigbee", Kinds: []string{"switch"}, Metrics: []string{"สถานะเปิด/ปิดแต่ละช่อง", "linkquality"}, Verified: false, Gangs: 4, Actuator: true,
+		Z2MModels:   []string{"TS0011", "TS0012", "TS0013", "TS0014", "TS0601"},
+		Description: "สวิตช์ผนังแบบสัมผัส ไม่ใช้สายกลาง ผ่าน Zigbee2MQTT · แสดงสถานะเปิด/ปิดแต่ละช่องและการกดที่ผนัง · ยังสั่งเปิด/ปิดจาก Aether ไม่ได้ในเฟสนี้ · ยังไม่ยืนยันกับเครื่องจริง"},
 	{ID: "generic-ble-beacon@1", Image: "/devices/generic-ble-beacon.png", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
 		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
 	{ID: "generic-environment@1", Image: "/devices/generic-environment.png", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
@@ -128,4 +147,30 @@ func (p DeviceProfile) MatchesInfo(name string) bool {
 		}
 	}
 	return false
+}
+
+// MatchesZ2M reports whether a Zigbee2MQTT definition model identifies this profile. TS0601 is Tuya's generic
+// data-point model id, so it only counts when the device's exposes show switch outputs (hasSwitch).
+func (p DeviceProfile) MatchesZ2M(model string, hasSwitch bool) bool {
+	for _, m := range p.Z2MModels {
+		if strings.EqualFold(m, model) {
+			return !strings.EqualFold(m, "TS0601") || hasSwitch
+		}
+	}
+	return false
+}
+
+// ProfileAllowedOn reports whether a device of this profile can be registered under a gateway of this model:
+// Zigbee profiles only on a Zigbee2MQTT gateway, and nothing but Zigbee profiles there. A profile id that is no
+// longer in the catalog (a registration made before a catalog change) counts as non-Zigbee, so an existing BLE
+// device can still be moved between BLE gateways; gateways whose model left the catalog accept non-Zigbee ones.
+func ProfileAllowedOn(profileID, gatewayModel string) bool {
+	zigbee := false
+	if p := DeviceProfileByID(profileID); p != nil {
+		zigbee = p.Radio == "zigbee"
+	}
+	if gatewayModel == Z2MGatewayModel {
+		return zigbee
+	}
+	return !zigbee
 }

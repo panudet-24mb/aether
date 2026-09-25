@@ -1,0 +1,28 @@
+[
+  {"ieee_address":"0x00124b002d1a2b3c","type":"Coordinator","network_address":0,"supported":true,"disabled":false,"definition":null,"friendly_name":"Coordinator","interview_completed":true,"interviewing":false},
+  {"ieee_address":"0xA4C138F0E1D2C3B4","type":"EndDevice","network_address":31337,"supported":true,"disabled":false,"friendly_name":"ห้องประชุม/ไฟ","model_id":"TS0012","manufacturer":"_TZ3000_fvh3pjaz","power_source":"Mains (single phase)","interview_completed":true,"interviewing":false,
+   "definition":{"model":"TS0012","vendor":"Tuya","description":"Smart light switch - 2 gang","supports_ota":false,"options":[],
+    "exposes":[
+     {"type":"switch","endpoint":"left","features":[{"type":"binary","name":"state","label":"State","property":"state_left","access":7,"value_on":"ON","value_off":"OFF","value_toggle":"TOGGLE","endpoint":"left","description":"On/off state of the switch"}]},
+     {"type":"switch","endpoint":"right","features":[{"type":"binary","name":"state","label":"State","property":"state_right","access":7,"value_on":"ON","value_off":"OFF","value_toggle":"TOGGLE","endpoint":"right","description":"On/off state of the switch"}]},
+     {"type":"enum","name":"power_on_behavior","property":"power_on_behavior","access":7,"values":["off","previous","on"]},
+     {"type":"numeric","name":"linkquality","property":"linkquality","access":1,"unit":"lqi","value_min":0,"value_max":255}
+    ]}},
+  {"ieee_address":"0xa4c1380000000003","type":"EndDevice","network_address":4242,"supported":true,"disabled":false,"friendly_name":"0xa4c1380000000003","model_id":"TS0601","manufacturer":"_TZE200_tz32mtza","power_source":"Mains (single phase)","interview_completed":true,
+   "definition":{"model":"TS0601_switch_3_gang","vendor":"Tuya","description":"3 gang switch",
+    "exposes":[
+     {"type":"switch","endpoint":"l3","features":[{"type":"binary","name":"state","property":"state_l3","access":3,"value_on":"ON","value_off":"OFF","endpoint":"l3"}]},
+     {"type":"switch","endpoint":"l1","features":[{"type":"binary","name":"state","property":"state_l1","access":3,"value_on":"ON","value_off":"OFF","endpoint":"l1"}]},
+     {"type":"switch","endpoint":"l2","features":[{"type":"binary","name":"state","property":"state_l2","access":1,"value_on":"ON","value_off":"OFF","endpoint":"l2"}]},
+     {"type":"numeric","name":"linkquality","property":"linkquality","access":1}
+    ]}},
+  {"ieee_address":"0x00158d0001abcdef","type":"EndDevice","network_address":999,"supported":true,"disabled":false,"friendly_name":"ห้องเก็บของ","model_id":"lumi.weather","manufacturer":"LUMI","power_source":"Battery","interview_completed":true,
+   "definition":{"model":"WSDCGQ11LM","vendor":"Aqara","description":"Temperature, humidity and pressure sensor",
+    "exposes":[
+     {"type":"numeric","name":"temperature","property":"temperature","access":1,"unit":"°C"},
+     {"type":"numeric","name":"humidity","property":"humidity","access":1,"unit":"%"},
+     {"type":"numeric","name":"battery","property":"battery","access":1,"unit":"%"}
+    ]}},
+  {"ieee_address":"0x00158d00000000aa","type":"EndDevice","network_address":998,"supported":true,"disabled":true,"friendly_name":"disabled-one","model_id":"TS0011","definition":{"model":"TS0011","vendor":"Tuya","exposes":[]}},
+  {"ieee_address":"not-an-ieee","type":"EndDevice","friendly_name":"broken","supported":false,"definition":null}
+]

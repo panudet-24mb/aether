@@ -263,6 +263,15 @@ python3 infra/prod/setup.py --host aether.example.com \
 
 ฝั่ง nginx: `proxy_pass https://127.0.0.1:8443;` พร้อม `proxy_ssl_server_name on; proxy_ssl_name <host>;` ตรวจใบของ Caddy ด้วย root ที่ดึงจาก `proxy:/data/caddy/pki/authorities/local/root.crt`, ส่ง `Host $host`, **เขียนทับ** `X-Forwarded-For $remote_addr` (ไม่ append) และส่ง `Upgrade`/`Connection` สำหรับ `/ws`
 
+### 4.7 Zigbee2MQTT (สวิตช์ Zigbee ผ่าน coordinator ในอาคาร)
+
+ดูรายละเอียดทั้งหมดใน `docs/platform/zigbee2mqtt.md` ต้องใช้ **Zigbee2MQTT 2.x ขึ้นไป** และตอนอัปเกรดเครื่องที่ติดตั้งไว้แล้วต้องทำเพิ่มหนึ่งขั้น: broker ต้องรับ packet ขนาด 1 MiB (เดิม 256 KiB) ไม่อย่างนั้น `bridge/devices` ของเครือข่ายที่ใหญ่หน่อยจะถูก broker ตัดทิ้งและ Zigbee2MQTT จะหลุด
+
+```sh
+python3 infra/prod/setup.py <flag ชุดเดิมที่ใช้ติดตั้ง>
+docker compose --env-file .env.prod -f infra/prod/compose.yaml restart mqtt
+```
+
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 
 `setup.py` ตั้ง `ALERTS_SHADOW=true` ให้ตั้งแต่ต้น หมายความว่า: **บันทึก event ทุกอย่างลงฐานข้อมูลตามปกติ แต่ไม่เปิด alert ไม่ส่ง LINE/webhook/อีเมล และไม่รัน automation**

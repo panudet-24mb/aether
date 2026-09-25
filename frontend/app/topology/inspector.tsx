@@ -4,7 +4,7 @@ import { Activity, Battery, BellRing, Bluetooth, Check, Copy, DoorOpen, Download
 import DiscoveryList from "./discovery";
 import SignalPanel, { type LearnedSignal, type SignalClient } from "./signals";
 import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project } from "./api";
-import { deviceProfile, formatMAC, gatewayModel, suggestProfile } from "./catalog";
+import { deviceProfile, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
 import { HEALTH_LABEL } from "./nodes";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
 
@@ -122,6 +122,17 @@ function download(name: string, data: unknown) {
   setTimeout(() => URL.revokeObjectURL(url), 1000); // revoking synchronously can cancel the download
 }
 
+function downloadText(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/yaml" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function Secret({ label, value, onNotice }: { label: string; value: string; onNotice: (m: string) => void }) {
   const [visible, setVisible] = useState(false);
   return (
@@ -216,7 +227,17 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
   // Registered devices plus supported models waiting to be registered; raw MACs (phones, foreign beacons) stay out.
   const devices = topology.devices.filter((d) => d.registrations.some((r) => r.gateway_id === id) || (d.heard.some((h) => h.gatewayId === id) && p.discovery.some((x) => x.gateway_id === id && x.external_id === d.external)));
   const adopted = devices.filter((d) => d.registrations.some((r) => r.gateway_id === id));
-  const mqttFields: [string, string][] = settings
+  // A Zigbee2MQTT bridge is configured in its configuration.yaml, not in a gateway app: it needs the server URL
+  // and its base_topic instead of the three fixed Minew topics.
+  const z2m = g.gateway.model === Z2M_GATEWAY_MODEL;
+  const mqttFields: [string, string][] = settings && z2m
+    ? [
+        ["Server", `${settings.tls ? "mqtts" : "mqtt"}://${settings.host}:${settings.port}`],
+        ["base_topic", `aether/z2m/${id}`],
+        ["User", `gw-${id}`],
+        ["Client ID", `gw-${id}`],
+      ]
+    : settings
     ? [
         ["Server / Host", settings.host],
         ["Port", String(settings.port)],
@@ -271,8 +292,8 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         <ol className="topo-steps">
           <Step done={hasAccount} active={!hasAccount} label="1 · บัญชี MQTT" detail={hasAccount ? `revision ${g.state!.revision}` : "สร้างบัญชีเพื่อรับ username / password"} />
           <Step done={applied} active={hasAccount && !applied} label="2 · Broker รับบัญชี" detail={applied ? "provisioner ตั้งค่าแล้ว" : hasAccount ? "กำลังรอ provisioner…" : undefined} />
-          <Step done={!!g.lastPacketAt} active={applied && !g.lastPacketAt} label="3 · รับ packet แรก" detail={g.lastPacketAt ? `ล่าสุด ${new Date(g.lastPacketAt).toLocaleString("th-TH")}` : "นำค่าไปตั้งในแอป Gateway Config แล้วรอ"} />
-          <Step done={g.decodedSensors > 0} active={!!g.lastPacketAt && g.decodedSensors === 0} label="4 · ถอดรหัสอุปกรณ์" detail={`${g.decodedSensors} sensor · ${g.nearbyDevices} BLE ใกล้เคียง`} />
+          <Step done={!!g.lastPacketAt} active={applied && !g.lastPacketAt} label={z2m ? "3 · Zigbee2MQTT เชื่อมต่อ" : "3 · รับ packet แรก"} detail={g.lastPacketAt ? `ล่าสุด ${new Date(g.lastPacketAt).toLocaleString("th-TH")}` : z2m ? "ใส่ค่าใน configuration.yaml ของ Zigbee2MQTT แล้วรีสตาร์ต" : "นำค่าไปตั้งในแอป Gateway Config แล้วรอ"} />
+          <Step done={g.decodedSensors > 0} active={!!g.lastPacketAt && g.decodedSensors === 0} label={z2m ? "4 · อุปกรณ์ Zigbee รายงานสถานะ" : "4 · ถอดรหัสอุปกรณ์"} detail={z2m ? `${g.decodedSensors} อุปกรณ์ · pair อุปกรณ์ใน Zigbee2MQTT ก่อน` : `${g.decodedSensors} sensor · ${g.nearbyDevices} BLE ใกล้เคียง`} />
         </ol>
       ) : (
         <ol className="topo-steps">
@@ -293,6 +314,19 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
       {credentials && (
         <div className="topo-secret-box">
           <Secret label="MQTT password" value={credentials.password} onNotice={p.onNotice} />
+          {credentials.z2m_yaml && (
+            <>
+              <span className="topo-code-head">
+                ส่วน mqtt ของ configuration.yaml (Zigbee2MQTT) · มีรหัสผ่านอยู่ในนี้
+                <CopyButton value={credentials.z2m_yaml} label="configuration.yaml" onNotice={p.onNotice} />
+              </span>
+              <pre className="topo-code">{credentials.z2m_yaml}</pre>
+              <button type="button" className="topo-btn" onClick={() => downloadText(`zigbee2mqtt-${id}.yaml`, credentials.z2m_yaml!)}>
+                <Download size={15} /> ดาวน์โหลด configuration.yaml (ส่วน mqtt)
+              </button>
+              <small>คัดลอกไฟล์ CA ของ broker (ca.crt) ไปไว้ที่ /app/data/aether-ca.crt บนเครื่อง Zigbee2MQTT ด้วย · ต้องใช้ Zigbee2MQTT 2.x ขึ้นไป</small>
+            </>
+          )}
           <button type="button" className="topo-btn" onClick={() => download(`aether-gateway-${id}.json`, credentials)}>
             <Download size={15} /> ดาวน์โหลดค่าตั้งค่าและรหัสผ่าน
           </button>
@@ -314,13 +348,14 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
 
       {model?.transport === "mqtt" && hasAccount && (
         <>
-          <h3 className="topo-h3">ค่าสำหรับแอป Gateway Config</h3>
+          <h3 className="topo-h3">{z2m ? "ค่าสำหรับ Zigbee2MQTT" : "ค่าสำหรับแอป Gateway Config"}</h3>
           <dl className="topo-fields">
             {mqttFields.map(([k, v]) => (
               <Field key={k} label={k} value={v} onNotice={p.onNotice} />
             ))}
           </dl>
           {!credentials && <p className="topo-note">รหัสผ่านแสดงเฉพาะตอนสร้างบัญชี ใช้ไฟล์ที่ดาวน์โหลดไว้ หรือสร้างรหัสใหม่</p>}
+          {z2m && <p className="topo-note">ต้องใช้ Zigbee2MQTT 2.x ขึ้นไป และเปิด availability · ชื่ออุปกรณ์ (friendly name) ห้ามลงท้ายด้วย /set, /get หรือ /availability และห้ามมี /set/ หรือ /get/ อยู่ข้างใน เพราะ Aether จะอ่านเป็นคำสั่งหรือสถานะออนไลน์แทนสถานะอุปกรณ์</p>}
           {settings && !settings.tls && <p className="topo-note">โหมดพัฒนา: TCP ไม่มี SSL · gateway ต้องเข้าถึง server ผ่าน LAN นี้ได้</p>}
           <div className="topo-actions">
             <button type="button" className="topo-btn" disabled={busy} onClick={() => p.onRotate(id)}>
@@ -420,7 +455,9 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
   const profile = reg ? deviceProfile(reg.profile_id) : undefined;
   const suggested = !profile ? suggestProfile({ model: d.model, kind: d.kind, hasBeacon: !!d.reading?.beacon, hasPIR: d.reading?.metrics?.motion != null }) : undefined;
   const shown = profile ?? suggested;
-  const fresh = isFresh(d.reading?.received_at, topology.serverTime);
+  // A Zigbee switch only reports when it is switched: its own availability, not freshness, says whether it is online.
+  const fresh = d.reportedOffline != null ? !d.reportedOffline : isFresh(d.reading?.received_at, topology.serverTime);
+  const zigbee = d.external.startsWith("0x");
   const best = d.heard[0];
   const here = currentGateway(d, topology.serverTime);
   const gatewayName = (id: string) => topology.gateways.find((g) => g.gateway.id === id)?.gateway.name ?? id.slice(0, 8);
@@ -434,10 +471,10 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
     <>
       <header className="topo-inspector-head">
         <div>
-          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `Minew ${d.model}` : r ? `BLE · ${kind}` : "BLE"}</span>
+          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `${zigbee ? "Zigbee" : "Minew"} ${d.model}` : r ? `${zigbee ? "Zigbee" : "BLE"} · ${kind}` : zigbee ? "Zigbee" : "BLE"}</span>
           <h2>{d.name}</h2>
         </div>
-        <span className={`topo-chip ${reg ? (fresh ? "health-receiving" : "health-ready") : "health-none"}`}>{reg ? (fresh ? "online" : r ? "รอข้อมูลใหม่" : "ลงทะเบียนแล้ว") : "ยังไม่ adopt"}</span>
+        <span className={`topo-chip ${reg ? (fresh ? "health-receiving" : "health-ready") : "health-none"}`}>{reg ? (fresh ? "online" : d.reportedOffline ? "offline" : r ? "รอข้อมูลใหม่" : "ลงทะเบียนแล้ว") : "ยังไม่ adopt"}</span>
       </header>
 
       {learned.length > 0 && (
@@ -470,11 +507,11 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
       )}
 
       <dl className="topo-fields">
-        <Field label="รหัสอุปกรณ์ (MAC)" value={formatMAC(d.external)} onNotice={p.onNotice} />
+        <Field label={zigbee ? "IEEE address" : "รหัสอุปกรณ์ (MAC)"} value={formatMAC(d.external)} onNotice={p.onNotice} />
         {reg && <Field label="Profile" value={reg.profile_id} onNotice={p.onNotice} />}
         {d.model && (
           <div className="topo-field">
-            <dt>ชื่อจากเฟรม info</dt>
+            <dt>{zigbee ? "รุ่น (Zigbee2MQTT)" : "ชื่อจากเฟรม info"}</dt>
             <dd>
               <span>{d.model}</span>
             </dd>
@@ -519,6 +556,16 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
               {m.accel_g != null && <Tile icon={<Activity size={18} />} label="แรง (|a|)" value={m.accel_g.toFixed(2)} unit="g" />}
             </>
           )}
+          {kind === "switch" && (
+            <div className="topo-gangs" aria-label="สถานะสวิตช์แต่ละช่อง">
+              {switchGangs(m).map(([gang, on]) => (
+                <span key={gang} className={`topo-gang ${on ? "is-on" : ""}`}>
+                  ช่อง {gang} · {on ? "เปิด" : "ปิด"}
+                </span>
+              ))}
+            </div>
+          )}
+          {kind === "switch" && m.linkquality != null && <Tile icon={<Wifi size={18} />} label="สัญญาณ Zigbee (LQI)" value={m.linkquality} />}
           {kind === "tamper" && <Tile icon={<ShieldAlert size={18} />} label="Tamper" value={m.tamper === 1 ? "ถูกถอด" : "ปกติ"} />}
           {(kind === "door" || m.door != null) && <Tile icon={<DoorOpen size={18} />} label="ประตู" value={m.door == null ? "—" : m.door === 1 ? "เปิดอยู่" : "ปิดอยู่"} />}
           {m.door_open_count != null && <Tile icon={<DoorOpen size={18} />} label="เปิด (ตัวนับของอุปกรณ์)" value={m.door_open_count} unit="ครั้ง" />}

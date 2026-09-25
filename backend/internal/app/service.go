@@ -1,15 +1,18 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math"
 	"net/mail"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/ports"
 	"aether/backend/internal/security"
@@ -268,6 +271,39 @@ func (s *Service) Capture(ctx context.Context, tenant, gateway string, body []by
 		return "", domain.ErrInvalid
 	}
 	return s.Repo.CapturePacket(ctx, tenant, gateway, json.RawMessage(body))
+}
+
+// CaptureZ2M validates one Zigbee2MQTT message before it is stored. bridge/devices lists the whole network and
+// may be large (the broker accepts up to 1 MiB); every other message is a small device or bridge report.
+// Availability and bridge/state may be the legacy bare string, so only device state must be a JSON object.
+func (s *Service) CaptureZ2M(ctx context.Context, tenant, gateway string, m zigbee2mqtt.Message, body []byte) (string, error) {
+	limit := 64 * 1024
+	if m.Kind == zigbee2mqtt.BridgeDevices {
+		limit = zigbee2mqtt.MaxPacket
+		// A broker still on the old 256 KiB max_packet_size drops a document this large before it reaches us;
+		// say so while it still fits, so the operator re-renders mosquitto.conf in time.
+		if len(body) > 256*1024 {
+			slog.Warn("Zigbee2MQTT bridge/devices exceeds 256 KiB; the broker needs max_packet_size 1048576 (re-run setup.py, restart mqtt)", "gateway", gateway, "bytes", len(body))
+		}
+	}
+	if len(body) == 0 || len(body) > limit || !utf8.Valid(body) {
+		slog.Warn("Zigbee2MQTT message rejected: empty, not UTF-8 or over the size cap", "topic", m.Topic, "bytes", len(body), "cap", limit)
+		return "", domain.ErrInvalid
+	}
+	// PostgreSQL text and jsonb cannot hold NUL. Such a message would fail in the database on every redelivery,
+	// so it is rejected here as permanently invalid (acknowledged and dropped). This also refuses the six-character
+	// text \u0000 inside a string, which is harmless: no real Zigbee2MQTT report contains it.
+	if bytes.IndexByte(body, 0) >= 0 || bytes.Contains(body, []byte(`\u0000`)) {
+		slog.Warn("Zigbee2MQTT message rejected: contains NUL", "topic", m.Topic)
+		return "", domain.ErrInvalid
+	}
+	if m.Kind == zigbee2mqtt.State || m.Kind == zigbee2mqtt.BridgeDevices {
+		first := strings.TrimSpace(string(body))
+		if !json.Valid(body) || first == "" || (m.Kind == zigbee2mqtt.State && first[0] != '{') || (m.Kind == zigbee2mqtt.BridgeDevices && first[0] != '[') {
+			return "", domain.ErrInvalid
+		}
+	}
+	return s.Repo.CaptureZ2M(ctx, tenant, gateway, m, body)
 }
 func (s *Service) Ingest(ctx context.Context, tenant, gateway, device string, ts time.Time, metrics map[string]float64) (domain.TelemetryEvent, error) {
 	if !security.ValidID(device) || len(metrics) == 0 || len(metrics) > 3 || ts.IsZero() || ts.Before(time.Now().Add(-7*24*time.Hour)) || ts.After(time.Now().Add(time.Minute)) {

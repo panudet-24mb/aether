@@ -59,3 +59,18 @@ func (r *Repository) MQTTGatewayTenant(ctx context.Context, id string) (string, 
 	})
 	return tenant, e
 }
+
+// GatewayModel is the model of one active gateway the principal may see (project scope applies), or ErrNotFound.
+func (r *Repository) GatewayModel(ctx context.Context, p domain.Principal, id string) (string, error) {
+	var models []string
+	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		return tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL`, id).Scan(&models).Error
+	})
+	if e != nil {
+		return "", e
+	}
+	if len(models) != 1 {
+		return "", domain.ErrNotFound
+	}
+	return models[0], nil
+}

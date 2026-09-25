@@ -3,7 +3,6 @@ package postgres
 import (
 	"aether/backend/internal/adapters/minew"
 	"aether/backend/internal/domain"
-	"aether/backend/internal/security"
 	"context"
 	"encoding/json"
 	"gorm.io/gorm"
@@ -80,9 +79,10 @@ func environmentOnly(r minew.Reading) bool {
 	return true
 }
 
-// Called inside the packet transaction: raw storage, discovery and samples commit together.
-func saveSamples(tx *gorm.DB, tenant, gateway string, view minew.View, payload json.RawMessage, at time.Time, opts Options) error {
-	key := security.Digest(string(payload))
+// Called inside the packet transaction: raw storage, discovery and samples commit together. key is the
+// sample event key: a Minew uplink passes the digest of its payload, so a redelivered packet (QoS 1) is stored
+// once; a Zigbee2MQTT state message must not, because a switch legitimately repeats ON, OFF, ON.
+func saveSamples(tx *gorm.DB, tenant, gateway string, view minew.View, key string, at time.Time, opts Options) error {
 	for _, sensor := range view.Sensors {
 		// Bounded discovery. A registered device always gets its stream; strangers (visitor beacons, other
 		// vendors' tags) share a separate budget per gateway so they can never crowd the real fleet out.
@@ -149,8 +149,11 @@ func (r *Repository) StreamHistory(ctx context.Context, p domain.Principal, gate
 			Definition       json.RawMessage
 			Latest           json.RawMessage
 			History          json.RawMessage
+			Liveness         string
+			Offline          *bool
 		}
-		e := tx.Raw(`SELECT s.external_id,s.name,s.template_id,t.definition,
+		e := tx.Raw(`SELECT s.external_id,s.name,s.template_id,t.definition,s.liveness,
+    (SELECT st.offline FROM core.stream_state st WHERE st.tenant_id=s.tenant_id AND st.gateway_id=s.gateway_id AND st.external_id=s.external_id) AS offline,
     (SELECT reading FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id ORDER BY received_at DESC,event_key DESC LIMIT 1) AS latest,
     (SELECT coalesce(jsonb_agg(q.reading ORDER BY q.received_at),'[]'::jsonb) FROM
        (SELECT reading,received_at FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id AND received_at>=? ORDER BY received_at DESC,event_key DESC LIMIT ?) q) AS history
@@ -161,8 +164,18 @@ func (r *Repository) StreamHistory(ctx context.Context, p domain.Principal, gate
 		}
 		for _, row := range rows {
 			s := minew.Sensor{ID: row.ExternalID, Name: row.Name, History: []minew.Reading{}, TemplateID: row.TemplateID}
+			if len(row.Latest) == 0 || string(row.Latest) == "null" {
+				continue // a stream with no sample yet has nothing to show
+			}
 			if e := json.Unmarshal(row.Latest, &s.Latest); e != nil {
 				return e
+			}
+			if row.Liveness == "reported" {
+				s.Liveness = row.Liveness
+				s.Offline = row.Offline
+				if s.Offline == nil {
+					s.Offline = new(bool)
+				}
 			}
 			if e := json.Unmarshal(row.History, &s.History); e != nil {
 				return e

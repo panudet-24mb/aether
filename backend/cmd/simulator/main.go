@@ -64,14 +64,37 @@ func run() error {
 		fmt.Println(string(simulation.MOSPacket(step, time.Now().UTC())))
 		return nil
 	}
+	// "sample-z2m <step> [base_topic]" prints what the virtual Zigbee2MQTT bridge publishes at one step, one
+	// "<topic><TAB><payload>" line per message, so the Zigbee path can be replayed without a broker.
+	if len(os.Args) >= 2 && os.Args[1] == "sample-z2m" {
+		step, base := 0, simulation.Z2MSampleBase
+		if len(os.Args) >= 3 {
+			n, e := strconv.Atoi(os.Args[2])
+			if e != nil || n < 0 || n > 100000 {
+				return fmt.Errorf("sample step out of range")
+			}
+			step = n
+		}
+		if len(os.Args) == 4 {
+			base = os.Args[3]
+		}
+		for _, m := range simulation.Z2MMessages(base, step, step == 0) {
+			fmt.Printf("%s\t%s\n", m.Topic, m.Payload)
+		}
+		return nil
+	}
 	// SIMULATOR_KIT=mos publishes the MOS smart-office kit (MG4, S1, MSP01, C10, MBT01, S4) instead of the MHS kit.
 	packet, banner := simulation.Packet, "SIMULATION: virtual Minew MHS kit (4× S1-style sensors, C10, B7, B10, E8S, MBT01); no hardware commands"
+	z2m := false
 	switch os.Getenv("SIMULATOR_KIT") {
 	case "", "mhs":
 	case "mos":
 		packet, banner = simulation.MOSPacket, "SIMULATION: virtual Minew MOS kit via MG4 (S1, MSP01, C10, MBT01, S4 with a SYNTHETIC door frame); no hardware commands"
+	case "z2m":
+		// The config's topic is the gateway's Zigbee2MQTT base_topic (aether/z2m/<gateway id>).
+		z2m, banner = true, "SIMULATION: virtual Zigbee2MQTT bridge (Tuya TS0011, TS0012, TS0014 wall switches); gang 1 of the first switch is pressed every 20 steps"
 	default:
-		return fmt.Errorf("SIMULATOR_KIT must be mhs or mos")
+		return fmt.Errorf("SIMULATOR_KIT must be mhs, mos or z2m")
 	}
 	b, e := os.ReadFile(os.Getenv("SIMULATOR_CONFIG_FILE"))
 	if e != nil {
@@ -119,9 +142,18 @@ func run() error {
 	defer timer.Stop()
 	fmt.Println(banner)
 	for step := 0; ; step++ {
-		t := client.Publish(cfg.Topic, 1, false, packet(step, time.Now().UTC()))
-		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
-			return fmt.Errorf("simulator publish failed")
+		if z2m {
+			for _, m := range simulation.Z2MMessages(cfg.Topic, step, step == 0) {
+				t := client.Publish(m.Topic, 1, m.Retain, m.Payload)
+				if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+					return fmt.Errorf("simulator publish failed")
+				}
+			}
+		} else {
+			t := client.Publish(cfg.Topic, 1, false, packet(step, time.Now().UTC()))
+			if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+				return fmt.Errorf("simulator publish failed")
+			}
 		}
 		if zoneB != nil {
 			t := zoneB.Publish(cfg.ZoneB.Topic, 1, false, simulation.ZonePacket(step, time.Now().UTC()))

@@ -31,11 +31,12 @@ func streamModel(name string) string {
 	return strings.TrimPrefix(name, "Minew ")
 }
 
-// minewDevice is true when the identifier sent a Minew frame: an FFE1 info frame naming its model (also
+// minewDevice is true for every device paired to a Zigbee2MQTT coordinator (listed by the bridge itself), and for
+// a BLE identifier when it sent a Minew frame: an FFE1 info frame naming its model (also
 // kept in the stream name), or any decoded FFE1 kind. Bare iBeacon/Eddystone and undecodable
 // advertisements are what phones, AirTags and foreign beacons look like, and stay out.
 func minewDevice(d domain.DiscoveredDevice) bool {
-	return d.Model != "" || (d.Kind != "" && d.Kind != "beacon")
+	return d.Source == "z2m" || d.Model != "" || (d.Kind != "" && d.Kind != "beacon")
 }
 
 func discoveryRoutes(r fiber.Router, s *app.Service) {
@@ -70,7 +71,7 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 				}
 				// Only a reported model earns a product match; shared frame kinds are not model identities.
 				for _, profile := range domain.DeviceProfiles {
-					if profile.MatchesInfo(d.Model) {
+					if (d.Source == "z2m" && profile.MatchesZ2M(d.Model, d.Kind == "switch")) || (d.Source != "z2m" && profile.MatchesInfo(d.Model)) {
 						d.Profile = &profile
 						break
 					}

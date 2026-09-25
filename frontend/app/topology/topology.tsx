@@ -23,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import "./topology.css";
 import { ApiError, createClientFrom, type Device, type GatewayCreated, type MQTTCredentials, type Snapshot } from "./api";
 import { useLatest } from "./use-latest";
-import { DEVICE_PROFILES, deviceBrands, deviceProfile, formatMAC, gatewayModel, profilesForBrand, suggestProfile } from "./catalog";
+import { DEVICE_PROFILES, deviceBrands, deviceProfile, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, Z2M_GATEWAY_MODEL, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
 import Inspector, { type Selection } from "./inspector";
 import { NODE_ID, autoLayout, loadPersisted, parseNodeId, placeNewNodes, savePersisted, type LayoutInput } from "./layout";
@@ -867,7 +867,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <label htmlFor="topo-gateway-name">ชื่อ gateway</label>
             <input id="topo-gateway-name" autoFocus required placeholder="เช่น MG3 · ชั้น 1 โถงหน้า" value={gatewayName} onChange={(e) => setGatewayName(e.target.value)} aria-invalid={gatewayName.trim() !== "" && !validName(gatewayName.trim())} />
             <ByteHint value={gatewayName} />
-            <p className="topo-note">{gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา" : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
+            <p className="topo-note">{gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? (gatewayDialogModel.id === Z2M_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที แล้วแสดงส่วน mqtt ของ configuration.yaml (มีรหัสผ่าน แสดงครั้งเดียว) ให้นำไปใส่ใน Zigbee2MQTT บนเครื่องในอาคาร" : "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา") : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
             {dialogError && (
               <p className="topo-warn" role="alert">
                 {dialogError}
@@ -1153,13 +1153,17 @@ function AdoptForm({
   const [brand, setBrand] = useState(deviceProfile(initialProfile)?.brand ?? deviceBrands()[0]);
   const [profile, setProfile] = useState(initialProfile);
   const [external, setExternal] = useState(adopt.external ?? "");
-  const chosen = deviceProfile(profile);
   // Wearables are proposed as roaming; the choice follows the profile until the user touches the box.
   const [roamingChoice, setRoamingChoice] = useState<boolean | null>(null);
-  const roaming = roamingChoice ?? !!chosen?.wearable;
   // The seeded gateway can disappear (revoked elsewhere) or fall out of the candidate list; keep the select honest.
   const effectiveGateway = candidates.some((g) => g.gateway.id === gatewayId) ? gatewayId : (candidates[0]?.gateway.id ?? "");
   const gateway = topology.gateways.find((g) => g.gateway.id === effectiveGateway);
+  // Only profiles whose radio this gateway hears (a Zigbee switch never sits under a BLE gateway, and back).
+  const fits = (p: DeviceProfile) => profileFitsGateway(p, gateway?.gateway.model ?? "");
+  const brands = deviceBrands().filter((b) => profilesForBrand(b).some(fits));
+  const picked = deviceProfile(profile);
+  const chosen = picked && fits(picked) ? picked : undefined;
+  const roaming = roamingChoice ?? !!chosen?.wearable;
   const heard = device?.heard.find((h) => h.gatewayId === effectiveGateway);
   const externalValid = validName(external.trim());
   const nameValid = validName(name.trim());
@@ -1200,10 +1204,10 @@ function AdoptForm({
                 value={brand}
                 onChange={(e) => {
                   setBrand(e.target.value);
-                  setProfile(profilesForBrand(e.target.value)[0]?.id ?? "");
+                  setProfile(profilesForBrand(e.target.value).filter(fits)[0]?.id ?? "");
                 }}
               >
-                {deviceBrands().map((b) => (
+                {brands.map((b) => (
                   <option key={b}>{b}</option>
                 ))}
               </select>
@@ -1211,7 +1215,8 @@ function AdoptForm({
             <label>
               รุ่น / profile
               <select value={profile} onChange={(e) => setProfile(e.target.value)}>
-                {profilesForBrand(brand).map((p) => (
+                {!chosen && <option value="">เลือกรุ่นที่ใช้กับ gateway นี้ได้</option>}
+                {profilesForBrand(brand).filter(fits).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.model} · {p.id}
                   </option>

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/app"
 	"aether/backend/internal/config"
 	"aether/backend/internal/domain"
@@ -78,6 +79,11 @@ func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 			if e != nil {
 				return e
 			}
+			// Looked up by id (not through the capped gateway list) and before a password is issued.
+			model, e := s.Repo.GatewayModel(c.Context(), p, id)
+			if e != nil {
+				return e
+			}
 			password := security.RandomToken()
 			hash, e := security.MQTTHash(password)
 			if e != nil {
@@ -86,15 +92,24 @@ func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 			if e = s.Repo.EnrollMQTT(c.Context(), p, id, hash, rotate); e != nil {
 				return e
 			}
-			root := "/aether/gateways/" + id
 			out["gateway_id"] = id
 			out["username"] = "gw-" + id
 			out["password"] = password
 			out["client_id"] = "gw-" + id
+			out["credential_display"] = "shown_once"
+			if model == domain.Z2MGatewayModel {
+				// Zigbee2MQTT publishes a whole tree under its base_topic; hand over the ready-made configuration.
+				tls := out["tls"] == true
+				host, port := out["host"].(string), out["port"].(int)
+				out["base_topic"] = zigbee2mqtt.BaseTopic(id)
+				out["server"] = zigbee2mqtt.Server(tls, host, port)
+				out["z2m_yaml"] = zigbee2mqtt.ConfigSnippet(tls, host, port, id, password)
+				return c.Status(201).JSON(out)
+			}
+			root := "/aether/gateways/" + id
 			out["post_topic"] = root + "/status"
 			out["subscribe_topic"] = root + "/action"
 			out["reply_topic"] = root + "/response"
-			out["credential_display"] = "shown_once"
 			return c.Status(201).JSON(out)
 		}
 	}

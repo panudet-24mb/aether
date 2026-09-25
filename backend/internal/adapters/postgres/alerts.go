@@ -57,6 +57,7 @@ type stateRow struct {
 	Door, Occupied       int
 	LastMotionAt         *time.Time
 	TriggerAt            *time.Time
+	Outputs              json.RawMessage
 	// Signals holds the last matched/not-matched state of each learned signal for this stream. It
 	// deliberately rides in core.stream_state with the built-in tamper/leak/moving flags rather than
 	// in a parallel table: learned signals are edge-triggered by exactly the same rule, and sharing
@@ -73,11 +74,12 @@ func (row stateRow) state() alerts.State {
 		s.TriggerAt = *row.TriggerAt
 	}
 	_ = json.Unmarshal(row.Breaches, &s.Breaches)
+	_ = json.Unmarshal(row.Outputs, &s.Outputs)
 	return s
 }
 
 // stateColumns is every column stateRow reads, so all readers of core.stream_state stay in step.
-const stateColumns = `external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at`
+const stateColumns = `external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at,outputs`
 
 // upsertState reports tracked=false when the stream row does not exist (discovery cap reached); callers must
 // then emit nothing, otherwise an untracked device would look "first seen" on every uplink and flood events.
@@ -93,11 +95,15 @@ func upsertState(tx *gorm.DB, tenant, gateway, external string, s alerts.State) 
 	if !s.TriggerAt.IsZero() {
 		triggerAt = s.TriggerAt
 	}
-	res := tx.Exec(`INSERT INTO core.stream_state(tenant_id,gateway_id,external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at,updated_at)
-    SELECT ?,?,?,?,?,?,?,?,?::jsonb,?,?,?::timestamptz,?::timestamptz,now() WHERE EXISTS(SELECT 1 FROM core.sensor_streams WHERE gateway_id=? AND external_id=?)
+	outputs, _ := json.Marshal(s.Outputs)
+	if s.Outputs == nil {
+		outputs = []byte("{}")
+	}
+	res := tx.Exec(`INSERT INTO core.stream_state(tenant_id,gateway_id,external_id,tamper,leak,moving,instance,offline,breaches,door,occupied,last_motion_at,trigger_at,outputs,updated_at)
+    SELECT ?,?,?,?,?,?,?,?,?::jsonb,?,?,?::timestamptz,?::timestamptz,?::jsonb,now() WHERE EXISTS(SELECT 1 FROM core.sensor_streams WHERE gateway_id=? AND external_id=?)
     ON CONFLICT(tenant_id,gateway_id,external_id) DO UPDATE SET tamper=EXCLUDED.tamper,leak=EXCLUDED.leak,moving=EXCLUDED.moving,instance=EXCLUDED.instance,offline=EXCLUDED.offline,breaches=EXCLUDED.breaches,
-      door=EXCLUDED.door,occupied=EXCLUDED.occupied,last_motion_at=EXCLUDED.last_motion_at,trigger_at=EXCLUDED.trigger_at,updated_at=now()`,
-		tenant, gateway, external, s.Tamper, s.Leak, s.Moving, s.Instance, s.Offline, string(breaches), s.Door, s.Occupied, lastMotion, triggerAt, gateway, external)
+      door=EXCLUDED.door,occupied=EXCLUDED.occupied,last_motion_at=EXCLUDED.last_motion_at,trigger_at=EXCLUDED.trigger_at,outputs=EXCLUDED.outputs,updated_at=now()`,
+		tenant, gateway, external, s.Tamper, s.Leak, s.Moving, s.Instance, s.Offline, string(breaches), s.Door, s.Occupied, lastMotion, triggerAt, string(outputs), gateway, external)
 	return res.RowsAffected > 0, res.Error
 }
 
@@ -429,6 +435,13 @@ func (r *Repository) ActiveTenants(ctx context.Context) ([]string, error) {
 func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Time) (int, error) {
 	count := 0
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
+		// Zigbee2MQTT bridges that went silent take their devices offline whether or not a rule subscribes:
+		// their streams are not aged by silence below, so this is the only thing that keeps them honest.
+		silent, e := r.scanSilentBridges(tx, tenant, now)
+		if e != nil {
+			return e
+		}
+		count += silent
 		all, e := loadRules(tx, true)
 		if e != nil {
 			return e
@@ -455,11 +468,13 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 			LastSeen                    time.Time
 			Offline                     bool
 		}
-		// Streams silent for more than a week are considered retired, not newly offline.
+		// Streams silent for more than a week are considered retired, not newly offline. Streams whose liveness is
+		// 'reported' (Zigbee2MQTT devices) are skipped: a wall switch is silent until someone flips it, and its
+		// offline/online state arrives as availability messages instead (CaptureZ2M).
 		if e := tx.Raw(`SELECT s.gateway_id,s.external_id,s.name,s.last_seen,coalesce(st.offline,false) AS offline FROM core.sensor_streams s
       JOIN core.gateways g ON g.id=s.gateway_id AND g.tenant_id=s.tenant_id AND g.revoked_at IS NULL
       LEFT JOIN core.stream_state st ON st.tenant_id=s.tenant_id AND st.gateway_id=s.gateway_id AND st.external_id=s.external_id
-      WHERE s.last_seen<? AND s.last_seen>?
+      WHERE s.last_seen<? AND s.last_seen>? AND s.liveness='silence'
       AND NOT EXISTS(SELECT 1 FROM core.devices d JOIN core.sensor_streams o ON o.tenant_id=d.tenant_id AND o.external_id=d.external_id AND o.gateway_id<>s.gateway_id
         JOIN core.gateways og ON og.tenant_id=o.tenant_id AND og.id=o.gateway_id AND og.revoked_at IS NULL
         WHERE d.tenant_id=s.tenant_id AND d.external_id=s.external_id AND d.roaming AND d.removed_at IS NULL AND (o.last_seen,o.gateway_id)>(s.last_seen,s.gateway_id))

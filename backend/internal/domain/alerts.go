@@ -28,6 +28,10 @@ const (
 	// alerts.OccupancyHoldSec, raised by the periodic worker (never per uplink), once per occupied episode.
 	EventOccupied = "occupied"
 	EventVacant   = "vacant"
+	// Switch outputs (Zigbee2MQTT wall switches): one event per gang per change, never on the first report.
+	// Deliberately not rule types yet, and never `button`: a light switch is not a panic button.
+	EventSwitchOn  = "switch_on"
+	EventSwitchOff = "switch_off"
 )
 
 // Rule event types that subscribe to a device event of a different name.

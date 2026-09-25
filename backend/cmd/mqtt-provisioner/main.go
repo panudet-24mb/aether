@@ -17,8 +17,30 @@ import (
 )
 
 type account struct {
-	ID, Hash string
-	Revision int
+	ID, Hash, Model string
+	Revision        int
+}
+
+// z2mModel is domain.Z2MGatewayModel; this binary deliberately depends on nothing but the database driver.
+const z2mModel = "zigbee2mqtt"
+
+// render builds the runtime password and ACL files from the static base files and the enrolled gateways.
+// A Minew-style gateway may write only its own status/response topics and read its action topic. A Zigbee2MQTT
+// bridge owns its whole tree aether/z2m/<id>/#: it must SUBSCRIBE to its own base_topic/# (Z2M subscribes to
+// exactly that), so the narrower "read …/+/set" would make its subscription fail. The collector reads both.
+func render(basePasswords, baseACL string, accounts []account) (string, string) {
+	p := strings.TrimSpace(basePasswords) + "\n"
+	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\n"
+	for _, c := range accounts {
+		p += "gw-" + c.ID + ":" + c.Hash + "\n"
+		if c.Model == z2mModel {
+			a += "\nuser gw-" + c.ID + "\ntopic readwrite aether/z2m/" + c.ID + "/#\n"
+			continue
+		}
+		root := "/aether/gateways/" + c.ID
+		a += "\nuser gw-" + c.ID + "\ntopic write " + root + "/status\ntopic write " + root + "/response\ntopic read " + root + "/action\n"
+	}
+	return p, a
 }
 
 func atomic(path string, data []byte) error {
@@ -63,14 +85,14 @@ func main() {
 func syncAccounts(db *sql.DB, last *[32]byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rows, e := db.QueryContext(ctx, `SELECT gateway_id,password_hash,revision FROM core.mqtt_provisioning_accounts()`)
+	rows, e := db.QueryContext(ctx, `SELECT gateway_id,password_hash,revision,model FROM core.mqtt_provisioning_accounts_v2()`)
 	if e != nil {
 		return e
 	}
 	accounts := []account{}
 	for rows.Next() {
 		var a account
-		if e = rows.Scan(&a.ID, &a.Hash, &a.Revision); e != nil {
+		if e = rows.Scan(&a.ID, &a.Hash, &a.Revision, &a.Model); e != nil {
 			rows.Close()
 			return e
 		}
@@ -89,13 +111,7 @@ func syncAccounts(db *sql.DB, last *[32]byte) error {
 	if e != nil {
 		return e
 	}
-	p := strings.TrimSpace(string(passwords)) + "\n"
-	a := strings.TrimSpace(string(acl)) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\n"
-	for _, c := range accounts {
-		p += "gw-" + c.ID + ":" + c.Hash + "\n"
-		root := "/aether/gateways/" + c.ID
-		a += "\nuser gw-" + c.ID + "\ntopic write " + root + "/status\ntopic write " + root + "/response\ntopic read " + root + "/action\n"
-	}
+	p, a := render(string(passwords), string(acl), accounts)
 	digest := sha256.Sum256([]byte(p + "\x00" + a))
 	if digest != *last {
 		dir := "/run/mqtt-runtime"

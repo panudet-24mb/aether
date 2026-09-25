@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,8 @@ type State struct {
 	LastMotion time.Time
 	// TriggerAt is the server time the button-trigger slot (iBeacon) was last heard; zero when never.
 	TriggerAt time.Time
+	// Outputs is the last known state of each switch output, keyed by metric (sw1..sw4, 1 = ON).
+	Outputs map[string]int
 }
 
 // ButtonTriggerQuiet is how long a button tag's trigger slot must have been silent for its reappearance to
@@ -49,7 +52,10 @@ func Vacant(s State, now time.Time) bool {
 // Detect compares a fresh reading with the previous state and returns the events that happened.
 // Threshold rules are evaluated here too, so a breach becomes one event, not one per uplink.
 func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time) ([]domain.DeviceEvent, State) {
-	next := State{Known: true, Tamper: prev.Tamper, Leak: prev.Leak, Moving: prev.Moving, Instance: prev.Instance, Breaches: append([]string(nil), prev.Breaches...), Door: prev.Door, Occupied: prev.Occupied, LastMotion: prev.LastMotion, TriggerAt: prev.TriggerAt}
+	next := State{Known: true, Tamper: prev.Tamper, Leak: prev.Leak, Moving: prev.Moving, Instance: prev.Instance, Breaches: append([]string(nil), prev.Breaches...), Door: prev.Door, Occupied: prev.Occupied, LastMotion: prev.LastMotion, TriggerAt: prev.TriggerAt, Outputs: map[string]int{}}
+	for k, v := range prev.Outputs {
+		next.Outputs[k] = v
+	}
 	var out []domain.DeviceEvent
 	emit := func(t string, detail map[string]any) {
 		out = append(out, domain.DeviceEvent{EventType: t, Detail: detail, OccurredAt: at})
@@ -124,6 +130,27 @@ func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time)
 			emit(domain.EventButton, detail)
 		}
 		next.TriggerAt = at
+	}
+	// Switch outputs (Zigbee2MQTT wall switches): one event per gang that changed. The first report of a gang
+	// only records its state: Aether was not watching when it was switched, so there is no edge to report.
+	for gang := 1; gang <= 4; gang++ {
+		key := "sw" + strconv.Itoa(gang)
+		v, ok := m[key]
+		if !ok {
+			continue
+		}
+		now := 0
+		if v == 1 {
+			now = 1
+		}
+		if before, known := prev.Outputs[key]; known && before != now {
+			t := domain.EventSwitchOff
+			if now == 1 {
+				t = domain.EventSwitchOn
+			}
+			emit(t, map[string]any{"gang": gang, "source": "external"})
+		}
+		next.Outputs[key] = now
 	}
 	// Threshold rules: rising edge per rule id.
 	breached := map[string]bool{}
@@ -352,6 +379,7 @@ var eventLabel = map[string]string{
 	domain.EventThreshold: "ค่าเกินเกณฑ์", domain.EventThresholdClear: "ค่ากลับเข้าเกณฑ์",
 	domain.EventDoorOpen: "ประตูเปิด", domain.EventDoorClosed: "ประตูปิด",
 	domain.EventOccupied: "มีคนในพื้นที่", domain.EventVacant: "ไม่มีคนในพื้นที่",
+	domain.EventSwitchOn: "เปิดสวิตช์", domain.EventSwitchOff: "ปิดสวิตช์",
 }
 
 func Label(eventType string) string {
@@ -374,6 +402,8 @@ func Title(ev domain.DeviceEvent) string {
 		// A press is an emergency signal, not a status change: the headline says so wherever the alert
 		// is read (banner, LINE, email, webhook). domain.Alert.SOS decides how loudly the UI reacts.
 		return fmt.Sprintf("SOS · %s กดปุ่มฉุกเฉิน", ev.DeviceName)
+	case domain.EventSwitchOn, domain.EventSwitchOff:
+		return fmt.Sprintf("%s · %s ช่อง %v", ev.DeviceName, Label(ev.EventType), ev.Detail["gang"])
 	}
 	return fmt.Sprintf("%s · %s", ev.DeviceName, Label(ev.EventType))
 }

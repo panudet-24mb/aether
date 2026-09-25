@@ -35,14 +35,16 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
         {devices.map((d) => {
           const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind }) : undefined;
           const profile = d.profile ?? suggestion;
-          const label = d.profile ? `${d.profile.brand} ${d.profile.model}` : d.model ? `Minew ${d.model}` : profile ? `${profile.brand} ${profile.model}` : "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
+          // Zigbee devices come from the coordinator's own list (source "z2m"); their model is the Z2M definition.
+          const zigbee = d.source === "z2m";
+          const label = d.profile ? `${d.profile.brand} ${d.profile.model}${zigbee && d.model ? ` · ${d.model}` : ""}` : d.model ? `${zigbee ? "Zigbee" : "Minew"} ${d.model}` : profile ? `${profile.brand} ${profile.model}` : zigbee ? "อุปกรณ์ Zigbee · ยังไม่ทราบรุ่น" : "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
           return <article className="topo-discovery-card" key={d.external_id}>
             <div className="topo-discovery-photo">{profile?.image ? <img src={profile.image} alt={label} /> : <Bluetooth size={30} />}</div>
             <div className="topo-discovery-info">
               <strong>{label}</strong>
               <small>{d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
               <code>{formatMAC(d.external_id)}</code>
-              <small>{isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{d.source === "simulated" ? " · SIM" : ""}</small>
+              <small>{zigbee ? "pair อยู่กับ coordinator" : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{d.source === "simulated" ? " · SIM" : ""}</small>
               <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>ลงทะเบียน</button>
             </div>
           </article>;

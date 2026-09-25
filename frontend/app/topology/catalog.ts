@@ -19,7 +19,7 @@ export type DeviceProfile = {
   brand: string;
   model: string;
   label: string;
-  radio: "ble" | "any";
+  radio: "ble" | "zigbee" | "any";
   description: string;
   image?: string;
   metrics: string[];
@@ -37,6 +37,12 @@ export type DeviceProfile = {
   info_name?: string;
   /** Other names real units report for this model (the physical S1 says "PLUS", the E8S says "E8"). */
   info_aliases?: string[];
+  /** Switch outputs of the largest variant (Zigbee wall switches); absent for sensors. */
+  gangs?: number;
+  /** A device Aether may switch in a later phase; today its state is only displayed. */
+  actuator?: boolean;
+  /** Zigbee2MQTT definition models this profile covers. */
+  z2m_models?: string[];
   notes?: string;
 };
 
@@ -91,6 +97,14 @@ export const GATEWAY_MODELS: GatewayModel[] = [
     image: "/devices/minew-mg4.png",
   },
   {
+    id: "zigbee2mqtt",
+    brand: "Zigbee2MQTT",
+    model: "Zigbee coordinator",
+    label: "Zigbee2MQTT",
+    transport: "mqtt",
+    description: "Zigbee coordinator (เช่น SLZB-06M) + Zigbee2MQTT บนเครื่องในอาคาร · ส่งสถานะอุปกรณ์ Zigbee เข้า Aether ผ่าน MQTT over TLS · ไม่ใช้ Tuya cloud",
+  },
+  {
     id: "generic-http",
     brand: "Generic",
     model: "HTTP gateway",
@@ -143,6 +157,19 @@ export const DEVICE_PROFILES: DeviceProfile[] = [
     info_name: "S4",
   },
   {
+    id: "tuya-ts001x-switch@1",
+    brand: "Tuya",
+    model: "TS001x",
+    label: "Tuya Zigbee wall switch · 1–4 ช่อง",
+    radio: "zigbee",
+    description: "สวิตช์ผนังแบบสัมผัส ไม่ใช้สายกลาง ผ่าน Zigbee2MQTT · แสดงสถานะเปิด/ปิดแต่ละช่อง · ยังสั่งเปิด/ปิดจาก Aether ไม่ได้ในเฟสนี้",
+    metrics: ["สถานะเปิด/ปิดแต่ละช่อง", "linkquality"],
+    kinds: ["switch"],
+    gangs: 4,
+    actuator: true,
+    z2m_models: ["TS0011", "TS0012", "TS0013", "TS0014", "TS0601"],
+  },
+  {
     id: "generic-environment@1",
     brand: "Generic",
     model: "Environment sensor",
@@ -181,7 +208,11 @@ export function suggestProfile(input: { model?: string | null; kind?: string | n
     // MOS kit names, in case the server catalog does not carry info_name for them.
     if (name === "msp01") { const p = DEVICE_PROFILES.find((x) => x.occupancy); if (p) return p; }
     if (name === "s4") { const p = DEVICE_PROFILES.find((x) => x.door); if (p) return p; }
+    // Zigbee2MQTT definition models (TS0012, …); TS0601 is Tuya's catch-all id, so only for a switch.
+    const byZ2M = DEVICE_PROFILES.find((p) => p.z2m_models?.some((m) => m.toLowerCase() === name && (name !== "ts0601" || input.kind === "switch")));
+    if (byZ2M) return byZ2M;
   }
+  if (input.kind === "switch") return DEVICE_PROFILES.find((p) => p.kinds?.includes("switch"));
   const kind = input.kind ?? "";
   const withKind = (k: string) => DEVICE_PROFILES.filter((p) => p.kinds?.includes(k));
   if (kind === "environment") return withKind("environment")[0];
@@ -216,4 +247,22 @@ export function imageForModelLabel(label: string): string | undefined {
     if (m && (!best || m.index < best.at)) best = { at: m.index, src };
   }
   return best?.src;
+}
+
+/** The gateway model whose MQTT account publishes a Zigbee2MQTT topic tree. */
+export const Z2M_GATEWAY_MODEL = "zigbee2mqtt";
+
+/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, and only Zigbee profiles there. */
+export function profileFitsGateway(p: DeviceProfile, gatewayModelId: string): boolean {
+  return gatewayModelId === Z2M_GATEWAY_MODEL ? p.radio === "zigbee" : p.radio !== "zigbee";
+}
+
+/** Switch outputs a reading carries, in gang order: [[1, true], [2, false], …] from metrics sw1..sw4. */
+export function switchGangs(metrics: Record<string, number> | undefined): [number, boolean][] {
+  const out: [number, boolean][] = [];
+  for (let gang = 1; gang <= 4; gang++) {
+    const v = metrics?.[`sw${gang}`];
+    if (v === 0 || v === 1) out.push([gang, v === 1]);
+  }
+  return out;
 }

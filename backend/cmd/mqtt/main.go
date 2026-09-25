@@ -13,6 +13,7 @@ import (
 
 	"aether/backend/internal/adapters/mqttingest"
 	"aether/backend/internal/adapters/postgres"
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/app"
 	"aether/backend/internal/config"
 	"aether/backend/internal/domain"
@@ -79,6 +80,20 @@ func main() {
 			call, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			var err error
+			// Zigbee2MQTT bridges publish a whole tree under aether/z2m/<gateway id>. Requests going TO the bridge
+			// (…/set, bridge/request/*) and documents Aether does not use are acknowledged and dropped.
+			if strings.HasPrefix(m.Topic(), zigbee2mqtt.Prefix) {
+				gateway, msg, rerr := zigbee2mqtt.Route(m.Topic())
+				if rerr != nil || msg.Kind == zigbee2mqtt.Ignore {
+					return rerr
+				}
+				var tenant string
+				if tenant, err = repo.MQTTGatewayTenant(call, gateway); err != nil {
+					return err
+				}
+				id, err = service.CaptureZ2M(call, tenant, gateway, msg, m.Payload())
+				return err
+			}
 			if strings.HasPrefix(m.Topic(), "/aether/gateways/") {
 				gateway := strings.TrimSuffix(strings.TrimPrefix(m.Topic(), "/aether/gateways/"), "/status")
 				if !strings.HasSuffix(m.Topic(), "/status") || !security.ValidID(gateway) {
@@ -122,6 +137,11 @@ func main() {
 		t := c.Subscribe("/aether/gateways/+/status", 1, handler)
 		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
 			fatal("MQTT onboarding subscription failed")
+		}
+		// Not fatal: during a rolling deploy the broker ACL may not grant this tree yet, and BLE capture must go on.
+		t = c.Subscribe(zigbee2mqtt.Prefix+"+/#", 1, handler)
+		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+			slog.Error("MQTT Zigbee2MQTT subscription failed; Zigbee gateways are not captured until the next reconnect")
 		}
 		for _, b := range mc.Bindings {
 			t := c.Subscribe(b.Topic, 1, handler)

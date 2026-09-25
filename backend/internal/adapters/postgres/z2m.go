@@ -1,0 +1,331 @@
+package postgres
+
+import (
+	"aether/backend/internal/adapters/minew"
+	"aether/backend/internal/adapters/zigbee2mqtt"
+	"aether/backend/internal/alerts"
+	"aether/backend/internal/domain"
+	"aether/backend/internal/security"
+	"context"
+	"encoding/json"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
+// CaptureZ2M stores one message a Zigbee2MQTT bridge published under its gateway's base topic. Like
+// CapturePacket it runs in one transaction under the gateway's row lock, keeps a bounded diagnostic copy in
+// core.gateway_packets and feeds the same sample, stream-state and event pipeline, so a wall switch shows up in
+// the live view, the event log and alerts exactly like a BLE tag does.
+func (r *Repository) CaptureZ2M(ctx context.Context, tenant, gateway string, m zigbee2mqtt.Message, payload []byte) (string, error) {
+	id := uuid.NewString()
+	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
+		var models []string
+		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, gateway).Scan(&models).Error; e != nil {
+			return e
+		}
+		if len(models) != 1 {
+			return domain.ErrUnauthorized
+		}
+		if models[0] != domain.Z2MGatewayModel {
+			return domain.ErrForbidden // the ACL already confines the tree; this is the second lock on the door
+		}
+		now := time.Now().UTC()
+		if e := tx.Exec(`INSERT INTO core.gateway_packets(id,tenant_id,gateway_id,payload) VALUES(?,?,?,?::jsonb)`, id, tenant, gateway, z2mDiagnostic(m, payload)).Error; e != nil {
+			return e
+		}
+		var e error
+		bridgeDown := false
+		if m.Kind == zigbee2mqtt.BridgeState {
+			online, ok := zigbee2mqtt.ParseOnline(payload)
+			bridgeDown = ok && !online
+		}
+		// Any message but the bridge's own "offline" proves the bridge is up again.
+		if !bridgeDown {
+			if e := r.bridgeOnline(tx, tenant, gateway, now); e != nil {
+				return e
+			}
+		}
+		switch m.Kind {
+		case zigbee2mqtt.BridgeDevices:
+			e = saveZ2MDevices(tx, tenant, gateway, payload, now)
+		case zigbee2mqtt.BridgeState:
+			if bridgeDown {
+				e = r.bridgeOffline(tx, tenant, gateway, "bridge_offline", now)
+			} else if _, ok := zigbee2mqtt.ParseOnline(payload); ok {
+				e = tx.Exec(`INSERT INTO core.z2m_bridges(tenant_id,gateway_id,state,state_at,updated_at) VALUES(?,?,'online',?,?)
+    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET state='online',state_at=EXCLUDED.state_at,updated_at=EXCLUDED.updated_at`, tenant, gateway, now, now).Error
+			}
+		case zigbee2mqtt.BridgeInfo, zigbee2mqtt.Heartbeat:
+			version := ""
+			if m.Kind == zigbee2mqtt.BridgeInfo {
+				version = zigbee2mqtt.ParseBridgeVersion(payload)
+			}
+			e = tx.Exec(`INSERT INTO core.z2m_bridges(tenant_id,gateway_id,version,updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET version=CASE WHEN EXCLUDED.version<>'' THEN EXCLUDED.version ELSE core.z2m_bridges.version END,updated_at=EXCLUDED.updated_at`, tenant, gateway, version, now).Error
+		case zigbee2mqtt.State:
+			e = r.saveZ2MState(tx, tenant, gateway, m, payload, now)
+		case zigbee2mqtt.Availability:
+			e = r.saveZ2MAvailability(tx, tenant, gateway, m, payload, now)
+		}
+		if e != nil {
+			return e
+		}
+		if e := signal(tx, tenant, "packet", gateway); e != nil {
+			return e
+		}
+		return tx.Exec(`DELETE FROM core.gateway_packets WHERE gateway_id=? AND id IN (SELECT id FROM core.gateway_packets WHERE gateway_id=? ORDER BY received_at DESC,id DESC OFFSET 100)`, gateway, gateway).Error
+	})
+	return id, dataError(e)
+}
+
+// z2mDiagnostic is the copy kept in core.gateway_packets: the topic with its payload (a JSON value, or the
+// legacy bare string), and only a count for bridge/devices, which can be large. It is an object, so the Minew
+// projection over stored packets (which reads arrays of rows) skips it.
+func z2mDiagnostic(m zigbee2mqtt.Message, payload []byte) string {
+	d := map[string]any{"z2m_topic": m.Topic}
+	switch {
+	case m.Kind == zigbee2mqtt.BridgeDevices:
+		var list []json.RawMessage
+		_ = json.Unmarshal(payload, &list)
+		d["devices"] = len(list)
+	case json.Valid(payload):
+		d["payload"] = json.RawMessage(payload)
+	default:
+		d["payload"] = string(payload)
+	}
+	b, _ := json.Marshal(d)
+	return string(b)
+}
+
+func saveZ2MDevices(tx *gorm.DB, tenant, gateway string, payload []byte, now time.Time) error {
+	devices, truncated, e := zigbee2mqtt.ParseBridgeDevices(payload)
+	if e != nil {
+		return domain.ErrInvalid
+	}
+	present := make([]string, 0, len(devices))
+	for _, d := range devices {
+		gangs, _ := json.Marshal(d.Gangs)
+		if e := tx.Exec(`INSERT INTO core.z2m_devices(tenant_id,gateway_id,ieee,friendly_name,type,model,vendor,model_id,manufacturer,power_source,supported,gangs,updated_at,removed_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,NULL)
+    ON CONFLICT(tenant_id,gateway_id,ieee) DO UPDATE SET friendly_name=EXCLUDED.friendly_name,type=EXCLUDED.type,model=EXCLUDED.model,vendor=EXCLUDED.vendor,
+      model_id=EXCLUDED.model_id,manufacturer=EXCLUDED.manufacturer,power_source=EXCLUDED.power_source,supported=EXCLUDED.supported,gangs=EXCLUDED.gangs,
+      updated_at=EXCLUDED.updated_at,removed_at=NULL`,
+			tenant, gateway, d.IEEE, d.FriendlyName, d.Type, d.Model, d.Vendor, d.ModelID, d.Manufacturer, d.PowerSource, d.Supported, string(gangs), now).Error; e != nil {
+			return e
+		}
+		present = append(present, d.IEEE)
+	}
+	// The document is the whole network: anything no longer in it was removed from the coordinator. A list cut
+	// at MaxDevices is not the whole network, so nothing is swept then.
+	if truncated {
+		slog.Warn("Zigbee2MQTT device list truncated; removals not applied", "gateway", gateway, "max", zigbee2mqtt.MaxDevices)
+		return nil
+	}
+	var removed []string
+	q := `UPDATE core.z2m_devices SET removed_at=?,updated_at=? WHERE gateway_id=? AND removed_at IS NULL RETURNING ieee`
+	args := []any{now, now, gateway}
+	if len(present) > 0 {
+		q = `UPDATE core.z2m_devices SET removed_at=?,updated_at=? WHERE gateway_id=? AND removed_at IS NULL AND ieee NOT IN ? RETURNING ieee`
+		args = append(args, present)
+	}
+	if e := tx.Raw(q, args...).Scan(&removed).Error; e != nil {
+		return e
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	// A device unpaired from the coordinator will never report availability again: its stream goes back to
+	// silence-based liveness, so the ordinary offline scan ages it out like any tag that stopped transmitting.
+	return tx.Exec(`UPDATE core.sensor_streams SET liveness='silence' WHERE gateway_id=? AND external_id IN ?`, gateway, removed).Error
+}
+
+// z2mDevice finds the device a topic names: by friendly name, else by the IEEE address the message carries
+// (include_device_information) or the topic itself is (the default friendly name).
+func z2mDevice(tx *gorm.DB, gateway, name string, payload []byte) (zigbee2mqtt.Device, bool, error) {
+	ieee := zigbee2mqtt.DeviceIEEE(payload)
+	if ieee == "" && zigbee2mqtt.ValidIEEE(strings.ToLower(name)) {
+		ieee = strings.ToLower(name)
+	}
+	var rows []struct {
+		IEEE         string          `gorm:"column:ieee"`
+		FriendlyName string          `gorm:"column:friendly_name"`
+		Model        string          `gorm:"column:model"`
+		Gangs        json.RawMessage `gorm:"column:gangs"`
+	}
+	if e := tx.Raw(`SELECT ieee,friendly_name,model,gangs FROM core.z2m_devices WHERE gateway_id=? AND removed_at IS NULL AND (friendly_name=? OR ieee=?)
+    ORDER BY (ieee=?) DESC LIMIT 1`, gateway, name, ieee, ieee).Scan(&rows).Error; e != nil || len(rows) == 0 {
+		return zigbee2mqtt.Device{}, false, e
+	}
+	d := zigbee2mqtt.Device{IEEE: rows[0].IEEE, FriendlyName: rows[0].FriendlyName, Model: rows[0].Model}
+	if e := json.Unmarshal(rows[0].Gangs, &d.Gangs); e != nil {
+		return zigbee2mqtt.Device{}, false, e
+	}
+	return d, true, nil
+}
+
+func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2mqtt.Message, payload []byte, now time.Time) error {
+	d, ok, e := z2mDevice(tx, gateway, m.Device, payload)
+	if e != nil || !ok {
+		return e // a group or a device bridge/devices has not listed yet: the diagnostic copy is all there is
+	}
+	reading, ok := zigbee2mqtt.ParseState(payload, d, now)
+	if !ok {
+		return nil
+	}
+	view := minew.View{Sensors: []minew.Sensor{{ID: d.IEEE, Name: d.FriendlyName, Kind: zigbee2mqtt.KindSwitch, Model: d.Model, Latest: reading}}}
+	// Every state message is a sample: a switch legitimately repeats ON, OFF, ON with identical payloads.
+	key := security.Digest(gateway + "\x00" + m.Topic + "\x00" + string(payload) + "\x00" + strconv.FormatInt(now.UnixNano(), 10))
+	if e := saveSamples(tx, tenant, gateway, view, key, now, r.opts); e != nil {
+		return e
+	}
+	if e := tx.Exec(`UPDATE core.sensor_streams SET liveness='reported' WHERE gateway_id=? AND external_id=? AND liveness<>'reported'`, gateway, d.IEEE).Error; e != nil {
+		return e
+	}
+	if e := tx.SavePoint("alert_events").Error; e != nil {
+		return e
+	}
+	if e := saveEvents(tx, tenant, gateway, view, nil, now, r.opts); e != nil {
+		slog.Warn("alert evaluation failed; Zigbee2MQTT state stored without events", "gateway", gateway, "error", e.Error())
+		return tx.RollbackTo("alert_events").Error
+	}
+	return nil
+}
+
+// saveZ2MAvailability records Z2M's own verdict on a device (availability must be enabled in Z2M). The device's
+// stream_state.offline follows it and each change is one offline / online event.
+func (r *Repository) saveZ2MAvailability(tx *gorm.DB, tenant, gateway string, m zigbee2mqtt.Message, payload []byte, now time.Time) error {
+	online, ok := zigbee2mqtt.ParseOnline(payload)
+	if !ok {
+		return nil
+	}
+	d, found, e := z2mDevice(tx, gateway, m.Device, payload)
+	if e != nil || !found {
+		return e
+	}
+	if e := tx.Exec(`UPDATE core.z2m_devices SET available=?,available_at=? WHERE gateway_id=? AND ieee=?`, online, now, gateway, d.IEEE).Error; e != nil {
+		return e
+	}
+	return r.setReportedLiveness(tx, tenant, gateway, d.IEEE, d.FriendlyName, online, "availability", now)
+}
+
+// setReportedLiveness moves one reported-liveness stream online or offline and raises the event, once per
+// change. The first report of a device only records an online state; a first "offline" is still an event. A
+// device without a stream (it never reported state) has nothing registered that could be offline.
+func (r *Repository) setReportedLiveness(tx *gorm.DB, tenant, gateway, ieee, fallbackName string, online bool, source string, now time.Time) error {
+	var prev []stateRow
+	if e := tx.Raw(`SELECT `+stateColumns+` FROM core.stream_state WHERE gateway_id=? AND external_id=? FOR UPDATE`, gateway, ieee).Scan(&prev).Error; e != nil {
+		return e
+	}
+	st := alerts.State{Known: true}
+	if len(prev) == 1 {
+		st = prev[0].state()
+		if st.Offline == !online {
+			return nil
+		}
+	} else if online {
+		_, e := upsertState(tx, tenant, gateway, ieee, st)
+		return e
+	}
+	st.Offline = !online
+	tracked, e := upsertState(tx, tenant, gateway, ieee, st)
+	if e != nil || !tracked {
+		return e
+	}
+	var names []string
+	if e := tx.Raw(`SELECT name FROM core.sensor_streams WHERE gateway_id=? AND external_id=?`, gateway, ieee).Scan(&names).Error; e != nil {
+		return e
+	}
+	name := fallbackName
+	if len(names) == 1 && names[0] != "" {
+		name = names[0]
+	}
+	ev := domain.DeviceEvent{GatewayID: gateway, ExternalID: ieee, DeviceName: name, EventType: domain.EventOffline, Detail: map[string]any{"source": source}, OccurredAt: now}
+	if online {
+		ev.EventType = domain.EventOnline
+	}
+	if e := insertEvent(tx, tenant, &ev); e != nil {
+		return e
+	}
+	if r.opts.AlertsShadow {
+		return nil
+	}
+	rules, e := loadRules(tx, true)
+	if e != nil {
+		return e
+	}
+	return createAlerts(tx, tenant, ev, rules)
+}
+
+// Z2MSilentAfter is how long a Zigbee2MQTT gateway may send nothing before its devices count as offline even
+// though no last will arrived (the site host lost power or its network, and the broker has not noticed yet).
+// Zigbee2MQTT 2.x publishes bridge/health every health.interval minutes (default 10, set explicitly in the
+// configuration snippet), so 25 minutes tolerates one missed heartbeat.
+const Z2MSilentAfter = 25 * time.Minute
+
+// bridgeOffline records that the bridge itself is gone (its last will, or silence) and takes every device it
+// reports for offline with it: nothing else would, because reported-liveness streams are not aged by silence.
+func (r *Repository) bridgeOffline(tx *gorm.DB, tenant, gateway, source string, now time.Time) error {
+	if e := tx.Exec(`INSERT INTO core.z2m_bridges(tenant_id,gateway_id,state,state_at,updated_at) VALUES(?,?,'offline',?,?)
+    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET state='offline',state_at=EXCLUDED.state_at,updated_at=EXCLUDED.updated_at`, tenant, gateway, now, now).Error; e != nil {
+		return e
+	}
+	var streams []struct{ ExternalID, Name string }
+	if e := tx.Raw(`SELECT s.external_id,s.name FROM core.sensor_streams s WHERE s.gateway_id=? AND s.liveness='reported' ORDER BY s.external_id LIMIT 1000`, gateway).Scan(&streams).Error; e != nil {
+		return e
+	}
+	for _, s := range streams {
+		if e := r.setReportedLiveness(tx, tenant, gateway, s.ExternalID, s.Name, false, source, now); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// bridgeOnline runs for every message of a gateway whose bridge was recorded offline: the bridge is evidently
+// back. Devices whose last own availability report was not "offline" are restored at once; the others wait for
+// their availability report, which Zigbee2MQTT publishes (retained) again when it reconnects.
+func (r *Repository) bridgeOnline(tx *gorm.DB, tenant, gateway string, now time.Time) error {
+	res := tx.Exec(`UPDATE core.z2m_bridges SET state='online',state_at=?,updated_at=? WHERE gateway_id=? AND state='offline'`, now, now, gateway)
+	if res.Error != nil || res.RowsAffected == 0 {
+		return res.Error
+	}
+	var streams []struct{ ExternalID, Name string }
+	if e := tx.Raw(`SELECT s.external_id,s.name FROM core.sensor_streams s
+    JOIN core.stream_state st ON st.tenant_id=s.tenant_id AND st.gateway_id=s.gateway_id AND st.external_id=s.external_id AND st.offline
+    LEFT JOIN core.z2m_devices z ON z.gateway_id=s.gateway_id AND z.ieee=s.external_id
+    WHERE s.gateway_id=? AND s.liveness='reported' AND z.available IS DISTINCT FROM false ORDER BY s.external_id LIMIT 1000`, gateway).Scan(&streams).Error; e != nil {
+		return e
+	}
+	for _, s := range streams {
+		if e := r.setReportedLiveness(tx, tenant, gateway, s.ExternalID, s.Name, true, "bridge", now); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// scanSilentBridges is the part of ScanOffline for Zigbee2MQTT gateways that stopped sending anything without
+// their last will reaching the broker. It runs whether or not any offline rule exists, because it keeps the
+// device state honest (the UI reads it), exactly like an availability report does.
+func (r *Repository) scanSilentBridges(tx *gorm.DB, tenant string, now time.Time) (int, error) {
+	var gateways []string
+	if e := tx.Raw(`SELECT g.id FROM core.gateways g
+    WHERE g.model=? AND g.revoked_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM core.z2m_bridges b WHERE b.gateway_id=g.id AND b.state='offline')
+      AND EXISTS(SELECT 1 FROM core.sensor_streams s WHERE s.gateway_id=g.id AND s.liveness='reported')
+      AND (SELECT max(p.received_at) FROM core.gateway_packets p WHERE p.gateway_id=g.id) BETWEEN ? AND ?
+    ORDER BY g.id LIMIT 100`, domain.Z2MGatewayModel, now.Add(-7*24*time.Hour), now.Add(-Z2MSilentAfter)).Scan(&gateways).Error; e != nil {
+		return 0, e
+	}
+	for _, g := range gateways {
+		if e := r.bridgeOffline(tx, tenant, g, "bridge_silent", now); e != nil {
+			return 0, e
+		}
+	}
+	return len(gateways), nil
+}

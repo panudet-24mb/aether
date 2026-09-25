@@ -38,6 +38,10 @@ type Sensor struct {
 	Model      string                    `json:"model,omitempty"`
 	Latest     Reading                   `json:"latest"`
 	History    []Reading                 `json:"history"`
+	// Liveness "reported" means offline/online come from the device's own availability reports (Zigbee2MQTT),
+	// not from silence; Offline is then the last reported state. Both are empty for BLE streams.
+	Liveness string `json:"liveness,omitempty"`
+	Offline  *bool  `json:"offline,omitempty"`
 }
 type View struct {
 	Gateway          domain.Gateway `json:"gateway"`

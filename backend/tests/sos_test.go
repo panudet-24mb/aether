@@ -57,9 +57,10 @@ func TestSOSNeedsNoConfiguration(t *testing.T) {
 	_, auth, p := f.account(t)
 	api := httpapi.New(f.cfg, f.service, f.repo)
 
-	// The two rules the workspace was born with, and nothing else.
+	// The rules the workspace was born with (SOS, tamper, and since 00030 the smoke/gas/CO hazard rule), and
+	// nothing else.
 	rules, e := f.repo.ListRules(ctx, p)
-	if e != nil || len(rules) != 2 {
+	if e != nil || len(rules) != 3 {
 		t.Fatalf("seeded rules: %+v %v", rules, e)
 	}
 	button := sosRule(t, f, p)
@@ -68,7 +69,7 @@ func TestSOSNeedsNoConfiguration(t *testing.T) {
 	}
 	code, out, _ := req(t, api, "GET", "/api/v1/rules", "Bearer "+auth.AccessToken, "", "", nil)
 	items, _ := out["items"].([]any)
-	if code != 200 || len(items) != 2 {
+	if code != 200 || len(items) != 3 {
 		t.Fatalf("rules: %d %v", code, out)
 	}
 	for _, raw := range items {
@@ -198,7 +199,7 @@ func TestBuiltinRulesBackfilledForExistingWorkspace(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	// Replay 00024 against that state: this is exactly what the owner's database runs.
+	// Replay 00024 (and 00030) against that state: this is exactly what the owner's database runs.
 	if e := goose.DownTo(f.admin, "../migrations", 23); e != nil {
 		t.Fatalf("down to 00023: %v", e)
 	}
@@ -207,11 +208,11 @@ func TestBuiltinRulesBackfilledForExistingWorkspace(t *testing.T) {
 	}
 
 	after, e := f.repo.ListRules(ctx, p)
-	if e != nil || len(after) != 2 {
+	if e != nil || len(after) != 3 {
 		t.Fatalf("backfilled rules: %+v %v", after, e)
 	}
 	seeded, e := f.repo.BuiltinRuleIDs(ctx, p)
-	if e != nil || len(seeded) != 2 {
+	if e != nil || len(seeded) != 3 {
 		t.Fatalf("builtin ids: %+v %v", seeded, e)
 	}
 	byType := map[string]domain.AlertRule{}
@@ -223,5 +224,8 @@ func TestBuiltinRulesBackfilledForExistingWorkspace(t *testing.T) {
 	}
 	if tamper := byType[domain.EventTamper]; !tamper.Enabled || tamper.Severity != "warning" {
 		t.Fatalf("backfilled tamper rule: %+v", tamper)
+	}
+	if hazard := byType[domain.EventHazard]; !hazard.Enabled || hazard.Severity != "critical" || hazard.DedupeSec != 300 {
+		t.Fatalf("backfilled hazard rule: %+v", hazard)
 	}
 }

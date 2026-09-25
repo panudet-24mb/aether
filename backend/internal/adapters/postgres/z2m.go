@@ -114,12 +114,12 @@ func saveZ2MDevices(tx *gorm.DB, tenant, gateway string, payload []byte, now tim
 		if len(exposes) == 0 {
 			exposes = json.RawMessage("[]")
 		}
-		if e := tx.Exec(`INSERT INTO core.z2m_devices(tenant_id,gateway_id,ieee,friendly_name,type,model,vendor,model_id,manufacturer,power_source,supported,gangs,exposes,updated_at,removed_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?,NULL)
+		if e := tx.Exec(`INSERT INTO core.z2m_devices(tenant_id,gateway_id,ieee,friendly_name,type,model,vendor,model_id,manufacturer,power_source,supported,gangs,exposes,category,sos,description,updated_at,removed_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?,?,?,?,NULL)
     ON CONFLICT(tenant_id,gateway_id,ieee) DO UPDATE SET friendly_name=EXCLUDED.friendly_name,type=EXCLUDED.type,model=EXCLUDED.model,vendor=EXCLUDED.vendor,
       model_id=EXCLUDED.model_id,manufacturer=EXCLUDED.manufacturer,power_source=EXCLUDED.power_source,supported=EXCLUDED.supported,gangs=EXCLUDED.gangs,
-      exposes=EXCLUDED.exposes,updated_at=EXCLUDED.updated_at,removed_at=NULL`,
-			tenant, gateway, d.IEEE, d.FriendlyName, d.Type, d.Model, d.Vendor, d.ModelID, d.Manufacturer, d.PowerSource, d.Supported, string(gangs), string(exposes), now).Error; e != nil {
+      exposes=EXCLUDED.exposes,category=EXCLUDED.category,sos=EXCLUDED.sos,description=EXCLUDED.description,updated_at=EXCLUDED.updated_at,removed_at=NULL`,
+			tenant, gateway, d.IEEE, d.FriendlyName, d.Type, d.Model, d.Vendor, d.ModelID, d.Manufacturer, d.PowerSource, d.Supported, string(gangs), string(exposes), d.Category, d.SOS, d.Description, now).Error; e != nil {
 			return e
 		}
 		present = append(present, d.IEEE)
@@ -161,14 +161,31 @@ func z2mDevice(tx *gorm.DB, gateway, name string, payload []byte) (zigbee2mqtt.D
 		Model        string          `gorm:"column:model"`
 		Gangs        json.RawMessage `gorm:"column:gangs"`
 		Exposes      json.RawMessage `gorm:"column:exposes"`
+		Category     string          `gorm:"column:category"`
+		SOS          bool            `gorm:"column:sos"`
 	}
-	if e := tx.Raw(`SELECT ieee,friendly_name,model,gangs,exposes FROM core.z2m_devices WHERE gateway_id=? AND removed_at IS NULL AND (friendly_name=? OR ieee=?)
+	if e := tx.Raw(`SELECT ieee,friendly_name,model,gangs,exposes,category,sos FROM core.z2m_devices WHERE gateway_id=? AND removed_at IS NULL AND (friendly_name=? OR ieee=?)
     ORDER BY (ieee=?) DESC LIMIT 1`, gateway, name, ieee, ieee).Scan(&rows).Error; e != nil || len(rows) == 0 {
 		return zigbee2mqtt.Device{}, false, e
 	}
-	d := zigbee2mqtt.Device{IEEE: rows[0].IEEE, FriendlyName: rows[0].FriendlyName, Model: rows[0].Model, Exposes: rows[0].Exposes}
+	d := zigbee2mqtt.Device{IEEE: rows[0].IEEE, FriendlyName: rows[0].FriendlyName, Model: rows[0].Model, Exposes: rows[0].Exposes, Category: rows[0].Category, SOS: rows[0].SOS}
 	if e := json.Unmarshal(rows[0].Gangs, &d.Gangs); e != nil {
 		return zigbee2mqtt.Device{}, false, e
+	}
+	// A device stored before categories existed (migration 00030) has its definition but no category or SOS flag
+	// yet: derive them from the stored exposes on first touch, so an SOS button paired before the upgrade rings
+	// without waiting for the bridge to republish bridge/devices. The button gate reads the flag in this same
+	// transaction.
+	if d.Category == "" && len(d.Exposes) > 2 {
+		features, _ := zigbee2mqtt.Features(d.Exposes)
+		profile := zigbee2mqtt.Summarize(features)
+		d.Category, d.SOS = profile.Category(), profile.SOS
+		if len(d.Gangs) > 0 && d.Category == zigbee2mqtt.CategoryInfo {
+			d.Category = zigbee2mqtt.CategorySwitch
+		}
+		if e := tx.Exec(`UPDATE core.z2m_devices SET category=?,sos=? WHERE gateway_id=? AND ieee=? AND category=''`, d.Category, d.SOS, gateway, d.IEEE).Error; e != nil {
+			return zigbee2mqtt.Device{}, false, e
+		}
 	}
 	return d, true, nil
 }
@@ -193,7 +210,7 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 	if e != nil {
 		return e
 	}
-	reading, ok := zigbee2mqtt.ParseState(payload, d, now)
+	reading, ok := zigbee2mqtt.ParseStateWith(payload, d, features, now)
 	if !ok {
 		return nil
 	}
@@ -206,11 +223,22 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 			reading.Commands[g.Gang] = id
 		}
 	}
-	view := minew.View{Sensors: []minew.Sensor{{ID: d.IEEE, Name: d.FriendlyName, Kind: zigbee2mqtt.KindSwitch, Model: d.Model, Latest: reading}}}
-	// Every state message is a sample: a switch legitimately repeats ON, OFF, ON with identical payloads.
-	key := security.Digest(gateway + "\x00" + m.Topic + "\x00" + string(payload) + "\x00" + strconv.FormatInt(now.UnixNano(), 10))
-	if e := saveSamples(tx, tenant, gateway, view, key, now, r.opts); e != nil {
+	view := minew.View{Sensors: []minew.Sensor{{ID: d.IEEE, Name: d.FriendlyName, Kind: reading.Kind, Model: d.Model, Latest: reading}}}
+	thin, e := z2mThinned(tx, tenant, gateway, d.IEEE, reading, settable, len(confirmed) > 0, now, r.opts)
+	if e != nil {
 		return e
+	}
+	if thin {
+		if e := tx.Exec(`UPDATE core.sensor_streams SET last_seen=greatest(last_seen,?) WHERE gateway_id=? AND external_id=?`, now, gateway, d.IEEE).Error; e != nil {
+			return e
+		}
+	} else {
+		// A switch legitimately repeats ON, OFF, ON with identical payloads, and a button's action arrives once
+		// per press: the key includes the receive time.
+		key := security.Digest(gateway + "\x00" + m.Topic + "\x00" + string(payload) + "\x00" + strconv.FormatInt(now.UnixNano(), 10))
+		if e := saveSamples(tx, tenant, gateway, view, key, now, r.opts); e != nil {
+			return e
+		}
 	}
 	if e := tx.Exec(`UPDATE core.sensor_streams SET liveness='reported' WHERE gateway_id=? AND external_id=? AND liveness<>'reported'`, gateway, d.IEEE).Error; e != nil {
 		return e
@@ -357,4 +385,52 @@ func (r *Repository) scanSilentBridges(tx *gorm.DB, tenant string, now time.Time
 		}
 	}
 	return len(gateways), nil
+}
+
+// z2mThinned decides whether a Zigbee2MQTT state message may be left out of the sample history, like Minew
+// environment readings: SAMPLE_MIN_INTERVAL_SEC is set, the last sample of the device is younger than it, and
+// nothing that carries state changed since that sample — no action, no confirmed command, and every safety flag,
+// switch gang, settable property and enum value equal to the stored one. A metering plug reporting power every
+// second keeps one sample per interval; a door opening is always stored. Events are evaluated either way.
+func z2mThinned(tx *gorm.DB, tenant, gateway, ieee string, r minew.Reading, settable map[string]json.RawMessage, confirmed bool, now time.Time, opts Options) (bool, error) {
+	if opts.SampleMinIntervalSec <= 0 || r.Action != "" || confirmed {
+		return false, nil
+	}
+	var last []struct {
+		Reading    json.RawMessage
+		ReceivedAt time.Time
+	}
+	if e := tx.Raw(`SELECT reading,received_at FROM core.sensor_samples WHERE tenant_id=? AND gateway_id=? AND external_id=? ORDER BY received_at DESC LIMIT 1`, tenant, gateway, ieee).Scan(&last).Error; e != nil {
+		return false, e
+	}
+	if len(last) == 0 || now.Sub(last[0].ReceivedAt) >= time.Duration(opts.SampleMinIntervalSec)*time.Second {
+		return false, nil
+	}
+	var prev minew.Reading
+	if json.Unmarshal(last[0].Reading, &prev) != nil {
+		return false, nil
+	}
+	for name, v := range r.Metrics {
+		if _, isSettable := settable[name]; !isSettable && !stateMetric(name) {
+			continue
+		}
+		if before, ok := prev.Metrics[name]; !ok || before != v {
+			return false, nil
+		}
+	}
+	for k, v := range r.Values {
+		if prev.Values[k] != v {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// stateMetric names the metrics whose change is an event (alarms, door, occupancy, gangs), never thinned away.
+func stateMetric(name string) bool {
+	switch name {
+	case "door", "leak", "motion", "tamper", "sos", "smoke", "gas", "carbon_monoxide", "vibration", "battery_low", "state":
+		return true
+	}
+	return strings.HasPrefix(name, "sw") && len(name) == 3
 }

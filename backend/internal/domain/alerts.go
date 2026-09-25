@@ -32,7 +32,21 @@ const (
 	// Deliberately not rule types yet, and never `button`: a light switch is not a panic button.
 	EventSwitchOn  = "switch_on"
 	EventSwitchOff = "switch_off"
+	// Life-safety detectors (Zigbee2MQTT smoke, gas and carbon monoxide sensors): detail.hazard names which.
+	// Edge-triggered like tamper / tamper_cleared, and a rule type of its own so one rule covers all three.
+	EventHazard        = "hazard"
+	EventHazardCleared = "hazard_cleared"
+	// A button or remote event of a Zigbee2MQTT device (detail.action: single, on, brightness_move_up, ...).
+	// Informational, never a rule type and never `button`: only an emergency action of a device whose
+	// definition can call for help becomes `button` (see zigbee2mqtt.IsSOSAction).
+	EventAction = "action"
 )
+
+// BypassesShadow reports the event types that open alerts even with ALERTS_SHADOW on: an SOS press and a
+// smoke / gas / CO alarm. Shadow mode is for tuning thresholds; life safety is never a tuning problem.
+func BypassesShadow(eventType string) bool {
+	return eventType == EventButton || eventType == EventHazard
+}
 
 // Rule event types that subscribe to a device event of a different name.
 const (
@@ -40,7 +54,7 @@ const (
 	RuleOccupancy = "occupancy" // fires on occupied
 )
 
-var RuleEventTypes = []string{EventTamper, EventButton, EventLeak, EventMotion, EventOffline, EventThreshold, EventZone, RuleDoor, RuleOccupancy}
+var RuleEventTypes = []string{EventTamper, EventButton, EventLeak, EventMotion, EventOffline, EventThreshold, EventZone, RuleDoor, RuleOccupancy, EventHazard}
 var Severities = []string{"info", "warning", "critical"}
 var ChannelKinds = []string{"webhook", "line", "email"}
 

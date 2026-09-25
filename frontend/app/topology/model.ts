@@ -22,7 +22,7 @@ export type GatewayEntity = {
 
 export type HeardLink = { gatewayId: string; rssi: number | null; receivedAt: string | null; decoded: boolean };
 
-export type DeviceEvent = { type: "tamper" | "motion" | "leak" | "button" | "light" | "door"; at: string; detail: string };
+export type DeviceEvent = { type: "tamper" | "motion" | "leak" | "button" | "light" | "door" | "hazard"; at: string; detail: string };
 
 export type DeviceEntity = {
   external: string;
@@ -180,6 +180,7 @@ export function deriveEvents(latest: Reading, history: Reading[]): DeviceEvent[]
   if (m.leak === 1) out.push({ type: "leak", at: latest.received_at, detail: "leak flag = 1" });
   if (m.vibration === 1 || m.motion === 1) out.push({ type: "motion", at: latest.received_at, detail: m.vibration === 1 ? "vibration flag = 1" : "PIR motion = 1" });
   if (m.door === 1) out.push({ type: "door", at: latest.received_at, detail: "door = 1 (ประตูเปิดอยู่)" });
+  for (const h of ["smoke", "gas", "carbon_monoxide"]) if (m[h] === 1) out.push({ type: "hazard", at: latest.received_at, detail: `${h} = 1 (Zigbee2MQTT)` });
   if (m.light === 1) out.push({ type: "light", at: latest.received_at, detail: "light detected" });
   // Eddystone-UID instance changes are how the B10 wristband signals a press (per public config guide, unverified).
   const instance = latest.beacon?.instance;
@@ -216,11 +217,31 @@ export function summarize(d: DeviceEntity): string | null {
   const m = r.metrics ?? {};
   const kind = d.kind ?? "environment";
   if (d.events.some((e) => e.type === "tamper")) return "TAMPER · ป้ายถูกถอด";
-  if (d.events.some((e) => e.type === "button")) return "กดปุ่ม · instance เปลี่ยน";
+  if (d.events.some((e) => e.type === "button")) return "กดปุ่มฉุกเฉิน SOS";
+  if (["smoke", "gas", "carbon_monoxide"].some((h) => m[h] === 1)) return "ตรวจพบควัน / แก๊ส / CO";
   if (d.events.some((e) => e.type === "leak")) return "พบน้ำรั่ว";
   switch (kind) {
     case "environment":
-      return `${r.temperature.toFixed(1)}°C · ${r.humidity.toFixed(0)}%`;
+      if (!Number.isFinite(r.temperature)) return null;
+      return Number.isFinite(r.humidity) ? `${r.temperature.toFixed(1)}°C · ${r.humidity.toFixed(0)}%` : `${r.temperature.toFixed(1)}°C`;
+    case "occupancy":
+      return m.motion == null ? "PIR · รอสถานะ" : m.motion === 1 ? "PIR · พบคน" : "PIR · ไม่พบคน";
+    case "hazard":
+      return "ควัน / แก๊ส · ปกติ";
+    case "sos":
+      return "ปุ่มฉุกเฉิน · พร้อม";
+    case "remote":
+      return r.action ? `กด ${r.action}` : "รีโมต · พร้อม";
+    case "lighting":
+      return m.state == null ? "หลอดไฟ" : m.state === 1 ? `เปิด${m.brightness != null ? ` · ${Math.round((m.brightness / 254) * 100)}%` : ""}` : "ปิด";
+    case "cover":
+      return m.position != null ? `เปิด ${m.position}%` : "ม่าน";
+    case "lock":
+      return r.values?.lock_state === "locked" || m.state === 1 ? "ล็อกอยู่" : r.values?.lock_state || m.state === 0 ? "ปลดล็อก" : "กลอน";
+    case "climate":
+      return m.local_temperature != null ? `${m.local_temperature.toFixed(1)}°C${m.occupied_heating_setpoint != null ? ` → ${m.occupied_heating_setpoint}°C` : ""}` : "ควบคุมอุณหภูมิ";
+    case "metering":
+      return m.power != null ? `${m.power} W` : "มิเตอร์"; 
     case "motion":
       if (m.motion != null && m.vibration == null && m.accel_g == null) return m.motion === 1 ? "PIR · พบคน" : "PIR · ไม่พบคน";
       return (d.events.some((e) => e.type === "motion") ? "เคลื่อนไหว" : "นิ่ง") + (m.accel_g != null ? ` · ${m.accel_g.toFixed(2)} g` : "");
@@ -237,13 +258,14 @@ export function summarize(d: DeviceEntity): string | null {
       if (r.beacon?.instance) return `UID …${r.beacon.instance.slice(-6)}`;
       return "beacon";
     default:
+      if (r.frames?.includes("z2m-state@1")) return r.model || null;
       return r.model ? `Minew ${r.model}` : null;
   }
 }
 
 /** Events that deserve attention on the canvas (not routine motion). */
 export function isAlerting(d: DeviceEntity): boolean {
-  return d.events.some((e) => e.type === "tamper" || e.type === "button" || e.type === "leak");
+  return d.events.some((e) => e.type === "tamper" || e.type === "button" || e.type === "leak" || e.type === "hazard");
 }
 
 /** "all" = every project, "none" = gateways without a project, otherwise a project id. */

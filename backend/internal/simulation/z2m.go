@@ -154,6 +154,7 @@ func Z2MMessages(base string, step int, announce bool) []Z2MMessage {
 // state when the bridge starts.
 type Z2MActuator struct {
 	IEEE, Name, Model, Vendor, ModelID, Manufacturer, PowerSource string
+	Description                                                   string
 	Exposes                                                       string
 	Initial                                                       map[string]any
 }
@@ -196,16 +197,56 @@ var Z2MActuators = []Z2MActuator{
 		Initial: map[string]any{"occupied_heating_setpoint": 20, "local_temperature": 24.5, "system_mode": "heat", "child_lock": "UNLOCK"}},
 }
 
+// Z2MSensors are battery sensors, buttons and a detector, one of each kind the generic ingest maps, with the
+// exposes copied from zigbee-herdsman-converters 26.112.0 (the definitions Zigbee2MQTT publishes for them;
+// config-only features left out). Initial is the state each reports on its own; a button's action is only in
+// the message of a press (Z2MPress).
+var Z2MSensors = []Z2MActuator{
+	{IEEE: "0x00158d0000000101", Name: "ห้องประชุม/อุณหภูมิ", Model: "WSDCGQ11LM", Vendor: "Aqara", ModelID: "lumi.weather", Manufacturer: "LUMI", PowerSource: "Battery", Description: "Temperature and humidity sensor",
+		Exposes: `[{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"temperature","access":1,"type":"numeric","property":"temperature","unit":"°C"},{"name":"humidity","access":1,"type":"numeric","property":"humidity","unit":"%"},{"name":"pressure","access":1,"type":"numeric","property":"pressure","unit":"hPa"},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"}]`,
+		Initial: map[string]any{"temperature": 24.6, "humidity": 55.2, "pressure": 1008.4, "battery": 91, "voltage": 3005}},
+	{IEEE: "0x00158d0000000102", Name: "ประตูห้องเก็บของ", Model: "MCCGQ11LM", Vendor: "Aqara", ModelID: "lumi.sensor_magnet.aq2", Manufacturer: "LUMI", PowerSource: "Battery", Description: "Door and window sensor",
+		Exposes: `[{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"contact","access":1,"type":"binary","property":"contact","value_on":false,"value_off":true},{"name":"device_temperature","access":1,"type":"numeric","property":"device_temperature","category":"diagnostic","unit":"°C"},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"},{"name":"power_outage_count","access":1,"type":"numeric","property":"power_outage_count","category":"diagnostic"},{"name":"trigger_count","access":1,"type":"numeric","property":"trigger_count","category":"diagnostic"}]`,
+		Initial: map[string]any{"contact": true, "battery": 88, "voltage": 2995, "device_temperature": 27}},
+	{IEEE: "0x00158d0000000103", Name: "ทางเดิน/PIR", Model: "RTCGQ11LM", Vendor: "Aqara", ModelID: "lumi.sensor_motion.aq2", Manufacturer: "LUMI", PowerSource: "Battery", Description: "Motion sensor",
+		Exposes: `[{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"occupancy","access":1,"type":"binary","property":"occupancy","value_on":true,"value_off":false},{"name":"device_temperature","access":1,"type":"numeric","property":"device_temperature","category":"diagnostic","unit":"°C"},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"},{"name":"illuminance","access":1,"type":"numeric","property":"illuminance","unit":"lx"},{"name":"power_outage_count","access":1,"type":"numeric","property":"power_outage_count","category":"diagnostic"}]`,
+		Initial: map[string]any{"occupancy": false, "illuminance": 120, "battery": 95, "voltage": 3015}},
+	{IEEE: "0x00158d0000000104", Name: "ใต้ซิงก์", Model: "SJCGQ11LM", Vendor: "Aqara", ModelID: "lumi.sensor_wleak.aq1", Manufacturer: "LUMI", PowerSource: "Battery", Description: "Water leak sensor",
+		Exposes: `[{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"},{"name":"device_temperature","access":1,"type":"numeric","property":"device_temperature","category":"diagnostic","unit":"°C"},{"name":"power_outage_count","access":1,"type":"numeric","property":"power_outage_count","category":"diagnostic"},{"name":"trigger_count","access":1,"type":"numeric","property":"trigger_count","category":"diagnostic"},{"name":"water_leak","access":1,"type":"binary","property":"water_leak","value_on":true,"value_off":false},{"name":"battery_low","access":1,"type":"binary","property":"battery_low","category":"diagnostic","value_on":true,"value_off":false}]`,
+		Initial: map[string]any{"water_leak": false, "battery": 100, "voltage": 3025, "battery_low": false}},
+	{IEEE: "0xa4c1380000000105", Name: "ปุ่ม SOS ห้องพัก", Model: "TS0215A_sos", Vendor: "Tuya", ModelID: "TS0215A", Manufacturer: "_TZ3000_p6ju8myv", PowerSource: "Battery", Description: "SOS button",
+		Exposes: `[{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"},{"name":"action","access":1,"type":"enum","property":"action","category":"diagnostic","values":["emergency"]}]`,
+		Initial: map[string]any{"battery": 80, "voltage": 2900}},
+	{IEEE: "0x000b57fffe000106", Name: "รีโมตไฟห้องประชุม", Model: "E1743", Vendor: "IKEA", ModelID: "TRADFRI on/off switch", Manufacturer: "IKEA of Sweden", PowerSource: "Battery", Description: "TRADFRI on/off switch",
+		Exposes: `[{"name":"battery","access":5,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"action","access":1,"type":"enum","property":"action","category":"diagnostic","values":["on","off","brightness_move_up","brightness_move_down","brightness_stop"]}]`,
+		Initial: map[string]any{"battery": 74}},
+	{IEEE: "0x00158d0000000107", Name: "ห้องครัว/ควัน", Model: "JTYJ-GD-01LM/BW", Vendor: "Xiaomi", ModelID: "lumi.sensor_smoke", Manufacturer: "LUMI", PowerSource: "Battery", Description: "Mijia Honeywell smoke detector",
+		Exposes: `[{"name":"smoke","access":1,"type":"binary","property":"smoke","value_on":true,"value_off":false},{"name":"battery_low","access":1,"type":"binary","property":"battery_low","category":"diagnostic","value_on":true,"value_off":false},{"name":"tamper","access":1,"type":"binary","property":"tamper","value_on":true,"value_off":false},{"name":"battery","access":1,"type":"numeric","property":"battery","category":"diagnostic","unit":"%","value_max":100,"value_min":0},{"name":"sensitivity","access":3,"type":"enum","property":"sensitivity","values":["low","medium","high"]},{"name":"smoke_density","access":1,"type":"numeric","property":"smoke_density"},{"name":"selftest","access":2,"type":"enum","property":"selftest","values":[""]},{"name":"voltage","access":1,"type":"numeric","property":"voltage","category":"diagnostic","unit":"mV"},{"name":"test","access":1,"type":"binary","property":"test","value_on":true,"value_off":false},{"name":"device_temperature","access":1,"type":"numeric","property":"device_temperature","category":"diagnostic","unit":"°C"},{"name":"power_outage_count","access":1,"type":"numeric","property":"power_outage_count","category":"diagnostic"}]`,
+		Initial: map[string]any{"smoke": false, "battery_low": false}},
+}
+
+// z2mDevices is every simulated non-switch device.
+func z2mDevices() []Z2MActuator {
+	return append(append([]Z2MActuator{}, Z2MActuators...), Z2MSensors...)
+}
+
 // Z2MBridgeDevicesAll is bridge/devices for the whole virtual network: the switches of Z2MBridgeDevices plus
-// Z2MActuators.
+// Z2MActuators and Z2MSensors.
 func Z2MBridgeDevicesAll() []byte {
 	var devices []json.RawMessage
 	_ = json.Unmarshal(Z2MBridgeDevices(), &devices)
-	for _, a := range Z2MActuators {
+	for _, a := range z2mDevices() {
+		kind, description := "Router", a.Description
+		if a.PowerSource == "Battery" {
+			kind = "EndDevice"
+		}
+		if description == "" {
+			description = a.Model
+		}
 		b, _ := json.Marshal(map[string]any{
-			"ieee_address": a.IEEE, "type": "Router", "friendly_name": a.Name, "supported": true, "network_address": 2000,
+			"ieee_address": a.IEEE, "type": kind, "friendly_name": a.Name, "supported": true, "network_address": 2000,
 			"model_id": a.ModelID, "manufacturer": a.Manufacturer, "power_source": a.PowerSource, "interview_completed": true, "disabled": false,
-			"definition": map[string]any{"model": a.Model, "vendor": a.Vendor, "description": a.Model, "exposes": json.RawMessage(a.Exposes)},
+			"definition": map[string]any{"model": a.Model, "vendor": a.Vendor, "description": description, "exposes": json.RawMessage(a.Exposes)},
 		})
 		devices = append(devices, b)
 	}
@@ -227,7 +268,7 @@ type FakeBridge struct {
 
 func NewFakeBridge(base string) *FakeBridge {
 	b := &FakeBridge{Base: base, switches: Z2MStep(0), states: map[string]map[string]any{}}
-	for _, a := range Z2MActuators {
+	for _, a := range z2mDevices() {
 		s := map[string]any{}
 		for k, v := range a.Initial {
 			s[k] = v
@@ -249,7 +290,7 @@ func (b *FakeBridge) Step(step int) []Z2MMessage {
 		for _, s := range Z2MSwitches {
 			out = append(out, Z2MMessage{Topic: Z2MTopic(b.Base, s, "availability"), Payload: Z2MOnline(true), Retain: true})
 		}
-		for _, a := range Z2MActuators {
+		for _, a := range z2mDevices() {
 			out = append(out, Z2MMessage{Topic: b.Base + "/" + a.Name + "/availability", Payload: Z2MOnline(true), Retain: true})
 		}
 	} else if step%20 == 0 {
@@ -258,10 +299,47 @@ func (b *FakeBridge) Step(step int) []Z2MMessage {
 	for i, s := range Z2MSwitches {
 		out = append(out, Z2MMessage{Topic: Z2MTopic(b.Base, s, ""), Payload: Z2MState(s, b.switches[i], 90+i*20)})
 	}
-	for _, a := range Z2MActuators {
+	for _, a := range z2mDevices() {
 		out = append(out, b.actuatorState(a))
 	}
+	// Every 30 steps someone walks past the PIR; every 45 the meeting-room remote is pressed.
+	if step > 0 && step%30 == 0 {
+		out = append(out, b.set(Z2MSensors[2], "occupancy", true))
+	} else if step > 0 && step%30 == 15 {
+		out = append(out, b.set(Z2MSensors[2], "occupancy", false))
+	}
+	if step > 0 && step%45 == 0 {
+		out = append(out, Z2MPress(b.Base, Z2MSensors[5], "on"))
+	}
 	return out
+}
+
+func (b *FakeBridge) set(a Z2MActuator, key string, value any) Z2MMessage {
+	b.states[a.IEEE][key] = value
+	return b.actuatorState(a)
+}
+
+// Set changes one reported value of a simulated device (a door opening, water, smoke) and returns the state
+// message the bridge publishes for it.
+func (b *FakeBridge) Set(ieee, key string, value any) []Z2MMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, a := range z2mDevices() {
+		if a.IEEE == ieee {
+			return []Z2MMessage{b.set(a, key, value)}
+		}
+	}
+	return nil
+}
+
+// Z2MPress is the message a button or remote publishes when pressed: its action and battery, once.
+func Z2MPress(base string, a Z2MActuator, action string) Z2MMessage {
+	m := map[string]any{"action": action, "linkquality": 120, "aether_source": "simulated", "device": map[string]any{"ieeeAddr": a.IEEE, "friendlyName": a.Name, "model": a.Model}}
+	if v, ok := a.Initial["battery"]; ok {
+		m["battery"] = v
+	}
+	p, _ := json.Marshal(m)
+	return Z2MMessage{Topic: base + "/" + a.Name, Payload: p}
 }
 
 func (b *FakeBridge) actuatorState(a Z2MActuator) Z2MMessage {
@@ -306,7 +384,7 @@ func (b *FakeBridge) Apply(topic string, payload []byte) []Z2MMessage {
 		}
 		return []Z2MMessage{{Topic: Z2MTopic(b.Base, s, ""), Payload: Z2MState(s, b.switches[i], 90+i*20)}}
 	}
-	for _, a := range Z2MActuators {
+	for _, a := range z2mDevices() {
 		if device != a.IEEE && device != a.Name {
 			continue
 		}

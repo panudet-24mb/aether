@@ -394,3 +394,17 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .topo-cmd-status { font-size: 12px; opacity: 0.8; }
 .topo-cmd-status.is-confirmed { color: var(--color-accent-dark); opacity: 1; }
 .topo-cmd-status.is-timeout, .topo-cmd-status.is-failed, .topo-cmd-status.is-expired { color: var(--color-danger); opacity: 1; }
+
+/* Zigbee2MQTT supported-models search ("รุ่นที่รองรับ") */
+.topo-error { font-size: 12.5px; color: var(--color-danger, #e5484d); line-height: 1.6; }
+.topo-zigbee-catalog { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--color-border); display: grid; gap: 8px; }
+.topo-zigbee-catalog .topo-h3 { display: flex; align-items: center; gap: 8px; }
+.topo-zigbee-catalog-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.topo-zigbee-catalog-filters .topo-search { flex: 1 1 220px; max-width: none; margin-left: 0; }
+.topo-zigbee-catalog-filters select { height: 30px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); color: inherit; padding: 0 8px; }
+.topo-zigbee-catalog-list { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
+.topo-zigbee-catalog-list li { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--color-border); }
+.topo-zigbee-catalog-list strong { font-size: 13px; }
+.topo-zigbee-catalog-list span { font-size: 12.5px; color: var(--color-muted); }
+.topo-zigbee-catalog-list small { font-size: 11.5px; color: var(--color-dim); display: flex; align-items: center; gap: 4px; }
+.topo-attribution { font-size: 11px; }

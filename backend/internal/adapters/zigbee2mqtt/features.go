@@ -29,13 +29,16 @@ const MaxExposes = 64 * 1024
 // Feature is one generic feature. Composite features (color_xy {x,y}, color_hs {hue,saturation}, ...) carry
 // their parts in Features.
 type Feature struct {
-	Type        string            `json:"type"`
-	Name        string            `json:"name,omitempty"`
-	Label       string            `json:"label,omitempty"`
-	Property    string            `json:"property"`
-	Endpoint    string            `json:"endpoint,omitempty"`
-	Access      int               `json:"access"`
-	Unit        string            `json:"unit,omitempty"`
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Property string `json:"property"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Access   int    `json:"access"`
+	Unit     string `json:"unit,omitempty"`
+	// Category is Zigbee2MQTT's own grouping: "config" (a setting), "diagnostic" (battery, voltage, ...), or empty
+	// for the device's primary readings.
+	Category    string            `json:"category,omitempty"`
 	ValueOn     json.RawMessage   `json:"value_on,omitempty"`
 	ValueOff    json.RawMessage   `json:"value_off,omitempty"`
 	ValueToggle json.RawMessage   `json:"value_toggle,omitempty"`

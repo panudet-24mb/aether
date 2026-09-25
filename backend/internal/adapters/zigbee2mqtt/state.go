@@ -1,47 +1,9 @@
 package zigbee2mqtt
 
 import (
-	"aether/backend/internal/adapters/minew"
 	"encoding/json"
-	"strconv"
 	"strings"
-	"time"
 )
-
-// ParseState turns a device state message ({"state_left":"ON","linkquality":120,...}) into a reading: metric
-// swN = 1/0 for every gang the device exposes, plus linkquality. ok is false when the message carries no gang
-// state (a sensor Aether does not decode yet, or a partial update of another attribute).
-func ParseState(b []byte, d Device, at time.Time) (minew.Reading, bool) {
-	var obj map[string]json.RawMessage
-	if e := json.Unmarshal(b, &obj); e != nil {
-		return minew.Reading{}, false
-	}
-	r := minew.Reading{Source: "gateway", ReceivedAt: at, Kind: KindSwitch, Model: d.Model, Frames: []string{FrameState}, Metrics: map[string]float64{}}
-	for _, g := range d.Gangs {
-		var v string
-		if json.Unmarshal(obj[g.Property], &v) != nil {
-			continue
-		}
-		switch strings.ToUpper(v) {
-		case "ON":
-			r.Metrics["sw"+strconv.Itoa(g.Gang)] = 1
-		case "OFF":
-			r.Metrics["sw"+strconv.Itoa(g.Gang)] = 0
-		}
-	}
-	if len(r.Metrics) == 0 {
-		return minew.Reading{}, false
-	}
-	var lq float64
-	if json.Unmarshal(obj["linkquality"], &lq) == nil && lq >= 0 && lq <= 255 {
-		r.Metrics["linkquality"] = lq
-	}
-	var source string
-	if json.Unmarshal(obj["aether_source"], &source) == nil && source == "simulated" {
-		r.Source = "simulated"
-	}
-	return r, true
-}
 
 // DeviceIEEE returns the IEEE address a state message carries itself when Z2M runs with
 // include_device_information; empty when absent or malformed.

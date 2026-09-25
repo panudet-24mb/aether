@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, BatteryLow, Bell, Bluetooth, ClipboardList, DoorOpen, Droplets, ExternalLink, Footprints, Move, PersonStanding, Radio, Router, Search, ShieldAlert, Siren, Thermometer, Wrench } from "lucide-react";
+import { Activity, AlertTriangle, BatteryLow, Bell, Blinds, Bluetooth, ClipboardList, Cpu, DoorOpen, Droplets, ExternalLink, Fan, Flame, Footprints, Gamepad2, Heater, Lightbulb, Lock, Move, PersonStanding, Radio, Router, Search, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Wrench, Zap } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import "../topology/topology.css";
 import "./overview.css";
@@ -10,7 +10,7 @@ import DeviceControlsPanel from "../topology/device-controls";
 import { PROJECT_COLORS } from "../topology/projects";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
-import { environmentReading, latestMeasurements } from "./measurements";
+import { environmentReading, latestMeasurements, normalizeReading } from "./measurements";
 import { COMFORT_NOTE, DOOR_LEFT_OPEN_MS, OCCUPIED_WINDOW_MS, activityStrip, comfortOf, doorStateOf, doorText, duration, isDoorSensor, isOccupancySensor, lastMotionText, occupancyOf, type DoorState, type Occupancy, type StripCell } from "./office";
 import TemplateSettings from "../template-settings";
 
@@ -39,9 +39,15 @@ type Card = {
 export type OverviewTarget = "alerts" | "connect" | "assets" | "floorplan" | "studio";
 
 const FRESH_MS = 60000, STALE_MS = 15 * 60000, LOW_BATTERY = 20;
-const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์", switch: "สวิตช์ไฟ" };
-const KIND_ICON: Record<string, typeof Thermometer> = { occupancy: PersonStanding, door: DoorOpen, environment: Thermometer, motion: Move, tamper: ShieldAlert, beacon: Bluetooth, leak: Droplets };
-const EVENT_LABEL: Record<string, string> = { tamper: "ป้ายถูกถอด", tamper_cleared: "tamper กลับสู่ปกติ", button: "กดปุ่ม", leak: "พบน้ำรั่ว", leak_cleared: "น้ำรั่วหาย", motion: "เริ่มเคลื่อนไหว", motion_stopped: "หยุดเคลื่อนไหว", offline: "ขาดการติดต่อ", online: "กลับมาออนไลน์", threshold: "ค่าเกินเกณฑ์", threshold_cleared: "ค่ากลับเข้าเกณฑ์", zone: "เข้าโซนใหม่", automation: "ออโตเมชันทำงาน", door_open: "เปิดประตู", door_closed: "ปิดประตู", occupied: "มีคนในพื้นที่", vacant: "ไม่มีคนแล้ว" };
+const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์", switch: "สวิตช์ไฟ",
+  lighting: "หลอดไฟ", cover: "ม่าน / มู่ลี่", lock: "กลอนประตู", climate: "ควบคุมอุณหภูมิ", fan: "พัดลม", remote: "รีโมต / ปุ่ม", sos: "ปุ่มฉุกเฉิน", hazard: "ควัน / แก๊ส / CO", metering: "มิเตอร์ไฟฟ้า", zigbee: "อุปกรณ์ Zigbee" };
+const KIND_ICON: Record<string, typeof Thermometer> = { occupancy: PersonStanding, door: DoorOpen, environment: Thermometer, motion: Move, tamper: ShieldAlert, beacon: Bluetooth, leak: Droplets,
+  switch: ToggleRight, lighting: Lightbulb, cover: Blinds, lock: Lock, climate: Heater, fan: Fan, remote: Gamepad2, sos: Siren, hazard: Flame, metering: Zap, light: Sun, info: Cpu, zigbee: Cpu };
+/** Units of the metrics a generic Zigbee2MQTT card may show (the names Zigbee2MQTT uses). */
+const METRIC_UNIT: Record<string, string> = { temperature: "°C", local_temperature: "°C", device_temperature: "°C", humidity: "%", pressure: "hPa", co2: "ppm", voc: "ppb", formaldehyd: "mg/m³", pm25: "µg/m³", pm10: "µg/m³", illuminance: "lx", power: "W", energy: "kWh", current: "A", voltage: "V", position: "%", occupied_heating_setpoint: "°C", current_heating_setpoint: "°C", soil_moisture: "%", linkquality: "LQI" };
+const HAZARD_LABEL: Record<string, string> = { smoke: "ตรวจพบควัน", gas: "ตรวจพบแก๊สรั่ว", carbon_monoxide: "ตรวจพบ CO" };
+const activeHazards = (m: Record<string, number>) => Object.keys(HAZARD_LABEL).filter((h) => m[h] === 1);
+const EVENT_LABEL: Record<string, string> = { tamper: "ป้ายถูกถอด", tamper_cleared: "tamper กลับสู่ปกติ", button: "กดปุ่ม", leak: "พบน้ำรั่ว", leak_cleared: "น้ำรั่วหาย", motion: "เริ่มเคลื่อนไหว", motion_stopped: "หยุดเคลื่อนไหว", offline: "ขาดการติดต่อ", online: "กลับมาออนไลน์", threshold: "ค่าเกินเกณฑ์", threshold_cleared: "ค่ากลับเข้าเกณฑ์", zone: "เข้าโซนใหม่", automation: "ออโตเมชันทำงาน", door_open: "เปิดประตู", door_closed: "ปิดประตู", occupied: "มีคนในพื้นที่", vacant: "ไม่มีคนแล้ว", hazard: "ตรวจพบควัน / แก๊ส / CO", hazard_cleared: "ควัน / แก๊ส / CO หายแล้ว", action: "กดปุ่ม / รีโมต", switch_on: "สวิตช์เปิด", switch_off: "สวิตช์ปิด" };
 const EVENT_TONE: Record<string, string> = { tamper: "bad", button: "bad", leak: "bad", offline: "bad", threshold: "warn", motion: "warn", zone: "info", door_open: "info", occupied: "info" };
 
 /** Small cell strip: occupancy (motion) or door-open over time; 24 h in the drawer, the last hour on a card. */
@@ -173,7 +179,9 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
         const home = reg?.roaming && reg.zone_gateway_id ? reg.zone_gateway_id : g.gateway.id;
         const merged = latestMeasurements(sensor);
         // Office kinds win over the profile's first kind: the MSP01 profile lists motion + environment.
-        const kind = isDoorSensor(profile, merged) ? "door" : isOccupancySensor(profile, merged) ? "occupancy" : profile?.kinds?.[0] ?? sensor.model ?? "info";
+        // A generic Zigbee2MQTT registration has no fixed kind: the backend derives it from the device's own definition.
+        const generic = profile?.kinds?.[0] === "zigbee";
+        const kind = isDoorSensor(profile, merged) ? "door" : isOccupancySensor(profile, merged) ? "occupancy" : generic ? (merged.kind || sensor.kind || "zigbee") : profile?.kinds?.[0] ?? sensor.model ?? "info";
         cards.set(ext, {
           deviceId: reg.id, profileId: reg.profile_id, key: ext, external: ext, name: reg?.name ?? sensor.name, kind, model: profile ? `${profile.brand} ${profile.model}` : (sensor.model ?? ""), image: profile?.image ?? null,
           registered: !!reg, wearable: !!reg?.roaming || !!profile?.wearable, gatewayId: home, gatewayName: gatewayBy.get(home)?.name ?? g.gateway.name, projectId: gatewayBy.get(home)?.project_id ?? null,
@@ -203,6 +211,8 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       }
       if (r && c.status !== "offline") {
         if (m.tamper === 1) c.reasons.unshift("ป้ายถูกถอด");
+        for (const h of activeHazards(m)) c.reasons.unshift(HAZARD_LABEL[h]);
+        if (m.battery_low === 1) c.reasons.push("แบตเตอรี่ใกล้หมด");
         if (m.leak === 1) c.reasons.unshift("พบน้ำรั่ว");
         if (c.kind === "environment" && c.thresholds?.temperature_high != null && r.temperature > c.thresholds.temperature_high) c.reasons.unshift(`อุณหภูมิเกิน ${c.thresholds.temperature_high} °C`);
         if (c.kind === "environment" && c.thresholds?.humidity_high != null && r.humidity > c.thresholds.humidity_high) c.reasons.unshift(`ความชื้นเกิน ${c.thresholds.humidity_high} %`);
@@ -210,11 +220,11 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       for (const a of alertBy.get(c.external) ?? []) c.reasons.unshift(a.title.split(" · ").slice(-1)[0]);
       c.sos = (alertBy.get(c.external) ?? []).some((a) => a.sos);
       if (c.sos) c.reasons.unshift("กดปุ่มฉุกเฉิน · ยังไม่รับทราบ");
-      if (r && r.battery > 0 && r.battery < LOW_BATTERY) c.reasons.push(`แบตเตอรี่ ${r.battery}%`);
+      if (r && Number.isFinite(r.battery) && r.battery >= 0 && r.battery < LOW_BATTERY) c.reasons.push(`แบตเตอรี่ ${r.battery}%`);
       if ((assetBy.get(c.external)?.overdue_count ?? 0) > 0) c.reasons.push("MA/PM เกินกำหนด");
       // An open alert makes a device urgent, but it must not disguise a device nobody is hearing: an offline
       // tag with a standing offline alert is still offline, and must not be counted as "in range".
-      const urgent = (alertBy.get(c.external)?.length ?? 0) > 0 || (r && (m.tamper === 1 || m.leak === 1)) || c.reasons.some((x) => x.startsWith("อุณหภูมิเกิน") || x.startsWith("ความชื้นเกิน"));
+      const urgent = (alertBy.get(c.external)?.length ?? 0) > 0 || (r && (m.tamper === 1 || m.leak === 1 || activeHazards(m).length > 0)) || c.reasons.some((x) => x.startsWith("อุณหภูมิเกิน") || x.startsWith("ความชื้นเกิน"));
       if (urgent && c.status !== "offline") c.status = "alert";
     }
     const list = [...cards.values()];
@@ -263,7 +273,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       if (!active) return;
       let best: Sensor | undefined;
       for (const g of out.gateways) for (const s of g.sensors) if (s.id.toLowerCase() === openKey && (!best || s.history.length > best.history.length)) best = s;
-      setDetail({ key: openKey, range: fetchRange, history: best?.history ?? [] });
+      setDetail({ key: openKey, range: fetchRange, history: (best?.history ?? []).map(normalizeReading) });
     }).catch(() => {});
     return () => { active = false; };
   }, [openKey, fetchRange, client]);
@@ -287,6 +297,28 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
     if (c.kind === "tamper") return <span className={`ov-value ${m.tamper === 1 ? "is-bad" : ""}`}>{m.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</span>;
     if (c.kind === "leak") return <span className={`ov-value ${m.leak === 1 ? "is-bad" : ""}`}>{m.leak === 1 ? "น้ำรั่ว" : "แห้ง"}</span>;
     if (c.kind === "motion") return <span className={`ov-value ${m.vibration === 1 || m.motion === 1 ? "is-warn" : ""}`}>{m.vibration === 1 || m.motion === 1 ? "เคลื่อนไหว" : "นิ่ง"}{m.accel_g != null && <em>{Number(m.accel_g).toFixed(2)}<small>g</small></em>}</span>;
+    if (c.kind === "hazard") {
+      const active = activeHazards(m);
+      return <span className={`ov-value ${active.length ? "is-bad" : ""}`}>{active.length ? active.map((h) => HAZARD_LABEL[h]).join(" · ") : r ? "ปกติ" : "รอสถานะ"}</span>;
+    }
+    if (c.kind === "lighting") return <span className={`ov-value ${m.state == null ? "is-muted" : ""}`}>{m.state == null ? "รอสถานะ" : m.state === 1 ? "เปิด" : "ปิด"}{m.brightness != null && <em>{Math.round((m.brightness / 254) * 100)}<small>%</small></em>}</span>;
+    if (c.kind === "cover") return <span className="ov-value">{number(m.position)}<small>% เปิด</small>{r?.values?.state && <em className="is-plain">{r.values.state}</em>}</span>;
+    if (c.kind === "lock") {
+      const locked = r?.values?.lock_state ? r.values.lock_state === "locked" : m.state === 1 ? true : m.state === 0 ? false : null;
+      return <span className={`ov-value ${locked === false ? "is-warn" : locked === null ? "is-muted" : ""}`}>{locked === null ? "รอสถานะ" : locked ? "ล็อกอยู่" : "ปลดล็อก"}</span>;
+    }
+    if (c.kind === "climate") return <span className="ov-value">{number(m.local_temperature, 1)}<small>°C</small>{(m.occupied_heating_setpoint ?? m.current_heating_setpoint) != null && <em>ตั้ง {number(m.occupied_heating_setpoint ?? m.current_heating_setpoint, 1)}<small>°C</small></em>}{r?.values?.system_mode && <em className="is-plain">{r.values.system_mode}</em>}</span>;
+    if (c.kind === "metering") return <span className="ov-value">{number(m.power)}<small>W</small>{m.energy != null && <em>{number(m.energy, 2)}<small>kWh</small></em>}</span>;
+    if (c.kind === "light") return <span className="ov-value">{number(m.illuminance)}<small>lx</small></span>;
+    if (c.kind === "sos" || c.kind === "remote") {
+      if (c.status === "offline") return <span className="ov-value is-muted">ขาดการติดต่อ</span>;
+      return <span className="ov-value">พร้อมใช้งาน{Number.isFinite(r?.battery) && <em>{number(r?.battery)}<small>% แบต</small></em>}</span>;
+    }
+    if (c.kind === "zigbee" || c.kind === "fan" || c.kind === "info") {
+      // Anything else Zigbee2MQTT reports: its first two measurements with their units.
+      const shown = Object.entries(m).filter(([k]) => k !== "linkquality" && !/^sw\d$/.test(k)).slice(0, 2);
+      if (shown.length) return <span className="ov-value">{shown.map(([k, v], i) => i === 0 ? <span key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></span> : <em key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></em>)}</span>;
+    }
     if (!r) return <span className="ov-value is-muted">ไม่มีข้อมูล</span>;
     // A beacon's only value is "is it heard": an offline tag must not read as present.
     if (c.status === "offline") return <span className="ov-value is-muted">ไม่อยู่ในระยะ</span>;
@@ -298,7 +330,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
       <header className="topo-bar ov-bar">
         <h1 className="topo-bar-title">ภาพรวม</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบทุก 5 วินาที"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
-        {shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ยกเว้นปุ่มฉุกเฉิน SOS ที่แจ้งเตือนเสมอ · ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · แจ้งเตือนเฉพาะ SOS</span>}
+        {shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ยกเว้นปุ่มฉุกเฉิน SOS และเครื่องตรวจควัน / แก๊ส / CO ที่แจ้งเตือนเสมอ · ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · แจ้งเตือนเฉพาะ SOS และควัน / แก๊ส</span>}
         <select className="ov-select" aria-label="โปรเจค" value={project} onChange={(e) => setProject(e.target.value)}>
           <option value="all">ทุกโปรเจค</option>
           {(snapshot?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

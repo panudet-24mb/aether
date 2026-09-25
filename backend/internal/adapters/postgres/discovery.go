@@ -24,7 +24,8 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
 		}
 		if len(model) == 1 && model[0] == domain.Z2MGatewayModel {
 			return tx.Raw(`SELECT z.gateway_id,z.ieee AS external_id,coalesce(s.last_seen,z.updated_at) AS last_seen,'z2m' AS source,
-    coalesce(s.name,'') AS stream_name,z.model,CASE WHEN jsonb_array_length(z.gangs)>0 THEN 'switch' ELSE '' END AS kind
+    coalesce(s.name,'') AS stream_name,z.model,z.vendor,z.description,
+    CASE WHEN z.category<>'' THEN z.category WHEN jsonb_array_length(z.gangs)>0 THEN 'switch' ELSE '' END AS kind
   FROM core.z2m_devices z JOIN core.gateways g ON g.tenant_id=z.tenant_id AND g.id=z.gateway_id AND g.revoked_at IS NULL
   LEFT JOIN core.sensor_streams s ON s.gateway_id=z.gateway_id AND s.external_id=z.ieee
   WHERE z.gateway_id=? AND z.removed_at IS NULL

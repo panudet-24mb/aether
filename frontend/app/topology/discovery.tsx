@@ -4,6 +4,7 @@ import { Bluetooth, Search } from "lucide-react";
 import type { Discovery, Gateway } from "./api";
 import { formatMAC, suggestProfile } from "./catalog";
 import { isFresh } from "./model";
+import { ZIGBEE_KIND_LABEL } from "./zigbee-catalog";
 
 export default function DiscoveryList({ items, gateways, gatewayId, serverTime, busy, onAdopt, hiddenUnknown = 0 }: {
   items: Discovery[]; gateways: Gateway[]; gatewayId?: string; serverTime: number; busy: boolean;
@@ -16,7 +17,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
   const selected = gatewayId ?? filter;
   const q = query.toLowerCase().replace(/[:\s-]/g, "");
   const matches = items.filter((d) => (!selected || d.gateway_id === selected) &&
-    (!q || `${d.external_id}${d.model ?? ""}${d.profile?.label ?? ""}`.toLowerCase().replace(/[:\s-]/g, "").includes(q)));
+    (!q || `${d.external_id}${d.model ?? ""}${d.profile?.label ?? ""}${d.vendor ?? ""}${d.description ?? ""}`.toLowerCase().replace(/[:\s-]/g, "").includes(q)));
   return <section className="topo-discovery" aria-label="อุปกรณ์ที่พบใหม่">
     <p className="topo-note">อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew{hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}</p>
     {!gatewayId && <label className="topo-project-select">Gateway
@@ -33,16 +34,16 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
       return <div key={g.id} className="topo-discovery-group">
         <h3 className="topo-h3">{g.name} <span className="topo-count">{devices.length}</span></h3>
         {devices.map((d) => {
-          const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind }) : undefined;
+          const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind, zigbee: d.source === "z2m" }) : undefined;
           const profile = d.profile ?? suggestion;
           // Zigbee devices come from the coordinator's own list (source "z2m"); their model is the Z2M definition.
           const zigbee = d.source === "z2m";
-          const label = d.profile ? `${d.profile.brand} ${d.profile.model}${zigbee && d.model ? ` · ${d.model}` : ""}` : d.model ? `${zigbee ? "Zigbee" : "Minew"} ${d.model}` : profile ? `${profile.brand} ${profile.model}` : zigbee ? "อุปกรณ์ Zigbee · ยังไม่ทราบรุ่น" : "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
+          const label = zigbee && d.vendor && d.model ? `${d.vendor} ${d.model}` : d.profile ? `${d.profile.brand} ${d.profile.model}${zigbee && d.model ? ` · ${d.model}` : ""}` : d.model ? `${zigbee ? "Zigbee" : "Minew"} ${d.model}` : profile ? `${profile.brand} ${profile.model}` : zigbee ? "อุปกรณ์ Zigbee · ยังไม่ทราบรุ่น" : "อุปกรณ์ BLE · ยังไม่ทราบรุ่น";
           return <article className="topo-discovery-card" key={d.external_id}>
             <div className="topo-discovery-photo">{profile?.image ? <img src={profile.image} alt={label} /> : <Bluetooth size={30} />}</div>
             <div className="topo-discovery-info">
               <strong>{label}</strong>
-              <small>{d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
+              <small>{zigbee && d.description ? `${d.description}${d.kind ? ` · ${ZIGBEE_KIND_LABEL[d.kind] ?? d.kind}` : ""}` : d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
               <code>{formatMAC(d.external_id)}</code>
               <small>{zigbee ? "pair อยู่กับ coordinator" : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{d.source === "simulated" ? " · SIM" : ""}</small>
               <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>ลงทะเบียน</button>

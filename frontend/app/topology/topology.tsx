@@ -23,8 +23,9 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import "./topology.css";
 import { ApiError, createClientFrom, type Device, type GatewayCreated, type MQTTCredentials, type Snapshot } from "./api";
 import { useLatest } from "./use-latest";
-import { DEVICE_PROFILES, deviceBrands, deviceProfile, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, Z2M_GATEWAY_MODEL, type DeviceProfile } from "./catalog";
+import { DEVICE_PROFILES, deviceBrands, deviceProfile, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
+import ZigbeeCatalogSearch from "./zigbee-catalog";
 import Inspector, { type Selection } from "./inspector";
 import { NODE_ID, autoLayout, loadPersisted, parseNodeId, placeNewNodes, savePersisted, type LayoutInput } from "./layout";
 import { buildTopology, currentGateway, isAlerting, isFresh, isRecognised, scopeSnapshot, summarize, type ProjectScope, type Topology } from "./model";
@@ -890,6 +891,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
         <DialogContent className="topo-dialog topo-discovery-dialog">
           <DialogHeader><DialogTitle>อุปกรณ์ที่พบใหม่</DialogTitle><DialogDescription>เลือกอุปกรณ์จาก gateway ที่พบ แล้วลงทะเบียนเพื่อเริ่มใช้งาน</DialogDescription></DialogHeader>
           <DiscoveryList items={discoveryItems} gateways={topology.gateways.map((g) => g.gateway)} serverTime={serverNow} busy={busy} hiddenUnknown={topology.gateways.reduce((n, g) => n + (snapshot?.discoveryHidden?.[g.gateway.id] ?? 0), 0)} onAdopt={(external, gatewayId) => { setDiscoveryOpen(false); setDialogError(""); setAdopt({ external, gatewayId }); }} />
+          {topology.gateways.some((g) => g.gateway.model === Z2M_GATEWAY_MODEL) && <ZigbeeCatalogSearch client={client} />}
         </DialogContent>
       </Dialog>
       {adopt && (
@@ -900,7 +902,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           busy={busy}
           error={dialogError}
           initialName={adoptDevice?.name ?? ""}
-          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon })?.id ?? DEVICE_PROFILES[0].id}
+          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
           onCancel={() => setAdopt(null)}
           onSubmit={(input) =>
             void action(async () => {
@@ -1161,8 +1163,11 @@ function AdoptForm({
   // Only profiles whose radio this gateway hears (a Zigbee switch never sits under a BLE gateway, and back).
   const fits = (p: DeviceProfile) => profileFitsGateway(p, gateway?.gateway.model ?? "");
   const brands = deviceBrands().filter((b) => profilesForBrand(b).some(fits));
+  // A seeded profile that does not fit this gateway (a BLE suggestion for a Zigbee device) falls back to the first
+  // profile that does, so the selects never show a value the form would refuse on submit.
   const picked = deviceProfile(profile);
-  const chosen = picked && fits(picked) ? picked : undefined;
+  const chosen = picked && fits(picked) ? picked : DEVICE_PROFILES.find((p) => fits(p) && p.id === Z2M_GENERIC_PROFILE) ?? DEVICE_PROFILES.find(fits);
+  const shownBrand = brands.includes(brand) && chosen?.brand === brand ? brand : chosen?.brand ?? brand;
   const roaming = roamingChoice ?? !!chosen?.wearable;
   const heard = device?.heard.find((h) => h.gatewayId === effectiveGateway);
   const externalValid = validName(external.trim());
@@ -1201,7 +1206,7 @@ function AdoptForm({
             <label>
               แบรนด์
               <select
-                value={brand}
+                value={shownBrand}
                 onChange={(e) => {
                   setBrand(e.target.value);
                   setProfile(profilesForBrand(e.target.value).filter(fits)[0]?.id ?? "");
@@ -1214,9 +1219,9 @@ function AdoptForm({
             </label>
             <label>
               รุ่น / profile
-              <select value={profile} onChange={(e) => setProfile(e.target.value)}>
+              <select value={chosen?.id ?? ""} onChange={(e) => setProfile(e.target.value)}>
                 {!chosen && <option value="">เลือกรุ่นที่ใช้กับ gateway นี้ได้</option>}
-                {profilesForBrand(brand).filter(fits).map((p) => (
+                {profilesForBrand(shownBrand).filter(fits).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.model} · {p.id}
                   </option>

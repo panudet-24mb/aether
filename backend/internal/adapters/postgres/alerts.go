@@ -156,6 +156,13 @@ func createAlerts(tx *gorm.DB, tenant string, ev domain.DeviceEvent, rules []dom
 	return nil
 }
 
+// Limits on the informational `action` events of Zigbee2MQTT buttons and remotes.
+const (
+	actionCoalesce   = 2 * time.Second
+	actionsPerMinute = 30
+	maxActionEvents  = 1000
+)
+
 // updateZone smooths this gateway's RSSI for the tag and moves the wearable's zone when alerts.DecideZone says so.
 // It returns the zone event to record, or nil. The caller holds the per-tenant roaming lock.
 func updateZone(tx *gorm.DB, tenant, gateway, external string, rssi int, at time.Time) (*domain.DeviceEvent, error) {
@@ -314,8 +321,15 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 	if e := tx.Raw(`SELECT lower(external_id) FROM core.devices WHERE removed_at IS NULL AND profile_id IN ? LIMIT 5000`, domain.ButtonProfileIDs()).Scan(&buttonIDs).Error; e != nil {
 		return e
 	}
+	// A Zigbee2MQTT device raises `button` only from an emergency action or SOS binary, and only when its own
+	// definition can call for help (z2m_devices.sos) and it is registered: an ordinary remote never rings.
+	var sosIDs []string
+	if e := tx.Raw(`SELECT lower(d.external_id) FROM core.devices d JOIN core.z2m_devices z ON z.tenant_id=d.tenant_id AND z.gateway_id=? AND z.ieee=lower(d.external_id)
+    WHERE d.removed_at IS NULL AND z.removed_at IS NULL AND z.sos LIMIT 5000`, gateway).Scan(&sosIDs).Error; e != nil {
+		return e
+	}
 	button := map[string]bool{}
-	for _, id := range buttonIDs {
+	for _, id := range append(buttonIDs, sosIDs...) {
 		button[id] = true
 	}
 	for _, sensor := range view.Sensors {
@@ -384,6 +398,20 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 			if ev.EventType == domain.EventButton && !button[sensor.ID] && ev.Detail["signal_id"] == nil {
 				continue
 			}
+			// Remotes can be chatty (a rotary dimmer sends dozens of rotate actions a second): the same action
+			// again within actionCoalesce is one event, and at most actionsPerMinute actions per device are kept.
+			// Only the informational `action` event is limited; an SOS press is its own `button` event.
+			if ev.EventType == domain.EventAction {
+				var recent struct{ Total, Same int64 }
+				if e := tx.Raw(`SELECT count(*) AS total, count(*) FILTER (WHERE detail->>'action'=? AND occurred_at>?) AS same
+    FROM core.device_events WHERE gateway_id=? AND external_id=? AND event_type=? AND occurred_at>?`,
+					ev.Detail["action"], ev.OccurredAt.Add(-actionCoalesce), gateway, sensor.ID, domain.EventAction, ev.OccurredAt.Add(-time.Minute)).Scan(&recent).Error; e != nil {
+					return e
+				}
+				if recent.Same > 0 || recent.Total >= actionsPerMinute {
+					continue
+				}
+			}
 			if roaming[sensor.ID] && ev.EventType != domain.EventZone {
 				var n int64
 				if e := tx.Raw(`SELECT count(*) FROM core.device_events WHERE external_id=? AND event_type=? AND gateway_id<>? AND occurred_at>?`, sensor.ID, ev.EventType, gateway, ev.OccurredAt.Add(-roamingEventWindow)).Scan(&n).Error; e != nil {
@@ -397,10 +425,11 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 				return e
 			}
 			inserted = append(inserted, ev)
-			// Shadow mode: the event log fills, nothing is alerted or sent — except SOS. Shadow exists so untuned
-			// thresholds do not wake anyone during the first days; a person pressing a panic button is never a
-			// tuning problem, so a `button` event still opens its alert (and notifies its channels).
-			if opts.AlertsShadow && ev.EventType != domain.EventButton {
+			// Shadow mode: the event log fills, nothing is alerted or sent — except life safety. Shadow exists so
+			// untuned thresholds do not wake anyone during the first days; a person pressing a panic button, or a
+			// smoke / gas / CO detector in alarm, is never a tuning problem, so `button` and `hazard` still open
+			// their alerts (and notify their channels).
+			if opts.AlertsShadow && !domain.BypassesShadow(ev.EventType) {
 				continue
 			}
 			if e := createAlerts(tx, tenant, ev, rules); e != nil {
@@ -705,7 +734,12 @@ func (r *Repository) PruneAlertData(ctx context.Context, tenant string) error {
 		if e := tx.Exec(`DELETE FROM core.alerts WHERE status='resolved' AND id IN (SELECT id FROM core.alerts WHERE status='resolved' ORDER BY opened_at DESC,id DESC OFFSET 2000)`).Error; e != nil {
 			return e
 		}
-		if e := tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events ORDER BY occurred_at DESC,id DESC OFFSET 5000) AND NOT EXISTS(SELECT 1 FROM core.alerts a WHERE a.event_id=e.id)`).Error; e != nil {
+		// Button and remote `action` events have their own, smaller budget and are pruned first, so a chatty
+		// remote can never push door, alarm or offline history out of the 5000-event log.
+		if e := tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events WHERE event_type=? ORDER BY occurred_at DESC,id DESC OFFSET ?)`, domain.EventAction, maxActionEvents).Error; e != nil {
+			return e
+		}
+		if e := tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events WHERE event_type<>? ORDER BY occurred_at DESC,id DESC OFFSET 5000) AND NOT EXISTS(SELECT 1 FROM core.alerts a WHERE a.event_id=e.id)`, domain.EventAction).Error; e != nil {
 			return e
 		}
 		// Settled commands are kept 90 days (the audit log keeps who sent them for as long as it lives).

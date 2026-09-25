@@ -200,7 +200,15 @@ export function matchesInfo(p: DeviceProfile, name: string): boolean {
 }
 
 /** Best-effort profile suggestion from what the gateway actually decoded. */
-export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean }): DeviceProfile | undefined {
+/** The generic profile every Zigbee2MQTT device can register as (backend domain.Z2MGenericProfile). */
+export const Z2M_GENERIC_PROFILE = "zigbee2mqtt-device@1";
+
+export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean }): DeviceProfile | undefined {
+  if (input.zigbee) {
+    const name = input.model?.toLowerCase() ?? "";
+    const byZ2M = name ? DEVICE_PROFILES.find((p) => p.radio === "zigbee" && p.z2m_models?.some((m) => m.toLowerCase() === name && (name !== "ts0601" || input.kind === "switch"))) : undefined;
+    return byZ2M ?? DEVICE_PROFILES.find((p) => p.id === Z2M_GENERIC_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "zigbee");
+  }
   if (input.model) {
     const name = input.model.toLowerCase();
     const byName = DEVICE_PROFILES.find((p) => matchesInfo(p, name));

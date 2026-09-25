@@ -27,7 +27,12 @@ type Reading struct {
 	Battery     int                `json:"battery"`
 	RSSI        *int               `json:"rssi"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
-	Beacon      *Beacon            `json:"beacon,omitempty"`
+	// Values are non-numeric states a Zigbee2MQTT device reports (lock_state, system_mode, a cover's
+	// OPEN/CLOSE/STOP), bounded in count and length. Minew readings never set them.
+	Values map[string]string `json:"values,omitempty"`
+	// Action is a Zigbee2MQTT button or remote event in this message (single, on, emergency, ...).
+	Action string  `json:"action,omitempty"`
+	Beacon *Beacon `json:"beacon,omitempty"`
 	// Commands names, per switch gang, the Aether command this report confirmed (Zigbee2MQTT). It is never
 	// stored with the sample; the alerts engine uses it to tell a commanded change from a press on the wall.
 	Commands map[int]string `json:"-"`

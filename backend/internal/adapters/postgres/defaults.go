@@ -12,10 +12,13 @@ import (
 // stays silent until somebody remembers to write a rule for it is a safety gap, so `button` is critical out
 // of the box with a short dedupe window (a nurse pressing twice is one emergency, not two), and `tamper`
 // warns. They are ordinary rules: the owner may rename, re-scope, disable or delete them.
-// Migration 00024 backfills exactly these for the workspaces that already existed.
+// Migrations 00024 (SOS, tamper) and 00030 (hazard) backfill exactly these for the workspaces that already
+// existed.
 var builtinRules = []domain.AlertRule{
 	{Name: "ปุ่มฉุกเฉิน SOS", EventType: domain.EventButton, Severity: "critical", DedupeSec: 30},
 	{Name: "ป้ายถูกถอด (tamper)", EventType: domain.EventTamper, Severity: "warning", DedupeSec: 600},
+	// Smoke, gas and carbon monoxide detectors (Zigbee2MQTT); migration 00030 backfills it.
+	{Name: "ควัน / แก๊ส / CO", EventType: domain.EventHazard, Severity: "critical", DedupeSec: 300},
 }
 
 // seedDefaultRules gives a brand-new workspace the built-in rules. Called once, from CreateAccount, inside

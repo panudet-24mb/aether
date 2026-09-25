@@ -54,7 +54,7 @@ func TestZ2MSimulatorParses(t *testing.T) {
 // answers a valid /set with the new state (and nothing when told to drop commands).
 func TestFakeBridgeAppliesCommands(t *testing.T) {
 	devices, _, e := zigbee2mqtt.ParseBridgeDevices(Z2MBridgeDevicesAll())
-	if e != nil || len(devices) != len(Z2MSwitches)+1+len(Z2MActuators) {
+	if e != nil || len(devices) != len(Z2MSwitches)+1+len(Z2MActuators)+len(Z2MSensors) {
 		t.Fatalf("devices: %d %v", len(devices), e)
 	}
 	for _, d := range devices {
@@ -89,5 +89,34 @@ func TestFakeBridgeAppliesCommands(t *testing.T) {
 	b.DropCommands = true
 	if out := b.Apply(base+"/"+light.IEEE+"/set", []byte(`{"brightness":10}`)); out != nil {
 		t.Fatalf("dropped command answered: %v", out)
+	}
+}
+
+// Every simulated sensor parses into the category live ingest derives for it, from the same real definitions.
+func TestZ2MSensorsCategories(t *testing.T) {
+	devices, _, e := zigbee2mqtt.ParseBridgeDevices(Z2MBridgeDevicesAll())
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := map[string]string{"WSDCGQ11LM": "environment", "MCCGQ11LM": "door", "RTCGQ11LM": "occupancy", "SJCGQ11LM": "leak", "TS0215A_sos": "sos", "E1743": "remote", "JTYJ-GD-01LM/BW": "hazard",
+		"TS0011": "switch", "TS0012": "switch", "9290022166": "lighting", "TS130F": "cover", "YRD226HA2619": "lock", "TS0601_thermostat": "climate"}
+	seen := 0
+	for _, d := range devices {
+		if c, ok := want[d.Model]; ok {
+			seen++
+			if d.Category != c || d.SOS != (c == "sos") {
+				t.Fatalf("%s: category %q sos %v, want %q", d.Model, d.Category, d.SOS, c)
+			}
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("saw %d of %d models", seen, len(want))
+	}
+	b := NewFakeBridge("aether/z2m/x")
+	if m := b.Set(Z2MSensors[1].IEEE, "contact", false); len(m) != 1 || !strings.Contains(string(m[0].Payload), `"contact":false`) {
+		t.Fatalf("set: %v", m)
+	}
+	if m := Z2MPress("aether/z2m/x", Z2MSensors[4], "emergency"); !strings.Contains(string(m.Payload), `"action":"emergency"`) {
+		t.Fatalf("press: %s", m.Payload)
 	}
 }

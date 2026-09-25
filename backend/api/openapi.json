@@ -455,6 +455,153 @@
     }
    }
   },
+  "/api/v1/catalog/zigbee": {
+   "get": {
+    "summary": "Search the Zigbee2MQTT device catalog (zigbee-herdsman-converters, MIT): every supported model with the category Aether shows it as",
+    "operationId": "get__api_v1_catalog_zigbee",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "maxLength": 100
+      },
+      "description": "Every word must match vendor, model, description, Zigbee model id or white label"
+     },
+     {
+      "name": "vendor",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "maxLength": 64
+      }
+     },
+     {
+      "name": "category",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "maxLength": 32
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 200,
+       "default": 50
+      }
+     },
+     {
+      "name": "vendors",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "1"
+       ]
+      },
+      "description": "Also return the list of vendors"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "vendor": {
+              "type": "string"
+             },
+             "model": {
+              "type": "string"
+             },
+             "description": {
+              "type": "string"
+             },
+             "zigbee_model": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             },
+             "white_label": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             },
+             "category": {
+              "type": "string"
+             },
+             "features": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             },
+             "sos": {
+              "type": "boolean"
+             },
+             "dynamic": {
+              "type": "boolean"
+             }
+            }
+           }
+          },
+          "total": {
+           "type": "integer"
+          },
+          "source": {
+           "type": "string"
+          },
+          "version": {
+           "type": "string"
+          },
+          "license": {
+           "type": "string"
+          },
+          "homepage": {
+           "type": "string"
+          },
+          "notice": {
+           "type": "string"
+          },
+          "vendors": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Query too long or limit out of range"
+     },
+     "401": {
+      "description": "Not authenticated"
+     }
+    }
+   }
+  },
   "/api/v1/gateways": {
    "get": {
     "summary": "List tenant gateways",

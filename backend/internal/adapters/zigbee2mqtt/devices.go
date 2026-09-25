@@ -39,7 +39,12 @@ type Device struct {
 	Manufacturer string
 	PowerSource  string
 	Supported    bool
+	Description  string
 	Gangs        []Gang
+	// Category is the reading kind derived from the definition (see Profile.Category), SOS whether it can call
+	// for help (an emergency action or an SOS binary). Both are empty/false without a definition.
+	Category string
+	SOS      bool
 	// Exposes is the definition's exposes array exactly as Zigbee2MQTT published it ("[]" when absent or over
 	// MaxExposes). Commands are validated against it (features.go); a generic ingest can build on it later.
 	Exposes json.RawMessage
@@ -64,9 +69,10 @@ type bridgeDevice struct {
 	PowerSource  string `json:"power_source"`
 	Disabled     bool   `json:"disabled"`
 	Definition   *struct {
-		Model   string          `json:"model"`
-		Vendor  string          `json:"vendor"`
-		Exposes json.RawMessage `json:"exposes"`
+		Model       string          `json:"model"`
+		Vendor      string          `json:"vendor"`
+		Description string          `json:"description"`
+		Exposes     json.RawMessage `json:"exposes"`
 	} `json:"definition"`
 }
 
@@ -90,13 +96,19 @@ func ParseBridgeDevices(b []byte) (devices []Device, truncated bool, err error) 
 			d.FriendlyName = ieee
 		}
 		if r.Definition != nil {
-			d.Model, d.Vendor = clip(r.Definition.Model, 64), clip(r.Definition.Vendor, 64)
+			d.Model, d.Vendor, d.Description = clip(r.Definition.Model, 64), clip(r.Definition.Vendor, 64), clip(r.Definition.Description, 160)
 			var exposes []expose
 			if json.Unmarshal(r.Definition.Exposes, &exposes) == nil {
 				d.Gangs = gangs(exposes)
 				if len(r.Definition.Exposes) <= MaxExposes {
 					d.Exposes = compact(r.Definition.Exposes)
 				}
+			}
+			features, _ := Features(d.Exposes)
+			profile := Summarize(features)
+			d.Category, d.SOS = profile.Category(), profile.SOS
+			if len(d.Gangs) > 0 && d.Category == CategoryInfo {
+				d.Category = CategorySwitch
 			}
 		}
 		if len(out) == MaxDevices {

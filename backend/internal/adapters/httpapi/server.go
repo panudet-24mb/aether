@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"aether/backend/internal/config"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/security"
+	"aether/backend/internal/z2mcatalog"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
@@ -218,6 +220,33 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
+	})
+	// The Zigbee2MQTT device catalog (zigbee-herdsman-converters, MIT): "is this model supported, and what will
+	// Aether show it as?" before anything is bought or paired. Read-only and the same for every workspace.
+	secured.Get("/catalog/zigbee", func(c fiber.Ctx) error {
+		catalog, e := z2mcatalog.Load()
+		if e != nil {
+			return e
+		}
+		q, vendor, category := c.Query("q"), c.Query("vendor"), c.Query("category")
+		if len(q) > 100 || len(vendor) > 64 || len(category) > 32 {
+			return fiber.NewError(fiber.StatusBadRequest, "query too long")
+		}
+		limit := 50
+		if v := c.Query("limit"); v != "" {
+			n, e := strconv.Atoi(v)
+			if e != nil || n < 1 || n > 200 {
+				return fiber.NewError(fiber.StatusBadRequest, "limit must be 1..200")
+			}
+			limit = n
+		}
+		items, total := catalog.Search(q, vendor, category, limit)
+		out := fiber.Map{"items": items, "total": total, "source": catalog.Source, "version": catalog.Version, "license": catalog.License, "homepage": catalog.Homepage,
+			"notice": "Device list from zigbee-herdsman-converters " + catalog.Version + ", MIT License, Copyright (c) 2018 Koen Kanters"}
+		if c.Query("vendors") == "1" {
+			out["vendors"] = catalog.Vendors
+		}
+		return c.JSON(out)
 	})
 	// GET /api/v1/me is registered by memberRoutes: besides the identity it reports the caller's role and
 	// the project scope the database enforces for them.

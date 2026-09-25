@@ -2,6 +2,7 @@
 // Access tokens stay in memory (provided by the caller); a 401 triggers one refresh + retry.
 
 import { applyCatalog, type CatalogResponse, type DeviceProfile } from "./catalog";
+import { normalizeSensor } from "../live/measurements";
 
 const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 
@@ -58,6 +59,10 @@ export type Reading = {
   battery: number;
   rssi: number | null;
   metrics?: Record<string, number>;
+  /** Non-numeric states a Zigbee2MQTT device reports (lock_state, system_mode, a cover's OPEN/CLOSE/STOP). */
+  values?: Record<string, string>;
+  /** A Zigbee2MQTT button or remote event in this message (single, on, emergency, ...). */
+  action?: string;
   beacon?: Beacon;
 };
 export type LiveSensor = { id: string; name: string; kind?: string; model?: string; template_id?: string | null; latest: Reading; history: Reading[]; /** "reported": online/offline come from the device's availability reports (Zigbee2MQTT), not from silence. */ liveness?: "reported"; offline?: boolean };
@@ -82,7 +87,10 @@ export type GatewayCreated = { gateway: Gateway; token: string; capture_path: st
 export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
-export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile };
+export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description. */ vendor?: string; description?: string };
+/** One model of the Zigbee2MQTT device catalog (zigbee-herdsman-converters). */
+export type ZigbeeModel = { vendor: string; model: string; description: string; zigbee_model?: string[]; white_label?: string[]; category: string; features?: string[]; sos?: boolean; dynamic?: boolean };
+export type ZigbeeCatalog = { items: ZigbeeModel[]; total: number; source: string; version: string; license: string; homepage: string; notice: string; vendors?: string[] };
 export type Snapshot = {
   discovery?: Discovery[];
   /** Per gateway: advertisements that are not a supported model (phones, foreign beacons), left out of `discovery`. */
@@ -159,12 +167,19 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     },
     me: () => call<Me>("/me"),
     catalog: () => call<CatalogResponse>("/catalog"),
+    zigbeeCatalog: (q: string, opts: { vendor?: string; category?: string; limit?: number; vendors?: boolean } = {}) => {
+      const params = new URLSearchParams({ q, limit: String(opts.limit ?? 50) });
+      if (opts.vendor) params.set("vendor", opts.vendor);
+      if (opts.category) params.set("category", opts.category);
+      if (opts.vendors) params.set("vendors", "1");
+      return call<ZigbeeCatalog>(`/catalog/zigbee?${params}`);
+    },
     gateways: async () => (await call<{ items: Gateway[] }>("/gateways")).items,
     mqttStatus: () => call<{ items: MQTTState[]; server_time: string }>("/gateways/mqtt-status"),
     mqttSetup: () => call<MQTTSettings>("/mqtt/setup"),
     sources: async () => (await call<{ items: Source[] }>("/studio/sources")).items,
     devices: async () => (await call<{ items: Device[] }>("/devices")).items,
-    live: () => call<Live>("/live?range=1h"),
+    live: () => call<Live>("/live?range=1h").then((l) => (l ? { ...l, gateways: l.gateways.map((g) => ({ ...g, sensors: g.sensors.map(normalizeSensor) })) } : l)),
     createGateway: (name: string, model: string, projectId?: string | null) => call<GatewayCreated>("/gateways", projectId ? { name, model, project_id: projectId } : { name, model }),
     projects: async () => (await call<{ items: Project[] }>("/projects")).items,
     createProject: (input: { name: string; description: string; color: string }) => call<Project>("/projects", input),

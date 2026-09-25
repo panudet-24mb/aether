@@ -4,7 +4,9 @@ import { Activity, Battery, BellRing, Bluetooth, Check, Copy, DoorOpen, Download
 import DiscoveryList from "./discovery";
 import SignalPanel, { type LearnedSignal, type SignalClient } from "./signals";
 import DeviceControlsPanel, { type CommandClient } from "./device-controls";
-import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project } from "./api";
+import ZigbeeCatalogSearch, { type CatalogClient } from "./zigbee-catalog";
+import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project, Reading } from "./api";
+import { isZigbeeReading } from "../live/measurements";
 import { deviceProfile, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
 import { HEALTH_LABEL } from "./nodes";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
@@ -42,7 +44,7 @@ export type InspectorProps = {
   /** Collapses the whole panel (distinct from onClose, which only clears the selection). */
   onHide: () => void;
   /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") and the device controls. */
-  client: SignalClient & CommandClient;
+  client: SignalClient & CommandClient & CatalogClient;
 };
 
 /** Clipboard API needs a secure context; on-prem LAN over plain HTTP falls back to a selection + execCommand copy. */
@@ -268,6 +270,7 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
       <div hidden={tab !== "discovery"}>
       <h3 className="topo-h3">อุปกรณ์ที่พบใหม่ <span className="topo-count">{p.discovery.filter((d) => d.gateway_id === id).length}</span></h3>
       <DiscoveryList items={p.discovery} gateways={[g.gateway]} gatewayId={id} serverTime={topology.serverTime} busy={busy} onAdopt={p.onAdopt} />
+      {z2m && tab === "discovery" && <ZigbeeCatalogSearch client={p.client} />}
 
       </div><div hidden={tab !== "config"}>
       <label className="topo-project-select">
@@ -405,6 +408,35 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
   );
 }
 
+// What a Zigbee2MQTT device reports, generically: every measurement and state in its reading, labelled and with
+// units where Zigbee2MQTT's names are well known, raw property names otherwise.
+const ZIGBEE_LABEL: Record<string, [string, string?]> = {
+  temperature: ["อุณหภูมิ", "°C"], humidity: ["ความชื้น", "%RH"], pressure: ["ความกดอากาศ", "hPa"], co2: ["CO₂", "ppm"], voc: ["VOC", "ppb"], voc_index: ["VOC index"], formaldehyd: ["ฟอร์มาลดีไฮด์", "mg/m³"],
+  pm25: ["PM2.5", "µg/m³"], pm10: ["PM10", "µg/m³"], illuminance: ["แสง", "lx"], power: ["กำลังไฟ", "W"], energy: ["พลังงานสะสม", "kWh"], current: ["กระแส", "A"], voltage: ["แรงดัน", "V"],
+  device_temperature: ["อุณหภูมิตัวเครื่อง", "°C"], local_temperature: ["อุณหภูมิที่วัดได้", "°C"], occupied_heating_setpoint: ["อุณหภูมิที่ตั้ง", "°C"], current_heating_setpoint: ["อุณหภูมิที่ตั้ง", "°C"],
+  position: ["ตำแหน่ง", "%"], brightness: ["ความสว่าง (0–254)"], color_temp: ["อุณหภูมิสี", "mired"], linkquality: ["สัญญาณ Zigbee (LQI)"], smoke_density: ["ความหนาแน่นควัน"], soil_moisture: ["ความชื้นดิน", "%"],
+};
+const ZIGBEE_FLAG: Record<string, [string, string, string]> = {
+  motion: ["ตรวจจับคน", "พบคน", "ไม่พบ"], door: ["ประตู", "เปิดอยู่", "ปิดอยู่"], leak: ["น้ำรั่ว", "พบ", "ไม่พบ"], tamper: ["Tamper", "ถูกถอด", "ปกติ"], vibration: ["การสั่น", "สั่น", "นิ่ง"],
+  smoke: ["ควัน", "ตรวจพบ", "ปกติ"], gas: ["แก๊ส", "ตรวจพบ", "ปกติ"], carbon_monoxide: ["CO", "ตรวจพบ", "ปกติ"], battery_low: ["แบตเตอรี่", "ใกล้หมด", "ปกติ"], state: ["สถานะ", "เปิด / ล็อก", "ปิด / ปลดล็อก"], sos: ["SOS", "กดอยู่", "ปกติ"],
+};
+
+function ZigbeeReadings({ r, skip }: { r: Reading; skip: Set<string> }) {
+  const m = r.metrics ?? {};
+  return (
+    <>
+      {Object.entries(m).filter(([k]) => !skip.has(k) && !/^sw\d$/.test(k)).map(([k, v]) => {
+        const flag = ZIGBEE_FLAG[k];
+        if (flag) return <Tile key={k} icon={<Activity size={18} />} label={flag[0]} value={v === 1 ? flag[1] : flag[2]} />;
+        const [label, unit] = ZIGBEE_LABEL[k] ?? [k];
+        return <Tile key={k} icon={<Activity size={18} />} label={label} value={Number.isInteger(v) ? v : v.toFixed(2)} unit={unit} />;
+      })}
+      {Object.entries(r.values ?? {}).map(([k, v]) => <Tile key={`v-${k}`} icon={<Activity size={18} />} label={k} value={v} />)}
+      {r.action && <Tile icon={<Activity size={18} />} label="การกดล่าสุด" value={r.action} />}
+    </>
+  );
+}
+
 function Tile({ icon, label, value, unit }: { icon: React.ReactNode; label: string; value: string | number; unit?: string }) {
   return (
     <div>
@@ -454,7 +486,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
   const [learned, setLearned] = useState<LearnedSignal[]>([]);
   const reg = d.registrations[0];
   const profile = reg ? deviceProfile(reg.profile_id) : undefined;
-  const suggested = !profile ? suggestProfile({ model: d.model, kind: d.kind, hasBeacon: !!d.reading?.beacon, hasPIR: d.reading?.metrics?.motion != null }) : undefined;
+  const suggested = !profile ? suggestProfile({ model: d.model, kind: d.kind, hasBeacon: !!d.reading?.beacon, hasPIR: d.reading?.metrics?.motion != null, zigbee: d.reading?.frames?.includes("z2m-state@1") || d.heard.some((h) => topology.gateways.some((g) => g.gateway.id === h.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL)) }) : undefined;
   const shown = profile ?? suggested;
   // A Zigbee switch only reports when it is switched: its own availability, not freshness, says whether it is online.
   const fresh = d.reportedOffline != null ? !d.reportedOffline : isFresh(d.reading?.received_at, topology.serverTime);
@@ -547,8 +579,8 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
         <div className="topo-readings">
           {kind === "environment" && (
             <>
-              <Tile icon={<Thermometer size={18} />} label="อุณหภูมิ" value={r.temperature.toFixed(2)} unit="°C" />
-              {m.temperature_only !== 1 && <Tile icon={<Droplets size={18} />} label="ความชื้น" value={r.humidity.toFixed(2)} unit="%RH" />}
+              <Tile icon={<Thermometer size={18} />} label="อุณหภูมิ" value={Number.isFinite(r.temperature) ? r.temperature.toFixed(2) : "—"} unit="°C" />
+              {m.temperature_only !== 1 && <Tile icon={<Droplets size={18} />} label="ความชื้น" value={Number.isFinite(r.humidity) ? r.humidity.toFixed(2) : "—"} unit="%RH" />}
             </>
           )}
           {kind === "motion" && (
@@ -580,8 +612,14 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
           )}
           {r.beacon?.instance && <Tile icon={<RadioTower size={18} />} label="Eddystone instance" value={r.beacon.instance} />}
           {r.beacon?.voltage ? <Tile icon={<Battery size={18} />} label="แรงดัน (TLM)" value={r.beacon.voltage.toFixed(2)} unit="V" /> : null}
+          {isZigbeeReading(r) && (
+            <ZigbeeReadings r={r} skip={new Set([
+              ...(kind === "environment" ? ["temperature", "humidity"] : []), ...(kind === "door" || m.door != null ? ["door"] : []), ...(kind === "leak" ? ["leak"] : []),
+              ...(kind === "light" ? ["illuminance"] : []), ...(kind === "switch" ? ["linkquality"] : []), ...(kind === "motion" ? ["motion", "vibration"] : []), ...(kind === "tamper" ? ["tamper"] : []),
+            ])} />
+          )}
           {r.battery > 0 && <Tile icon={<Battery size={18} />} label="แบตเตอรี่" value={r.battery} unit="%" />}
-          <Tile icon={<Wifi size={18} />} label="RSSI" value={r.rssi ?? "—"} unit="dBm" />
+          {!isZigbeeReading(r) && <Tile icon={<Wifi size={18} />} label="RSSI" value={r.rssi ?? "—"} unit="dBm" />}
           {(m.accel_x != null || r.beacon?.uuid || r.beacon?.namespace) && (
             <p className="topo-raw">
               {m.accel_x != null ? `accel x ${m.accel_x.toFixed(3)} · y ${m.accel_y?.toFixed(3)} · z ${m.accel_z?.toFixed(3)} g` : ""}

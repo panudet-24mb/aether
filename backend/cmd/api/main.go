@@ -53,7 +53,7 @@ func main() {
 		service.Secrets = security.DeriveKey(cfg.SealKey, "notification-channels")
 	}
 	if cfg.AlertsShadow {
-		slog.Warn("ALERTS_SHADOW is on: events are recorded; only SOS (button) opens alerts; no automations run")
+		slog.Warn("ALERTS_SHADOW is on: events are recorded; only SOS (button) and smoke/gas/CO (hazard) open alerts; no automations run")
 	}
 	hub := realtime.NewHub()
 	api := httpapi.NewWithHub(cfg, service, repo, hub)

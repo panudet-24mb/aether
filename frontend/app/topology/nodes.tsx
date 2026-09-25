@@ -1,7 +1,7 @@
 "use client";
 import { memo } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { Activity, Bluetooth, Cloud, CloudOff, DoorOpen, Droplets, FlaskConical, Radio, RadioTower, Router, ShieldAlert, Sun, Thermometer } from "lucide-react";
+import { Activity, Blinds, Bluetooth, Cloud, CloudOff, Cpu, DoorOpen, Droplets, Fan, Flame, FlaskConical, Gamepad2, Heater, Lightbulb, Lock, PersonStanding, Radio, RadioTower, Router, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Zap } from "lucide-react";
 import { deviceProfile, formatMAC, gatewayModel } from "./catalog";
 import type { GatewayHealth } from "./model";
 
@@ -95,7 +95,9 @@ const Gateway = memo(function Gateway({ data, selected }: NodeProps<GatewayNode>
   );
 });
 
-const KIND_ICON: Record<string, typeof Thermometer> = { environment: Thermometer, motion: Activity, tamper: ShieldAlert, beacon: RadioTower, leak: Droplets, light: Sun, door: DoorOpen };
+const KIND_ICON: Record<string, typeof Thermometer> = { environment: Thermometer, motion: Activity, tamper: ShieldAlert, beacon: RadioTower, leak: Droplets, light: Sun, door: DoorOpen,
+  // Zigbee2MQTT categories (derived from each device's own definition)
+  occupancy: PersonStanding, switch: ToggleRight, lighting: Lightbulb, cover: Blinds, lock: Lock, climate: Heater, fan: Fan, remote: Gamepad2, sos: Siren, hazard: Flame, metering: Zap, info: Cpu };
 
 const Device = memo(function Device({ data, selected }: NodeProps<DeviceNode>) {
   const profile = data.profile ? deviceProfile(data.profile) : undefined;

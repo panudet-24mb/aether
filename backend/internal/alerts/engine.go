@@ -4,6 +4,7 @@ package alerts
 
 import (
 	"aether/backend/internal/adapters/minew"
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/domain"
 	"fmt"
 	"slices"
@@ -157,6 +158,52 @@ func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time)
 		}
 		next.Outputs[key] = now
 	}
+	// Life-safety detectors: one hazard event per detector type when it trips, hazard_cleared when it clears.
+	// Tripped on the first report is still an event (a smoke detector already in alarm must not be baselined).
+	for _, h := range zigbee2mqtt.Hazards {
+		v, ok := m[h]
+		if !ok {
+			continue
+		}
+		key, now := "hz_"+h, 0
+		if v == 1 {
+			now = 1
+		}
+		before, known := prev.Outputs[key]
+		if now == 1 && (!known || before == 0) {
+			emit(domain.EventHazard, map[string]any{"hazard": h})
+		} else if now == 0 && known && before == 1 {
+			emit(domain.EventHazardCleared, map[string]any{"hazard": h})
+		}
+		next.Outputs[key] = now
+	}
+	// Zigbee2MQTT buttons and remotes: every action is an event. An emergency action (or an SOS binary turning
+	// on) is also `button`, the SOS path; the caller keeps it only for a registered device whose definition
+	// can call for help, so an ordinary remote's presses never ring.
+	if r.Action != "" {
+		emit(domain.EventAction, map[string]any{"action": r.Action})
+		if zigbee2mqtt.IsSOSAction(r.Action) {
+			emit(domain.EventButton, map[string]any{"trigger": "z2m_action", "action": r.Action})
+		}
+	}
+	// An SOS binary: some buttons keep reporting sos:true (cached by Zigbee2MQTT) instead of returning to false,
+	// so "true after false" alone would hide a second press. Like the B10's trigger slot, true is a new press when
+	// it follows a false or when the last true was ButtonTriggerQuiet or longer ago. A cached true republished
+	// after a reconnect cannot be told apart from a press, so it rings (fail loud).
+	if v, ok := m["sos"]; ok {
+		now := 0
+		if v == 1 {
+			now = 1
+		}
+		before, known := prev.Outputs["sos"]
+		if now == 1 {
+			if !known || before == 0 || prev.TriggerAt.IsZero() || at.Sub(prev.TriggerAt) >= ButtonTriggerQuiet {
+				emit(domain.EventButton, map[string]any{"trigger": "z2m_sos"})
+			}
+			next.TriggerAt = at
+		}
+		next.Outputs["sos"] = now
+	}
 	// Threshold rules: rising edge per rule id.
 	breached := map[string]bool{}
 	for _, id := range prev.Breaches {
@@ -192,6 +239,12 @@ func Detect(prev State, r minew.Reading, rules []domain.AlertRule, at time.Time)
 func hasKey(m map[string]float64, k string) bool { _, ok := m[k]; return ok }
 
 func metricValue(r minew.Reading, metric string) (float64, bool) {
+	// A Zigbee2MQTT reading carries every measurement in Metrics (temperature and humidity included) and only
+	// the ones the message actually reported; the fixed Minew fields stay zero.
+	if hasFrame(r.Frames, zigbee2mqtt.FrameState) {
+		v, ok := r.Metrics[metric] // battery included: a Zigbee reading reports 0 % as a real value
+		return v, ok
+	}
 	switch metric {
 	case "temperature":
 		return r.Temperature, r.Kind == minew.KindEnvironment || hasFrame(r.Frames, minew.FrameTH) || hasFrame(r.Frames, minew.FrameTemp)
@@ -385,7 +438,11 @@ var eventLabel = map[string]string{
 	domain.EventDoorOpen: "ประตูเปิด", domain.EventDoorClosed: "ประตูปิด",
 	domain.EventOccupied: "มีคนในพื้นที่", domain.EventVacant: "ไม่มีคนในพื้นที่",
 	domain.EventSwitchOn: "เปิดสวิตช์", domain.EventSwitchOff: "ปิดสวิตช์",
+	domain.EventHazard: "ตรวจพบควัน / แก๊ส / CO", domain.EventHazardCleared: "ควัน / แก๊ส / CO กลับสู่ปกติ", domain.EventAction: "กดปุ่ม / รีโมต",
 }
+
+// hazardLabel names a hazard event's detector type in headlines.
+var hazardLabel = map[string]string{"smoke": "ตรวจพบควัน", "gas": "ตรวจพบแก๊สรั่ว", "carbon_monoxide": "ตรวจพบคาร์บอนมอนอกไซด์ (CO)"}
 
 func Label(eventType string) string {
 	if l, ok := eventLabel[eventType]; ok {
@@ -407,6 +464,12 @@ func Title(ev domain.DeviceEvent) string {
 		// A press is an emergency signal, not a status change: the headline says so wherever the alert
 		// is read (banner, LINE, email, webhook). domain.Alert.SOS decides how loudly the UI reacts.
 		return fmt.Sprintf("SOS · %s กดปุ่มฉุกเฉิน", ev.DeviceName)
+	case domain.EventHazard:
+		if l, ok := hazardLabel[fmt.Sprint(ev.Detail["hazard"])]; ok {
+			return fmt.Sprintf("%s · %s", ev.DeviceName, l)
+		}
+	case domain.EventAction:
+		return fmt.Sprintf("%s · กด %v", ev.DeviceName, ev.Detail["action"])
 	case domain.EventSwitchOn, domain.EventSwitchOff:
 		return fmt.Sprintf("%s · %s ช่อง %v", ev.DeviceName, Label(ev.EventType), ev.Detail["gang"])
 	}

@@ -2,7 +2,7 @@
 import { memo } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { AlarmClock, Bell, BellRing, Braces, CircleSlash, Clock, Layers, MapPin, Radio, Send, Sigma, Thermometer, type LucideIcon } from "lucide-react";
-import { DAY_LABEL, EVENT_LABEL, SEVERITY_LABEL, localId, metricLabel, metricUnit, num, type Block, type BlockData, type BlockType, type Definition, type Group, type Lookup, type Outcome } from "./api";
+import { DAY_LABEL, EVENT_LABEL, SEVERITY_LABEL, localId, metricLabel, metricUnit, num, showValue, type Block, type BlockData, type BlockType, type Definition, type Group, type Lookup, type Outcome } from "./api";
 
 /** Group colours are the workspace's project palette, so the studio reads like the rest of Aether. */
 export const GROUP_COLOR: Record<Group, string> = { trigger: "#a7f3d0", condition: "#80b7ff", logic: "#c4a7ff", action: "#ff8f70" };
@@ -34,11 +34,10 @@ export const CATALOG: BlockSpec[] = [
   {
     type: "action.command",
     group: "action",
-    label: "สั่งงานอุปกรณ์",
-    hint: "สั่งให้อุปกรณ์ทำงาน เช่น เปิดไฟ หรือสั่นเตือน",
+    label: "สั่งอุปกรณ์",
+    hint: "ตั้งค่าอุปกรณ์ Zigbee เช่น เปิดไฟ ปิดสวิตช์ เลื่อนม่าน · ใช้คิวคำสั่งเดียวกับหน้าเว็บ",
     icon: Radio,
-    unavailable: "เร็ว ๆ นี้ · ต้องมีช่องทางสั่งงาน gateway",
-    make: () => ({}),
+    make: () => ({ device_id: "", property: "" }),
   },
 ];
 
@@ -63,7 +62,8 @@ export function summarize(block: Block, lookup: Lookup): string {
       const events = (d.event_types ?? []).map((t) => EVENT_LABEL[t] ?? t);
       const who = (d.external_ids ?? []).length > 0 ? (d.external_ids ?? []).map(lookup.device).join(", ") : "อุปกรณ์ใดก็ได้";
       const where = (d.gateway_ids ?? []).length > 0 ? ` ผ่าน ${(d.gateway_ids ?? []).map(lookup.gateway).join(", ")}` : "";
-      return `${join(events, " หรือ ") || "ยังไม่ได้เลือกเหตุการณ์"} ของ ${who}${where}`;
+      const presses = (d.actions ?? []).length > 0 ? ` (ปุ่ม ${(d.actions ?? []).join(", ")})` : "";
+      return `${join(events, " หรือ ") || "ยังไม่ได้เลือกเหตุการณ์"}${presses} ของ ${who}${where}`;
     }
     case "trigger.metric": {
       const hold = (d.for_sec ?? 0) > 0 ? ` นาน ${d.for_sec} วิ` : "";
@@ -92,7 +92,8 @@ export function summarize(block: Block, lookup: Lookup): string {
       return `ส่งไป ${join(channels, ", ") || "ยังไม่ได้เลือกช่องทาง"}`;
     }
     case "action.command":
-      return "ยังสั่งงานอุปกรณ์ไม่ได้ · Aether ยังไม่มีช่องทางส่งคำสั่งกลับไปที่ gateway";
+      if (!d.device_id) return "ยังไม่ได้เลือกอุปกรณ์ที่จะสั่ง";
+      return `ตั้ง ${d.property || "?"} ของ ${lookup.target(d.device_id)} เป็น ${showValue(d.set_value)}`;
     default:
       return "";
   }
@@ -103,7 +104,7 @@ export function sentence(def: Definition, lookup: Lookup): string {
   const part = (group: Group) => def.nodes.filter((n) => SPEC[n.type]?.group === group).map((n) => summarize(n, lookup));
   const triggers = part("trigger");
   const conditions = part("condition");
-  const actions = def.nodes.filter((n) => SPEC[n.type]?.group === "action").map((n) => (n.type === "action.command" ? "สั่งงานอุปกรณ์ (ยังทำไม่ได้)" : summarize(n, lookup)));
+  const actions = part("action");
   if (triggers.length === 0 && actions.length === 0) return "";
   const lines = [`เมื่อ ${join(triggers, " หรือ ") || "…"}`];
   if (conditions.length > 0) lines.push(`ถ้า ${conditions.join(" และ ")}`);

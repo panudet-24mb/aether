@@ -133,9 +133,10 @@ func checkSize(raw json.RawMessage) error {
 	return nil
 }
 
-// checkDefinition is the backstop every write goes through: whatever the route decided, a definition
-// that does not validate against the tenant's own channels never reaches the table.
-func checkDefinition(tx *gorm.DB, raw json.RawMessage, enabled bool) error {
+// checkDefinition is the backstop every write goes through: whatever the route decided, a definition that does
+// not validate against the tenant's own channels and devices — or a flow with device commands switched on while
+// AUTOMATION_COMMANDS is off, or by a member who may not control devices — never reaches the table.
+func (r *Repository) checkDefinition(tx *gorm.DB, p domain.Principal, project *string, raw json.RawMessage, enabled bool) error {
 	if len(raw) > automation.MaxDefinitionBytes {
 		return domain.ErrInvalid
 	}
@@ -143,12 +144,30 @@ func checkDefinition(tx *gorm.DB, raw json.RawMessage, enabled bool) error {
 	if e := json.Unmarshal(raw, &def); e != nil {
 		return domain.ErrInvalid
 	}
-	channels := map[string]bool{}
-	if e := channelSet(tx, channels); e != nil {
+	opts, e := r.checkOptions(tx, &p, project, def, enabled)
+	if e != nil {
 		return e
 	}
-	if e := automation.Validate(def, automation.Options{Channels: channels, Enabled: enabled}); e != nil {
+	for _, problem := range automation.Check(def, opts) {
+		if problem.Code == "command_forbidden" {
+			return domain.Because(domain.ErrForbidden, "control")
+		}
+	}
+	if e := automation.Validate(def, opts); e != nil {
 		return domain.ErrInvalid
+	}
+	return nil
+}
+
+// armed records who switched a flow on. When the flow commands devices, that member is the actor of every
+// command it queues, and the enabling is audited as such.
+func armed(tx *gorm.DB, p domain.Principal, id string, raw json.RawMessage) error {
+	if e := tx.Exec(`UPDATE core.automations SET enabled_by=? WHERE id=?`, p.UserID, id).Error; e != nil {
+		return e
+	}
+	var def automation.Definition
+	if json.Unmarshal(raw, &def) == nil && automation.HasCommand(def) {
+		return audit(tx, p, "automation.commands_armed", id)
 	}
 	return nil
 }
@@ -169,6 +188,17 @@ func checkFlowProject(tx *gorm.DB, project *string, raw json.RawMessage) error {
 		for _, id := range node.Data.GatewayIDs {
 			var n int64
 			if e := tx.Raw(`SELECT count(*) FROM core.gateways WHERE id=? AND project_id=? AND revoked_at IS NULL`, id, *project).Scan(&n).Error; e != nil {
+				return e
+			}
+			if n != 1 {
+				return domain.ErrInvalid
+			}
+		}
+		if node.Type == automation.ActionCommand && node.Data.DeviceID != "" {
+			// A command target is a registration, addressed by its id: it must sit on a gateway of this project.
+			var n int64
+			if e := tx.Raw(`SELECT count(*) FROM core.devices d JOIN core.gateways g ON g.id=d.gateway_id AND g.tenant_id=d.tenant_id
+      WHERE d.id::text=lower(?) AND d.removed_at IS NULL AND g.project_id=? AND g.revoked_at IS NULL`, node.Data.DeviceID, *project).Scan(&n).Error; e != nil {
 				return e
 			}
 			if n != 1 {
@@ -250,13 +280,18 @@ func (r *Repository) CreateAutomation(ctx context.Context, p domain.Principal, a
 			return e
 		}
 		if a.Enabled {
-			if e := checkDefinition(tx, a.Definition, true); e != nil {
+			if e := r.checkDefinition(tx, p, a.ProjectID, a.Definition, true); e != nil {
 				return e
 			}
 		}
 		if e := tx.Exec(`INSERT INTO core.automations(tenant_id,id,name,description,enabled,project_id,definition) VALUES(?,?,?,?,?,?,?::jsonb)`,
 			p.TenantID, a.ID, a.Name, a.Description, a.Enabled, a.ProjectID, string(a.Definition)).Error; e != nil {
 			return e
+		}
+		if a.Enabled {
+			if e := armed(tx, p, a.ID, a.Definition); e != nil {
+				return e
+			}
 		}
 		if e := reindexTriggers(tx, p.TenantID, a.ID, a.Definition, a.Enabled); e != nil {
 			return e
@@ -276,7 +311,7 @@ func (r *Repository) SaveAutomation(ctx context.Context, p domain.Principal, a a
 			return e
 		}
 		if a.Enabled {
-			if e := checkDefinition(tx, a.Definition, true); e != nil {
+			if e := r.checkDefinition(tx, p, a.ProjectID, a.Definition, true); e != nil {
 				return e
 			}
 		}
@@ -312,6 +347,12 @@ func (r *Repository) SaveAutomation(ctx context.Context, p domain.Principal, a a
 		if e := reindexTriggers(tx, p.TenantID, a.ID, a.Definition, a.Enabled); e != nil {
 			return e
 		}
+		// Saving an enabled flow re-arms it: its commands now carry the member who saved this definition.
+		if a.Enabled {
+			if e := armed(tx, p, a.ID, a.Definition); e != nil {
+				return e
+			}
+		}
 		return audit(tx, p, "automation.saved", a.ID)
 	}))
 }
@@ -326,12 +367,17 @@ func (r *Repository) SetAutomationEnabled(ctx context.Context, p domain.Principa
 			if e := checkFlowProject(tx, row.ProjectID, row.Definition); e != nil {
 				return e
 			}
-			if e := checkDefinition(tx, row.Definition, true); e != nil {
+			if e := r.checkDefinition(tx, p, row.ProjectID, row.Definition, true); e != nil {
 				return e
 			}
 		}
 		if e := tx.Exec(`UPDATE core.automations SET enabled=?,revision=revision+1,updated_at=now() WHERE id=?`, enabled, id).Error; e != nil {
 			return e
+		}
+		if enabled {
+			if e := armed(tx, p, id, row.Definition); e != nil {
+				return e
+			}
 		}
 		if e := tx.Exec(`DELETE FROM core.automation_state WHERE automation_id=?`, id).Error; e != nil {
 			return e
@@ -371,8 +417,11 @@ func (r *Repository) ListAutomationRuns(ctx context.Context, p domain.Principal,
 		if _, e := loadAutomation(tx, id); e != nil {
 			return e
 		}
-		return tx.Raw(`SELECT id,automation_id,trigger_node,external_id,gateway_id,status,detail,created_at FROM core.automation_runs
-      WHERE automation_id=? ORDER BY created_at DESC,id DESC LIMIT ?`, id, limit).Scan(&out).Error
+		if e := tx.Raw(`SELECT id,automation_id,trigger_node,external_id,gateway_id,status,detail,created_at FROM core.automation_runs
+      WHERE automation_id=? ORDER BY created_at DESC,id DESC LIMIT ?`, id, limit).Scan(&out).Error; e != nil {
+			return e
+		}
+		return resolveRequests(tx, out)
 	})
 	return out, e
 }
@@ -498,6 +547,9 @@ type firing struct {
 	eventType  string
 	deviceName string
 	value      string
+	// commandIDs are the commands behind the change that woke the flow: every command_id named by the matched events,
+	// and every command the identity's report in this packet confirmed. The loop guard reads their source.
+	commandIDs []string
 }
 
 type runDetail struct {
@@ -506,8 +558,10 @@ type runDetail struct {
 	Blocked []string            `json:"blocked,omitempty"`
 	Alerts  []string            `json:"alerts,omitempty"`
 	Notices int                 `json:"notifications,omitempty"`
-	Error   string              `json:"error,omitempty"`
-	Trigger map[string]string   `json:"trigger,omitempty"`
+	// Commands says, per action.command block, whether its command was queued or why it was refused.
+	Commands []commandOutcome  `json:"commands,omitempty"`
+	Error    string            `json:"error,omitempty"`
+	Trigger  map[string]string `json:"trigger,omitempty"`
 }
 
 // flowRow is one candidate flow of this uplink.
@@ -515,6 +569,8 @@ type flowRow struct {
 	ProjectID  *string
 	ID, Name   string
 	Definition json.RawMessage
+	// EnabledBy is the member who armed the flow; the actor of the commands it queues.
+	EnabledBy *string
 	// def and hits are filled in after loading, not scanned: the parsed definition and, per
 	// trigger.metric block, the identity of this packet it watches.
 	def  automation.Definition
@@ -528,7 +584,7 @@ type flowRow struct {
 // O(flows × blocks × sensors) round trips inside the ingest transaction. Cost now: one index lookup,
 // one load of just the candidate flows, at most four statements for all their rising edges together,
 // and then work only for the flows that actually have a firing.
-func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events []domain.DeviceEvent, at time.Time) error {
+func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events []domain.DeviceEvent, at time.Time, opts Options) error {
 	up := uplinkKeys(gateway, view, events)
 	if len(up.EventTypes) == 0 && len(up.SensorIDs) == 0 {
 		return nil
@@ -541,7 +597,7 @@ func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events
 		return e
 	}
 	var rows []flowRow
-	if e := tx.Raw(`SELECT id,name,definition,project_id FROM core.automations WHERE enabled AND (project_id IS NULL OR project_id=(SELECT project_id FROM core.gateways WHERE id=?)) AND id IN ? ORDER BY updated_at DESC,id LIMIT `+
+	if e := tx.Raw(`SELECT id,name,definition,project_id,enabled_by::text AS enabled_by FROM core.automations WHERE enabled AND (project_id IS NULL OR project_id=(SELECT project_id FROM core.gateways WHERE id=?)) AND id IN ? ORDER BY updated_at DESC,id LIMIT `+
 		strconv.Itoa(maxAutomations), gateway, ids).Scan(&rows).Error; e != nil {
 		return e
 	}
@@ -575,6 +631,11 @@ func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events
 	if e != nil {
 		return e
 	}
+	// Commands each identity's report confirmed in this packet (Zigbee2MQTT), for the loop guard.
+	confirmed := map[string][]string{}
+	for _, sensor := range view.Sensors {
+		confirmed[sensor.ID] = append(confirmed[sensor.ID], sensor.Latest.Confirmed...)
+	}
 
 	worlds := map[string]*evalWorld{}
 	for _, flow := range flows {
@@ -588,7 +649,7 @@ func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events
 			world.projectID = flow.ProjectID
 			worlds[scope] = world
 		}
-		fires := flowFirings(flow, events, fired, gateway)
+		fires := flowFirings(flow, events, fired, gateway, confirmed)
 		// A flow the index handed back but that nothing in this packet actually matched costs no SQL
 		// at all: it produced nothing before either, it just paid for the discovery.
 		if len(fires) == 0 {
@@ -603,7 +664,7 @@ func runAutomations(tx *gorm.DB, tenant, gateway string, view minew.View, events
 		}
 		runErr := func() error {
 			for _, external := range sortedFirings(fires) {
-				if e := runFlow(tx, tenant, flow.ID, flow.Name, flow.def, external, fires[external], world, at); e != nil {
+				if e := runFlow(tx, tenant, flow, external, fires[external], world, at, opts); e != nil {
 					return e
 				}
 			}
@@ -814,12 +875,12 @@ func clearEdges(tx *gorm.DB, keys []automation.EdgeKey) error {
 // flowFirings collects what each identity contributed to one flow during this uplink. Blocks are
 // walked in definition order, as before, so the trigger a run names is still the first block that
 // matched and the value is still the last metric block that fired.
-func flowFirings(flow flowRow, events []domain.DeviceEvent, fired map[automation.EdgeKey]bool, gateway string) map[string]*firing {
+func flowFirings(flow flowRow, events []domain.DeviceEvent, fired map[automation.EdgeKey]bool, gateway string, confirmed map[string][]string) map[string]*firing {
 	fires := map[string]*firing{}
 	ensure := func(external string) *firing {
 		f, ok := fires[external]
 		if !ok {
-			f = &firing{nodes: map[string]bool{}}
+			f = &firing{nodes: map[string]bool{}, commandIDs: append([]string{}, confirmed[external]...)}
 			fires[external] = f
 		}
 		return f
@@ -828,11 +889,14 @@ func flowFirings(flow flowRow, events []domain.DeviceEvent, fired map[automation
 		switch n.Type {
 		case automation.TriggerEvent:
 			for _, ev := range events {
-				if !automation.MatchesEvent(n, ev.EventType, ev.ExternalID, ev.GatewayID) {
+				if !automation.MatchesEventAction(n, ev.EventType, ev.ExternalID, ev.GatewayID, detailString(ev.Detail, "action")) {
 					continue
 				}
 				f := ensure(ev.ExternalID)
 				f.nodes[n.ID] = true
+				if id := detailString(ev.Detail, "command_id"); id != "" {
+					f.commandIDs = append(f.commandIDs, id)
+				}
 				if f.trigger == "" {
 					f.trigger, f.gateway, f.eventID, f.eventType, f.deviceName = n.ID, ev.GatewayID, ev.ID, ev.EventType, ev.DeviceName
 				}
@@ -866,8 +930,17 @@ func latestReading(r minew.Reading) automation.Reading {
 	return automation.Reading{Temperature: r.Temperature, Humidity: r.Humidity, Battery: r.Battery, RSSI: r.RSSI, Metrics: r.Metrics}
 }
 
+// detailString reads a string field of an event's detail ("" when absent or not a string).
+func detailString(detail map[string]any, key string) string {
+	if s, ok := detail[key].(string); ok {
+		return s
+	}
+	return ""
+}
+
 // runFlow evaluates one flow for one identity and executes what the evaluation decided.
-func runFlow(tx *gorm.DB, tenant, flow, flowName string, def automation.Definition, external string, f *firing, world *evalWorld, at time.Time) error {
+func runFlow(tx *gorm.DB, tenant string, row flowRow, external string, f *firing, world *evalWorld, at time.Time, opts Options) error {
+	flow, flowName, def := row.ID, row.Name, row.def
 	var recent int64
 	if e := tx.Raw(`SELECT count(*) FROM core.automation_runs WHERE automation_id=? AND external_id=? AND status='fired' AND created_at>?`,
 		flow, external, at.Add(-automationDedupe)).Scan(&recent).Error; e != nil {
@@ -954,6 +1027,16 @@ func runFlow(tx *gorm.DB, tenant, flow, flowName string, def automation.Definiti
 					return res.Error
 				}
 				detail.Notices += int(res.RowsAffected)
+			}
+		case automation.ActionCommand:
+			outcome, e := requestCommand(tx, tenant, row, act, f, opts, at)
+			if e != nil {
+				return e
+			}
+			detail.Commands = append(detail.Commands, outcome)
+			if outcome.Status != "queued" {
+				detail.Nodes[act.NodeID] = automation.OutcomeBlocked
+				detail.Blocked = append(detail.Blocked, act.NodeID)
 			}
 		}
 	}

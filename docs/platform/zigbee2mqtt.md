@@ -262,9 +262,14 @@ The list is `backend/internal/z2mcatalog/catalog.json.gz`, embedded in the binar
 The catalog is for browsing and labelling only. **Ingest never depends on it**: a paired device is always read
 through the definition its own bridge publishes.
 
-## Not in this phase
+## Automations (phase 3, 2026-09-25)
 
-- Automation actions (phase 3).
+Automation Studio's "สั่งอุปกรณ์" block queues commands through the same path as the web UI, with
+`source='automation'`, via an outbox that mqtt-commander drains (so ingest never takes the command lock). Extra
+rules: the deployment switch `AUTOMATION_COMMANDS` (off by default), the armer's authority re-checked at every
+firing, a loop guard, at most 6 automation commands per device and 30 per workspace a minute. Zigbee events (`switch_on`/`switch_off`,
+`hazard`/`hazard_cleared`, `action` with an optional action-value filter) can trigger flows. Details in
+`docs/platform/automation.md` ("Device commands").
 
 ## Testing without hardware
 

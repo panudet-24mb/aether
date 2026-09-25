@@ -43,6 +43,8 @@ services:
       LISTEN_ADDR: ":8080"
       # Development: browser pages, tests and curl all come from one loopback IP. Production default is 120.
       API_RATE_LIMIT: ${API_RATE_LIMIT:-600}
+      # Automations may command devices only when this is true (docs/platform/automation.md).
+      AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     depends_on:

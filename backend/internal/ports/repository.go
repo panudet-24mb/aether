@@ -115,6 +115,11 @@ type Repository interface {
 	DeleteAutomation(context.Context, domain.Principal, string) error
 	ListAutomationRuns(context.Context, domain.Principal, string, int) ([]automation.Run, error)
 	AutomationChannels(context.Context, domain.Principal) (map[string]bool, error)
+	// AutomationOptions loads what automation.Check needs for one definition (channels, command targets and
+	// their validator, the AUTOMATION_COMMANDS switch, whether this member may control devices).
+	AutomationOptions(ctx context.Context, p domain.Principal, project *string, definition json.RawMessage, enabled bool) (automation.Options, error)
+	// CommandableDevices lists the devices an automation of `project` (nil = workspace) may command.
+	CommandableDevices(context.Context, domain.Principal, *string) ([]domain.CommandableDevice, error)
 	TestAutomation(context.Context, domain.Principal, string, automation.TestInput) (automation.Result, error)
 
 	// Members of the workspace and the project access the database enforces for them

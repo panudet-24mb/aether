@@ -183,7 +183,12 @@ def main() -> int:
                    help="also open an unencrypted MQTT listener for gateways without TLS (passwords and ACLs still apply, but credentials and data cross the LAN in clear text; keep those gateways on an isolated network)")
     p.add_argument("--mqtt-plain-port", type=int, default=1883)
     p.add_argument("--shadow", choices=["true", "false"], default="true",
-                   help="ALERTS_SHADOW: record events but send nothing (recommended for day one)")
+                   help="ALERTS_SHADOW: record events but send nothing (recommended for day one). NOTE: unlike "
+                        "--automation-commands this is not preserved: every re-run sets it, true unless --shadow false "
+                        "is given again")
+    p.add_argument("--automation-commands", choices=["true", "false"], default=None,
+                   help="AUTOMATION_COMMANDS: let enabled automations command devices (action.command). Off on a "
+                        "fresh install; a re-run without this flag keeps the value already in the env file")
     p.add_argument("--csp", choices=["enforce", "report-only"], default="enforce")
     p.add_argument("--subnet", default="172.29.7.0/24", help="fixed compose subnet, so TRUSTED_PROXIES can name the proxy exactly")
     p.add_argument("--image-tag", default="prod")
@@ -451,6 +456,8 @@ connection_messages true
         "BLE_HISTORY_HOURS": "24",
         "DISCOVERY_LIMIT": "100",
         "ALERTS_SHADOW": a.shadow,
+        # Kept across re-runs unless given: switching device commands on or off must always be a deliberate act.
+        "AUTOMATION_COMMANDS": a.automation_commands or old.get("AUTOMATION_COMMANDS", "false"),
         "WEBHOOK_ALLOWED_HOSTS": old.get("WEBHOOK_ALLOWED_HOSTS", ""),
         "SMTP_HOST": old.get("SMTP_HOST", ""),
         "SMTP_PORT": old.get("SMTP_PORT", ""),

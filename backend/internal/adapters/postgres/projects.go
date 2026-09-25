@@ -111,6 +111,10 @@ func (r *Repository) SetGatewayProject(ctx context.Context, p domain.Principal, 
 		if e := signal(tx, p.TenantID, "inventory", gateway); e != nil {
 			return e
 		}
+		// An armer restricted to projects may no longer cover a flow's target on this gateway.
+		if e := disarmUnauthorisedFlows(tx, p, nil); e != nil {
+			return e
+		}
 		return audit(tx, p, "gateway.project_changed", gateway)
 	})
 }

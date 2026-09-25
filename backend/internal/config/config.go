@@ -27,6 +27,7 @@ type Config struct {
 	BLEHistoryHours      int      // raw BLE advertisement archive kept for Studio decoders (default 24)
 	DiscoveryLimit       int      // streams per gateway for tags that are NOT registered devices (default 100)
 	AlertsShadow         bool     // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
+	AutomationCommands   bool     // automations may command devices (action.command); off by default, see docs/platform/automation.md
 	SealKey              []byte   // optional CHANNEL_SEAL_KEY; falls back to a key derived from JWT_SIGNING_KEY
 	TrustedProxies       []string // CIDRs/IPs of the reverse proxy; only then is X-Forwarded-For believed
 	WebhookAllowedHosts  []string // host:port targets exempt from the private-address block (on-prem relays)
@@ -100,6 +101,13 @@ func Load() (Config, error) {
 		c.AlertsShadow = true
 	default:
 		return c, errors.New("ALERTS_SHADOW must be true or false")
+	}
+	switch os.Getenv("AUTOMATION_COMMANDS") {
+	case "", "false":
+	case "true":
+		c.AutomationCommands = true
+	default:
+		return c, errors.New("AUTOMATION_COMMANDS must be true or false")
 	}
 	if raw := os.Getenv("CHANNEL_SEAL_KEY"); raw != "" {
 		if c.SealKey, e = base64.StdEncoding.DecodeString(raw); e != nil || len(c.SealKey) < 32 {

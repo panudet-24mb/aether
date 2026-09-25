@@ -44,6 +44,9 @@ func (r *Repository) SetMemberAccess(ctx context.Context, p domain.Principal, ta
 		if e = tx.Exec(`INSERT INTO core.member_access(tenant_id,user_id,permissions) VALUES(?,?,?::jsonb) ON CONFLICT(tenant_id,user_id) DO UPDATE SET permissions=EXCLUDED.permissions`, p.TenantID, target, string(data)).Error; e != nil {
 			return e
 		}
+		if e := disarmUnauthorisedFlows(tx, p, &target); e != nil {
+			return e
+		}
 		return audit(tx, p, "member.access_updated", target)
 	})
 }

@@ -18,6 +18,8 @@ import (
 // Store is the database half (implemented by postgres.Repository).
 type Store interface {
 	ActiveTenants(context.Context) ([]string, error)
+	// ProcessAutomationRequests turns automation command requests (an outbox written by ingest) into commands.
+	ProcessAutomationRequests(ctx context.Context, tenant string, now time.Time) (int, error)
 	PendingCommandGateways(ctx context.Context, tenant string, now time.Time) ([]string, error)
 	ClaimCommands(ctx context.Context, tenant, gateway string, now time.Time, limit int) ([]domain.Command, error)
 	MarkCommandsPublished(ctx context.Context, tenant string, ids []string, at time.Time) error
@@ -81,6 +83,9 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 		}
 		if _, e := d.Store.TimeoutCommands(ctx, tenant, d.Now().UTC()); e != nil {
 			slog.Warn("command timeout sweep failed", "error", e.Error())
+		}
+		if _, e := d.Store.ProcessAutomationRequests(ctx, tenant, d.Now().UTC()); e != nil {
+			slog.Warn("automation command requests not processed", "error", e.Error())
 		}
 		gateways, e := d.Store.PendingCommandGateways(ctx, tenant, d.Now().UTC())
 		if e != nil {

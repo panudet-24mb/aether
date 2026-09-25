@@ -3544,6 +3544,81 @@
     }
    }
   },
+  "/api/v1/automations/commandable": {
+   "get": {
+    "summary": "Devices an automation may command (registered Zigbee2MQTT actuators of the flow's project, or the workspace when project_id is omitted), with the features each lets Aether set",
+    "operationId": "get__api_v1_automations_commandable",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "project_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "device_id": {
+              "type": "string"
+             },
+             "name": {
+              "type": "string"
+             },
+             "external_id": {
+              "type": "string"
+             },
+             "gateway_id": {
+              "type": "string"
+             },
+             "category": {
+              "type": "string"
+             },
+             "features": {
+              "type": "array",
+              "items": {
+               "type": "object"
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/automations/{id}": {
    "get": {
     "summary": "Read one flow",

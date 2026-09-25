@@ -1,6 +1,9 @@
 package automation
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Per-block outcome, used by the run log and by the studio to colour the canvas after a dry run.
 const (
@@ -12,7 +15,9 @@ const (
 	OutcomeIdle = "idle"
 	// OutcomeRan: an action block that the flow reached and that will be executed.
 	OutcomeRan = "ran"
-	// OutcomeBlocked: an action block the flow reached that Aether cannot execute (action.command).
+	// OutcomeBlocked: an action block the flow reached but the runtime refused to execute (an action.command
+	// when AUTOMATION_COMMANDS is off, the loop guard, a per-device cap, the device offline, …). The run log
+	// records why.
 	OutcomeBlocked = "blocked"
 )
 
@@ -33,6 +38,10 @@ type Action struct {
 	Title      string   `json:"title,omitempty"`
 	ChannelIDs []string `json:"channel_ids,omitempty"`
 	Message    string   `json:"message,omitempty"`
+	// action.command: which device, property and explicit value the flow wants set.
+	DeviceID string          `json:"device_id,omitempty"`
+	Property string          `json:"property,omitempty"`
+	Value    json.RawMessage `json:"value,omitempty"`
 }
 
 // Result is the full trace of one evaluation.
@@ -41,7 +50,7 @@ type Result struct {
 	Nodes map[string]string `json:"nodes"`
 	// Actions are the action blocks to execute, in the order they appear in the definition.
 	Actions []Action `json:"actions"`
-	// Blocked names action blocks that were reached but cannot run (action.command).
+	// Blocked names action blocks that were reached but that the runtime refused to execute.
 	Blocked []string `json:"blocked,omitempty"`
 }
 
@@ -108,17 +117,14 @@ func Evaluate(def Definition, fired map[string]bool, ctx EvalContext) Result {
 				result.Nodes[n.ID] = OutcomeIdle
 				continue
 			}
-			if n.Type == ActionCommand {
-				// Honest by construction: Aether has no downlink to devices, so this never executes.
-				result.Nodes[n.ID] = OutcomeBlocked
-				result.Blocked = append(result.Blocked, n.ID)
-				continue
-			}
 			result.Nodes[n.ID] = OutcomeRan
-			result.Actions = append(result.Actions, Action{
-				NodeID: n.ID, Type: n.Type, Severity: n.Data.Severity, Title: n.Data.Title,
-				ChannelIDs: n.Data.ChannelIDs, Message: n.Data.Message,
-			})
+			act := Action{NodeID: n.ID, Type: n.Type, Severity: n.Data.Severity, Title: n.Data.Title, ChannelIDs: n.Data.ChannelIDs, Message: n.Data.Message}
+			if n.Type == ActionCommand {
+				// Deciding is not sending: the runtime still applies the deployment switch, the loop guard and the
+				// command caps, and a dry run never sends at all.
+				act = Action{NodeID: n.ID, Type: n.Type, DeviceID: n.Data.DeviceID, Property: n.Data.Property, Value: n.Data.SetValue}
+			}
+			result.Actions = append(result.Actions, act)
 		default:
 			result.Nodes[n.ID] = OutcomeIdle
 		}

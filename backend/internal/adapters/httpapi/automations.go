@@ -16,7 +16,7 @@ import (
 // bodyLimit for a flow: the 32 KiB definition plus its envelope.
 const automationBodyLimit = automation.MaxDefinitionBytes + 4096
 
-func automationRoutes(r fiber.Router, s *app.Service) {
+func automationRoutes(r fiber.Router, s *app.Service, commandsEnabled, alertsShadow bool) {
 	principal := func(c fiber.Ctx) domain.Principal { return c.Locals("principal").(domain.Principal) }
 	manage := func(c fiber.Ctx) (domain.Principal, error) {
 		p := principal(c)
@@ -32,21 +32,57 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		return c.Params("id"), nil
 	}
 
-	// catalogue is everything the studio needs to render its palette and inspector pickers.
-	catalogue := fiber.Map{
-		"node_types": automation.NodeTypes, "event_types": automation.EventTypes, "ops": automation.Ops,
-		"severities": automation.Severities, "max_nodes": automation.MaxNodes, "max_edges": automation.MaxEdges,
-		"timezone":          "Asia/Bangkok",
-		"command_available": false,
-		"command_note":      "Aether ยังไม่มีช่องทางสั่งงานอุปกรณ์ · บล็อก “สั่งงานอุปกรณ์” วางได้แต่เปิดใช้ผังไม่ได้",
+	commandNote := "สั่งอุปกรณ์ Zigbee2MQTT ที่ลงทะเบียนแล้วได้ · ใช้คิวคำสั่งเดียวกับหน้าเว็บ (ตรวจค่า, ทีละคำสั่งต่อค่า, จำกัดความถี่)"
+	if !commandsEnabled {
+		commandNote = "ระบบนี้ปิดการสั่งอุปกรณ์จากผังอัตโนมัติไว้ (AUTOMATION_COMMANDS=false) · วางบล็อกและบันทึกเป็นฉบับร่างได้ แต่เปิดใช้ผังที่มีบล็อกนี้ไม่ได้"
+	}
+	shadowNote := ""
+	if alertsShadow {
+		shadowNote = "ระบบอยู่ในโหมดเงา (ALERTS_SHADOW) · ผังอัตโนมัติทั้งหมด รวมทั้งการสั่งอุปกรณ์ จะยังไม่ทำงานจนกว่าจะปิดโหมดเงา"
+	}
+	// catalogue is everything the studio needs to render its palette and inspector pickers. can_command is per
+	// member, so it is added per request.
+	catalogue := func(mayCommand bool) fiber.Map {
+		return fiber.Map{
+			"node_types": automation.NodeTypes, "event_types": automation.EventTypes, "ops": automation.Ops,
+			"severities": automation.Severities, "max_nodes": automation.MaxNodes, "max_edges": automation.MaxEdges,
+			"timezone":            "Asia/Bangkok",
+			"command_available":   commandsEnabled,
+			"automation_commands": commandsEnabled,
+			"alerts_shadow":       alertsShadow,
+			"can_command":         mayCommand,
+			"command_note":        commandNote,
+			"shadow_note":         shadowNote,
+		}
 	}
 
 	r.Get("/automations", func(c fiber.Ctx) error {
-		out, e := s.Repo.ListAutomations(c.Context(), principal(c))
+		p := principal(c)
+		out, e := s.Repo.ListAutomations(c.Context(), p)
 		if e != nil {
 			return e
 		}
-		return c.JSON(fiber.Map{"items": out, "catalog": catalogue})
+		access, e := s.Repo.MemberAccess(c.Context(), p, p.UserID)
+		if e != nil {
+			return e
+		}
+		return c.JSON(fiber.Map{"items": out, "catalog": catalogue(p.MayControl(access))})
+	})
+	// commandable feeds the "สั่งอุปกรณ์" block's pickers: the devices a flow of this project may command and the
+	// properties each one lets Aether set. Registered before /automations/:id so the path is not read as an id.
+	r.Get("/automations/commandable", func(c fiber.Ctx) error {
+		var project *string
+		if v := c.Query("project_id"); v != "" {
+			if !security.ValidID(v) {
+				return domain.ErrInvalid
+			}
+			project = &v
+		}
+		out, e := s.Repo.CommandableDevices(c.Context(), principal(c), project)
+		if e != nil {
+			return e
+		}
+		return c.JSON(fiber.Map{"items": out})
 	})
 	r.Get("/automations/:id", func(c fiber.Ctx) error {
 		target, e := id(c)
@@ -125,11 +161,11 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		}
 		enabled := in.Enabled != nil && *in.Enabled
 		if enabled {
-			channels, e := s.Repo.AutomationChannels(c.Context(), p)
+			opts, e := s.Repo.AutomationOptions(c.Context(), p, in.ProjectID, in.Definition, true)
 			if e != nil {
 				return e
 			}
-			if problems := automation.Check(def, automation.Options{Channels: channels, Enabled: true}); len(problems) > 0 {
+			if problems := automation.Check(def, opts); len(problems) > 0 {
 				return reject(c, problems)
 			}
 		}
@@ -163,11 +199,11 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		}
 		enabled := in.Enabled != nil && *in.Enabled
 		if enabled {
-			channels, e := s.Repo.AutomationChannels(c.Context(), p)
+			opts, e := s.Repo.AutomationOptions(c.Context(), p, in.ProjectID, in.Definition, true)
 			if e != nil {
 				return e
 			}
-			if problems := automation.Check(def, automation.Options{Channels: channels, Enabled: true}); len(problems) > 0 {
+			if problems := automation.Check(def, opts); len(problems) > 0 {
 				return reject(c, problems)
 			}
 		}
@@ -206,7 +242,7 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 			if e != nil {
 				return e
 			}
-			channels, e := s.Repo.AutomationChannels(c.Context(), p)
+			opts, e := s.Repo.AutomationOptions(c.Context(), p, record.ProjectID, record.Definition, true)
 			if e != nil {
 				return e
 			}
@@ -214,7 +250,7 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 			if e := json.Unmarshal(record.Definition, &def); e != nil {
 				return domain.ErrInvalid
 			}
-			if problems := automation.Check(def, automation.Options{Channels: channels, Enabled: true}); len(problems) > 0 {
+			if problems := automation.Check(def, opts); len(problems) > 0 {
 				return reject(c, problems)
 			}
 		}
@@ -248,6 +284,7 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		p := principal(c)
 		var in struct {
 			Enabled    *bool           `json:"enabled"`
+			ProjectID  *string         `json:"project_id"`
 			Definition json.RawMessage `json:"definition"`
 		}
 		if e := body(c, &in, automationBodyLimit); e != nil {
@@ -260,11 +297,15 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		if len(in.Definition) > 0 && json.Unmarshal(in.Definition, &def) != nil {
 			return domain.ErrInvalid
 		}
-		channels, e := s.Repo.AutomationChannels(c.Context(), p)
+		if in.ProjectID != nil && !security.ValidID(*in.ProjectID) {
+			return domain.ErrInvalid
+		}
+		enabled := in.Enabled != nil && *in.Enabled
+		opts, e := s.Repo.AutomationOptions(c.Context(), p, in.ProjectID, in.Definition, enabled)
 		if e != nil {
 			return e
 		}
-		problems := automation.Check(def, automation.Options{Channels: channels, Enabled: in.Enabled != nil && *in.Enabled})
+		problems := automation.Check(def, opts)
 		return c.JSON(fiber.Map{"ok": len(problems) == 0, "problems": problems})
 	})
 
@@ -283,6 +324,7 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 			ExternalID string   `json:"external_id"`
 			GatewayID  string   `json:"gateway_id"`
 			EventType  string   `json:"event_type"`
+			Action     string   `json:"action"`
 			Metric     *float64 `json:"metric_value"`
 		}
 		if e := body(c, &in, 4096); e != nil {
@@ -301,11 +343,21 @@ func automationRoutes(r fiber.Router, s *app.Service) {
 		if in.EventType == "" && in.Metric == nil {
 			return domain.ErrInvalid
 		}
-		result, e := s.Repo.TestAutomation(c.Context(), p, target, automation.TestInput{ExternalID: in.ExternalID, GatewayID: in.GatewayID, EventType: in.EventType, Value: in.Metric})
+		if len(in.Action) > 64 || strings.ContainsAny(in.Action, "\r\n\x00") {
+			return domain.ErrInvalid
+		}
+		result, e := s.Repo.TestAutomation(c.Context(), p, target, automation.TestInput{ExternalID: in.ExternalID, GatewayID: in.GatewayID, EventType: in.EventType, Action: in.Action, Value: in.Metric})
 		if e != nil {
 			return e
 		}
-		return c.JSON(fiber.Map{"dry_run": true, "executed": false, "result": result})
+		// A dry run never queues a command: would_send lists what the command blocks decided, nothing more.
+		wouldSend := []automation.Action{}
+		for _, act := range result.Actions {
+			if act.Type == automation.ActionCommand {
+				wouldSend = append(wouldSend, act)
+			}
+		}
+		return c.JSON(fiber.Map{"dry_run": true, "executed": false, "result": result, "would_send": wouldSend})
 	})
 }
 

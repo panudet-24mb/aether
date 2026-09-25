@@ -103,3 +103,22 @@ type DeviceControls struct {
 	State     json.RawMessage `json:"state"`
 	Online    bool            `json:"online"`
 }
+
+// AutomationCommandsPerDevice caps what all automations together may send one device in a minute, on top of
+// the workspace budget: a flow that reacts to its own effects runs out here instead of flapping a relay.
+const AutomationCommandsPerDevice = 6
+
+// CommandableDevice is one registered Zigbee2MQTT actuator an automation may command, with the features its
+// definition lets Aether set (zigbee2mqtt.Feature, as JSON).
+type CommandableDevice struct {
+	DeviceID   string          `json:"device_id"`
+	Name       string          `json:"name"`
+	ExternalID string          `json:"external_id"`
+	GatewayID  string          `json:"gateway_id"`
+	Category   string          `json:"category,omitempty"`
+	Features   json.RawMessage `json:"features"`
+}
+
+// AutomationCommandsPerMinute is the share of the workspace command budget (CommandTenantPerMinute) automations may
+// use. Automations never get more, so a person can always send at least the rest by hand.
+const AutomationCommandsPerMinute = 30

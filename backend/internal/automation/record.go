@@ -42,12 +42,22 @@ const (
 )
 
 // MatchesEvent reports whether a trigger.event block subscribes to this device event.
-// Empty selector lists mean "any".
+// Empty selector lists mean "any". An `action` event is matched with no action value, so a block that
+// filters on action values never fires from it; use MatchesEventAction when the value is known.
 func MatchesEvent(n Node, eventType, externalID, gatewayID string) bool {
+	return MatchesEventAction(n, eventType, externalID, gatewayID, "")
+}
+
+// MatchesEventAction is MatchesEvent with the pressed action of an `action` event ("single", "on", …), which a
+// block's Actions list may narrow down.
+func MatchesEventAction(n Node, eventType, externalID, gatewayID, action string) bool {
 	if n.Type != TriggerEvent {
 		return false
 	}
 	if len(n.Data.EventTypes) > 0 && !contains(n.Data.EventTypes, eventType) {
+		return false
+	}
+	if eventType == EventTypeAction && len(n.Data.Actions) > 0 && !contains(n.Data.Actions, action) {
 		return false
 	}
 	if len(n.Data.ExternalIDs) > 0 && !contains(n.Data.ExternalIDs, externalID) {
@@ -81,6 +91,8 @@ type TestInput struct {
 	EventType string
 	// Value fires trigger.metric blocks whose comparison it satisfies.
 	Value *float64
+	// Action is the pressed action for an `action` test event.
+	Action string
 }
 
 // MatchTriggers returns the trigger blocks a hypothetical uplink would fire. A dry run has no history,
@@ -91,7 +103,7 @@ func MatchTriggers(def Definition, in TestInput) map[string]bool {
 	for _, n := range def.Nodes {
 		switch n.Type {
 		case TriggerEvent:
-			if in.EventType != "" && MatchesEvent(n, in.EventType, in.ExternalID, in.GatewayID) {
+			if in.EventType != "" && MatchesEventAction(n, in.EventType, in.ExternalID, in.GatewayID, in.Action) {
 				out[n.ID] = true
 			}
 		case TriggerMetric:

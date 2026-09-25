@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -144,14 +145,37 @@ func TestCheck(t *testing.T) {
 			node("t1", TriggerEvent, Data{EventTypes: []string{"tamper"}}),
 			node("a1", ActionAlert, Data{Title: "x"}),
 		}, Edges: []Edge{edge("e1", "t1", "a1")}}, opts, "bad_severity"},
-		{"command block may be drawn", Definition{Nodes: []Node{
+		{"command block may be saved as a draft", commandFlow(`"ON"`), opts, ""},
+		{"empty command block names what is missing", Definition{Nodes: []Node{
 			node("t1", TriggerEvent, Data{EventTypes: []string{"tamper"}}),
 			node("k1", ActionCommand, Data{}),
-		}, Edges: []Edge{edge("e1", "t1", "k1")}}, opts, ""},
-		{"command block may not be enabled", Definition{Nodes: []Node{
-			node("t1", TriggerEvent, Data{EventTypes: []string{"tamper"}}),
-			node("k1", ActionCommand, Data{}),
-		}, Edges: []Edge{edge("e1", "t1", "k1")}}, Options{Channels: opts.Channels, Enabled: true}, "command_unavailable"},
+		}, Edges: []Edge{edge("e1", "t1", "k1")}}, opts, "no_device"},
+		{"command value must be valid JSON", commandFlow(`{`), opts, "bad_value"},
+		{"command value null is missing", commandFlow(`null`), opts, "no_value"},
+		{"command flow cannot be enabled while AUTOMATION_COMMANDS is off", commandFlow(`"ON"`), Options{Channels: opts.Channels, Enabled: true}, "command_disabled"},
+		{"command flow enabled by a member who may not control", commandFlow(`"ON"`), Options{Channels: opts.Channels, Enabled: true, CommandsEnabled: true, MayCommand: ptr(false)}, "command_forbidden"},
+		{"command flow enabled with the switch on and permission", commandFlow(`"ON"`), Options{Channels: opts.Channels, Enabled: true, CommandsEnabled: true, MayCommand: ptr(true)}, ""},
+		{"command device outside the flow's scope", commandFlow(`"ON"`), Options{Channels: opts.Channels, Commandable: map[string]map[string]bool{}}, "unknown_device"},
+		{"command property the device does not let us set", commandFlow(`"ON"`), Options{Channels: opts.Channels, Commandable: map[string]map[string]bool{devA: {"brightness": true}}}, "not_settable"},
+		{"command value the device refuses", commandFlow(`"TOGGLE"`), Options{Channels: opts.Channels, Commandable: map[string]map[string]bool{devA: {"state_l1": true}},
+			CheckValue: func(_, _ string, v json.RawMessage) string {
+				if string(v) == `"TOGGLE"` {
+					return "value"
+				}
+				return ""
+			}}, "bad_value"},
+		{"action filter needs the action event", Definition{Nodes: []Node{
+			node("t1", TriggerEvent, Data{EventTypes: []string{"tamper"}, Actions: []string{"single"}}),
+			node("a1", ActionAlert, Data{Severity: "info", Title: "x"}),
+		}, Edges: []Edge{edge("e1", "t1", "a1")}}, opts, "actions_without_action"},
+		{"action filter value must be a plain name", Definition{Nodes: []Node{
+			node("t1", TriggerEvent, Data{EventTypes: []string{"action"}, Actions: []string{"bad value!"}}),
+			node("a1", ActionAlert, Data{Severity: "info", Title: "x"}),
+		}, Edges: []Edge{edge("e1", "t1", "a1")}}, opts, "bad_actions"},
+		{"zigbee event types are accepted", Definition{Nodes: []Node{
+			node("t1", TriggerEvent, Data{EventTypes: []string{"switch_on", "switch_off", "hazard", "hazard_cleared", "action"}, Actions: []string{"single"}}),
+			node("a1", ActionAlert, Data{Severity: "info", Title: "x"}),
+		}, Edges: []Edge{edge("e1", "t1", "a1")}}, opts, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,5 +230,26 @@ func TestCheckSkipsChannelMembershipWhenUnknown(t *testing.T) {
 	}
 	if problems := Check(def, Options{}); len(problems) != 0 {
 		t.Fatalf("unexpected problems: %s", codes(problems))
+	}
+}
+
+const devA = "33333333-3333-4333-8333-333333333333"
+
+func ptr(b bool) *bool { return &b }
+
+// commandFlow is a door event driving one action.command on devA.
+func commandFlow(value string) Definition {
+	return Definition{
+		Nodes: []Node{
+			node("t1", TriggerEvent, Data{EventTypes: []string{"door_open"}}),
+			node("k1", ActionCommand, Data{DeviceID: devA, Property: "state_l1", SetValue: json.RawMessage(value)}),
+		},
+		Edges: []Edge{edge("e1", "t1", "k1")},
+	}
+}
+
+func TestHasCommand(t *testing.T) {
+	if HasCommand(tamperFlow()) || !HasCommand(commandFlow(`"ON"`)) {
+		t.Fatal("HasCommand")
 	}
 }

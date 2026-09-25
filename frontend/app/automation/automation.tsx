@@ -19,10 +19,11 @@ import "@xyflow/react/dist/style.css";
 import { CheckCircle2, CirclePlay, GripVertical, History, PanelLeft, PanelRight, Plus, Save, Trash2, TriangleAlert, Workflow } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./automation.css";
-import { ApiError, createClientFrom, type Device, type Gateway, type Source } from "../topology/api";
+import { ApiError, createClientFrom, type ControlFeature, type Device, type Gateway, type Source } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
 import { formatMAC } from "../topology/catalog";
 import {
+  COMMAND_REASON,
   EMPTY_DEFINITION,
   EVENT_LABEL,
   METRIC_LABEL,
@@ -33,6 +34,7 @@ import {
   type BlockData,
   type BlockType,
   type Channel,
+  type CommandableDevice,
   DAY_LABEL,
   type Link,
   type Lookup,
@@ -40,12 +42,15 @@ import {
   type Outcome,
   type Problem,
   type Run,
+  type StudioCatalog,
   type Trace,
+  type TraceAction,
   formatWhen,
   groupOf,
   localId,
   metricUnit,
   reaches,
+  showValue,
 } from "./api";
 import { CATALOG, GROUPS, GROUP_COLOR, GROUP_LABEL, SPEC, TEMPLATES, newBlock, nodeTypes, sentence, summarize, type StudioNode, type StudioNodeData } from "./blocks";
 
@@ -87,7 +92,9 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [panels, setPanels] = useState({ palette: true, inspector: true });
   const [drawer, setDrawer] = useState<"" | "runs" | "test">("");
-  const [test, setTest] = useState({ external: "", mode: "event" as "event" | "metric", event: "tamper", value: "20" });
+  const [test, setTest] = useState({ external: "", mode: "event" as "event" | "metric", event: "tamper", value: "20", action: "" });
+  const [catalog, setCatalog] = useState<StudioCatalog>({});
+  const [commandable, setCommandable] = useState<CommandableDevice[]>([]);
 
   const [devices, setDevices] = useState<Device[]>([]);
   const [gateways, setGateways] = useState<Gateway[]>([]);
@@ -133,8 +140,11 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
   }, [client]);
 
   const loadFlows = useCallback(async () => {
-    const out = await guard(() => client.raw<{ items: Automation[] }>("/automations"));
-    if (out) setFlows(out.items);
+    const out = await guard(() => client.raw<{ items: Automation[]; catalog?: StudioCatalog }>("/automations"));
+    if (out) {
+      setFlows(out.items);
+      setCatalog(out.catalog ?? {});
+    }
     return out?.items ?? [];
   }, [client, guard]);
 
@@ -183,6 +193,23 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
     };
   }, [activeId, client, guard, applyRecord, fitView]);
 
+  // The devices a command block of this flow may target: its project's, or the workspace's for an unscoped flow.
+  useEffect(() => {
+    let cancelled = false;
+    const query = flowProject ? `?project_id=${encodeURIComponent(flowProject)}` : "";
+    void client
+      .raw<{ items: CommandableDevice[] }>(`/automations/commandable${query}`)
+      .then((out) => {
+        if (!cancelled) setCommandable(out.items);
+      })
+      .catch(() => {
+        if (!cancelled) setCommandable([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, flowProject]);
+
   // Unsaved-changes guard for a reload or a closed tab.
   useEffect(() => {
     if (!dirty) return;
@@ -201,12 +228,16 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
     for (const d of devices) deviceNames.set(d.external_id.toLowerCase(), d.name);
     const gatewayNames = new Map(gateways.map((g) => [g.id, g.name]));
     const channelNames = new Map(channels.map((c) => [c.id, c.name]));
+    const targetNames = new Map<string, string>();
+    for (const d of devices) if (d.id) targetNames.set(d.id.toLowerCase(), d.name);
+    for (const c of commandable) targetNames.set(c.device_id.toLowerCase(), c.name);
     return {
       device: (id) => deviceNames.get(id.toLowerCase()) ?? (id ? formatMAC(id) : "—"),
       gateway: (id) => gatewayNames.get(id) ?? "gateway ที่ถูกถอนแล้ว",
       channel: (id) => channelNames.get(id) ?? "ช่องทางที่ถูกลบแล้ว",
+      target: (id) => targetNames.get(id.toLowerCase()) ?? "อุปกรณ์ที่ถูกถอนแล้ว",
     };
-  }, [devices, sources, gateways, channels]);
+  }, [devices, sources, gateways, channels, commandable]);
 
   /** Every identity the workspace knows, registered first, for the device pickers. */
   const identities = useMemo(() => {
@@ -378,12 +409,12 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
 
   const validate = useCallback(
     async (wantEnabled: boolean): Promise<boolean> => {
-      const out = await guard(() => client.post<{ ok: boolean; problems: Problem[] }>("/automations/validate", { enabled: wantEnabled, definition }));
+      const out = await guard(() => client.post<{ ok: boolean; problems: Problem[] }>("/automations/validate", { enabled: wantEnabled, definition, project_id: flowProject || undefined }));
       if (!out) return false;
       setProblems(out.problems);
       return out.ok;
     },
-    [client, definition, guard],
+    [client, definition, flowProject, guard],
   );
 
   const act = useCallback(
@@ -468,12 +499,18 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
       const payload: Record<string, unknown> = { external_id: test.external.trim().toLowerCase() };
       if (test.mode === "event") payload.event_type = test.event;
       else payload.metric_value = Number(test.value);
-      const out = await guard(() => client.post<{ result: Trace }>(`/automations/${record.id}/test`, payload));
+      if (test.mode === "event" && test.event === "action" && test.action.trim()) payload.action = test.action.trim();
+      const out = await guard(() => client.post<{ result: Trace; would_send?: TraceAction[] }>(`/automations/${record.id}/test`, payload));
       if (!out) return;
       setTrace(out.result);
-      setNotice("ทดลองเดินผังแล้ว · ไม่ได้เปิดการแจ้งเตือนหรือส่งข้อความจริง");
+      const send = (out.would_send ?? []).map((a) => `ตั้ง ${a.property} ของ ${lookup.target(a.device_id ?? "")} เป็น ${showValue(a.value)}`);
+      setNotice(
+        send.length > 0
+          ? `ทดลองเดินผังแล้ว · ถ้าเกิดจริงจะสั่ง: ${send.join(" · ")} (ครั้งนี้ไม่ได้ส่งคำสั่งจริง)`
+          : "ทดลองเดินผังแล้ว · ไม่ได้เปิดการแจ้งเตือน ส่งข้อความ หรือสั่งอุปกรณ์จริง",
+      );
     });
-  }, [act, client, dirty, guard, record, test]);
+  }, [act, client, dirty, guard, lookup, record, test]);
 
   const loadRuns = useCallback(async () => {
     if (!record) return;
@@ -622,6 +659,11 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
                 </button>
               </div>
             )}
+            {catalog.alerts_shadow && catalog.shadow_note && (
+              <div className="au-toast is-warn" role="status">
+                {catalog.shadow_note}
+              </div>
+            )}
             {generalProblems.map((p) => (
               <div key={p.code} className="au-toast is-warn" role="status">
                 {p.message}
@@ -677,6 +719,9 @@ function Studio({ getToken, refresh, onUnauthorized }: Props) {
             identities={identities}
             gateways={gateways}
             channels={channels}
+            commandable={commandable}
+            catalog={catalog}
+            lookup={lookup}
             problem={selected ? (problemByNode.get(selected.id) ?? "") : ""}
             onPatch={(change) => selected && patch(selected.id, change)}
             onRemove={() => selected && removeBlocks([selected.id])}
@@ -783,6 +828,9 @@ function Inspector({
   identities,
   gateways,
   channels,
+  commandable,
+  catalog,
+  lookup,
   problem,
   onPatch,
   onRemove,
@@ -793,6 +841,9 @@ function Inspector({
   identities: Identity[];
   gateways: Gateway[];
   channels: Channel[];
+  commandable: CommandableDevice[];
+  catalog: StudioCatalog;
+  lookup: Lookup;
   problem: string;
   onPatch: (change: Partial<BlockData>) => void;
   onRemove: () => void;
@@ -844,6 +895,17 @@ function Inspector({
               </label>
             ))}
           </fieldset>
+          {(d.event_types ?? []).includes("action") && (
+            <label className="au-label">
+              เฉพาะปุ่มที่กด (คั่นด้วย , · ว่าง = ทุกปุ่ม)
+              <input
+                value={(d.actions ?? []).join(", ")}
+                placeholder="เช่น single, double, on"
+                onChange={(e) => onPatch({ actions: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
+              />
+              <small>ชื่อปุ่มตามที่ Zigbee2MQTT รายงานในค่า action ของรีโมตหรือปุ่มนั้น</small>
+            </label>
+          )}
           <MultiSelect label="เฉพาะอุปกรณ์ (ว่าง = ทุกตัว)" options={identities} value={d.external_ids ?? []} onChange={(external_ids) => onPatch({ external_ids })} />
           <MultiSelect label="เฉพาะ gateway (ว่าง = ทุกตัว)" options={gateways.map((g) => ({ id: g.id, label: g.name }))} value={d.gateway_ids ?? []} onChange={(gateway_ids) => onPatch({ gateway_ids })} />
         </>
@@ -951,15 +1013,136 @@ function Inspector({
         </>
       )}
 
-      {block.type === "action.command" && (
+      {block.type === "action.command" && <CommandEditor data={d} commandable={commandable} catalog={catalog} onPatch={onPatch} />}
+
+      {(group === "logic" || block.type === "action.command") && <p className="au-muted au-note">{summarize(block, lookup)}</p>}
+    </aside>
+  );
+}
+
+/** The "สั่งอุปกรณ์" block: pick a commandable device, one property its definition lets Aether set, and the value. */
+function CommandEditor({ data: d, commandable, catalog, onPatch }: { data: BlockData; commandable: CommandableDevice[]; catalog: StudioCatalog; onPatch: (change: Partial<BlockData>) => void }) {
+  const device = commandable.find((c) => c.device_id.toLowerCase() === (d.device_id ?? "").toLowerCase());
+  const feature = device?.features.find((f) => f.property === d.property);
+  return (
+    <>
+      {!catalog.automation_commands && (
         <p className="au-unavailable">
           <TriangleAlert size={15} aria-hidden="true" />
-          Aether ยังไม่มีช่องทางส่งคำสั่งกลับไปที่ gateway จึงยังสั่งงานอุปกรณ์จริงไม่ได้ บล็อกนี้วางไว้เพื่อร่างผังได้ แต่ผังที่มีบล็อกนี้จะเปิดใช้งานไม่ได้
+          {catalog.command_note || "ระบบนี้ปิดการสั่งอุปกรณ์จากผังอัตโนมัติไว้ · บันทึกเป็นฉบับร่างได้ แต่ยังเปิดใช้ไม่ได้"}
         </p>
       )}
+      {catalog.automation_commands && catalog.can_command === false && (
+        <p className="au-unavailable">
+          <TriangleAlert size={15} aria-hidden="true" />
+          บัญชีนี้ไม่มีสิทธิ์สั่งงานอุปกรณ์ · วางและบันทึกบล็อกได้ แต่เปิดใช้ผังนี้ไม่ได้
+        </p>
+      )}
+      <label className="au-label">
+        อุปกรณ์ที่จะสั่ง
+        <select value={d.device_id ?? ""} onChange={(e) => onPatch({ device_id: e.target.value, property: "", set_value: undefined })}>
+          <option value="">— เลือกอุปกรณ์ —</option>
+          {d.device_id && !device && <option value={d.device_id}>อุปกรณ์เดิม (ไม่อยู่ในรายการที่สั่งได้แล้ว)</option>}
+          {commandable.map((c) => (
+            <option key={c.device_id} value={c.device_id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        {commandable.length === 0 && <small>ยังไม่มีอุปกรณ์ Zigbee2MQTT ที่ลงทะเบียนและสั่งงานได้ในโปรเจกต์ของผังนี้</small>}
+      </label>
+      {device && (
+        <label className="au-label">
+          ค่าที่จะตั้ง
+          <select value={d.property ?? ""} onChange={(e) => onPatch({ property: e.target.value, set_value: undefined })}>
+            <option value="">— เลือกค่า —</option>
+            {device.features.map((f) => (
+              <option key={f.property} value={f.property}>
+                {f.label || f.name || f.property}
+                {f.endpoint ? ` (${f.endpoint})` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {feature && <ValueEditor feature={feature} value={d.set_value} onChange={(set_value) => onPatch({ set_value })} />}
+      <p className="au-muted au-note">
+        ผังสั่งด้วยค่าที่ระบุเสมอ (ไม่มี “สลับ”) · ผ่านคิวคำสั่งเดียวกับหน้าเว็บ ในนามของผู้ที่เปิดใช้ผัง · ไม่ส่งซ้ำเมื่อเหตุการณ์มาจากคำสั่งของผังอัตโนมัติเอง · อุปกรณ์หนึ่งตัวไม่เกิน 6 ครั้งต่อนาที และผังทั้งหมดรวมกันไม่เกิน 30 ครั้งต่อนาที
+      </p>
+    </>
+  );
+}
 
-      {(group === "logic" || block.type === "action.command") && <p className="au-muted au-note">{summarize(block, { device: (x) => x, gateway: (x) => x, channel: (x) => x })}</p>}
-    </aside>
+/** One value input for a settable Zigbee2MQTT feature, by its type. */
+function ValueEditor({ feature: f, value, onChange }: { feature: ControlFeature; value: unknown; onChange: (value: unknown) => void }) {
+  if (f.type === "binary") {
+    const options = [f.value_on, f.value_off].filter((v) => v !== undefined);
+    return (
+      <label className="au-label">
+        ตั้งเป็น
+        <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(e) => onChange(e.target.value ? JSON.parse(e.target.value) : undefined)}>
+          <option value="">— เลือก —</option>
+          {options.map((v) => (
+            <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+              {String(v)}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (f.type === "enum") {
+    return (
+      <label className="au-label">
+        ตั้งเป็น
+        <select value={value === undefined ? "" : JSON.stringify(value)} onChange={(e) => onChange(e.target.value ? JSON.parse(e.target.value) : undefined)}>
+          <option value="">— เลือก —</option>
+          {(f.values ?? []).map((v) => (
+            <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+              {String(v)}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (f.type === "numeric") {
+    return (
+      <label className="au-label">
+        ตั้งเป็น{f.unit ? ` (${f.unit})` : ""}
+        <input
+          type="number"
+          min={f.value_min}
+          max={f.value_max}
+          step={f.value_step ?? "any"}
+          value={typeof value === "number" ? value : ""}
+          onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+        />
+        {(f.value_min !== undefined || f.value_max !== undefined) && (
+          <small>
+            ช่วงที่อุปกรณ์รับได้ {f.value_min ?? "…"}–{f.value_max ?? "…"}
+          </small>
+        )}
+      </label>
+    );
+  }
+  // A composite (colour and the like): its sub-values as JSON, checked against the device when saved.
+  return (
+    <label className="au-label">
+      ตั้งเป็น (JSON)
+      <input
+        defaultValue={value === undefined ? "" : JSON.stringify(value)}
+        placeholder={JSON.stringify(Object.fromEntries((f.features ?? []).map((x) => [x.property, 0])))}
+        onBlur={(e) => {
+          try {
+            onChange(e.target.value.trim() ? JSON.parse(e.target.value) : undefined);
+          } catch {
+            onChange(e.target.value);
+          }
+        }}
+      />
+      <small>ค่าย่อย: {(f.features ?? []).map((x) => x.property).join(", ")}</small>
+    </label>
   );
 }
 
@@ -1023,8 +1206,8 @@ function TestPanel({
   onRun,
   onClose,
 }: {
-  state: { external: string; mode: "event" | "metric"; event: string; value: string };
-  setState: (next: { external: string; mode: "event" | "metric"; event: string; value: string }) => void;
+  state: { external: string; mode: "event" | "metric"; event: string; value: string; action: string };
+  setState: (next: { external: string; mode: "event" | "metric"; event: string; value: string; action: string }) => void;
   identities: Identity[];
   busy: boolean;
   dirty: boolean;
@@ -1077,6 +1260,12 @@ function TestPanel({
             <input type="number" value={state.value} onChange={(e) => setState({ ...state, value: e.target.value })} />
           </label>
         )}
+        {state.mode === "event" && state.event === "action" && (
+          <label className="au-label">
+            ปุ่มที่กด
+            <input value={state.action} placeholder="เช่น single" onChange={(e) => setState({ ...state, action: e.target.value })} />
+          </label>
+        )}
         <button type="button" className="au-btn primary" onClick={onRun} disabled={busy || !state.external || dirty}>
           <CirclePlay size={15} aria-hidden="true" />
           เดินผัง
@@ -1084,8 +1273,7 @@ function TestPanel({
         {dirty && <p className="au-muted">บันทึกผังก่อน แล้วจึงทดสอบได้</p>}
         {trace && (
           <p className="au-muted">
-            บล็อกสีเขียว = เป็นจริงหรือได้ทำงาน · สีแดง = เป็นเท็จ · สีเทา = ไม่ถูกเรียกถึง · จะทำจริง {trace.actions.length} รายการ
-            {trace.blocked && trace.blocked.length > 0 ? ` · ${trace.blocked.length} บล็อกสั่งงานอุปกรณ์ถูกข้าม` : ""}
+            บล็อกสีเขียว = เป็นจริงหรือได้ทำงาน · สีแดง = เป็นเท็จ · สีเทา = ไม่ถูกเรียกถึง · ถ้าเกิดจริงจะทำ {trace.actions.length} รายการ · การทดสอบไม่ส่งคำสั่งไปที่อุปกรณ์
           </p>
         )}
       </div>
@@ -1123,7 +1311,19 @@ function RunHistory({ runs, lookup, onClose, onReload }: { runs: Run[]; lookup: 
                     ? r.detail.error
                     : actions.length === 0
                       ? "ไม่ได้ทำอะไร"
-                      : actions.map((a) => (a.type === "action.alert" ? `เปิดแจ้งเตือน${SEVERITY_LABEL[a.severity ?? ""] ?? ""}` : "ส่งข้อความออก")).join(" · ")}
+                      : actions
+                          .filter((a) => a.type !== "action.command")
+                          .map((a) => (a.type === "action.alert" ? `เปิดแจ้งเตือน${SEVERITY_LABEL[a.severity ?? ""] ?? ""}` : "ส่งข้อความออก"))
+                          .concat(
+                            (r.detail?.commands ?? []).map((c) =>
+                              c.status === "queued"
+                                ? `สั่ง ${lookup.target(c.device_id)} · ${c.property} = ${showValue(c.value)}`
+                                : c.status === "requested"
+                                  ? `ขอสั่ง ${lookup.target(c.device_id)} · ${c.property} = ${showValue(c.value)} (รอคิวคำสั่ง)`
+                                  : `ไม่ได้สั่ง ${lookup.target(c.device_id)} (${COMMAND_REASON[c.reason ?? ""] ?? c.reason ?? "ถูกข้าม"})`,
+                            ),
+                          )
+                          .join(" · ")}
                   {r.detail?.notifications ? ` · ส่ง ${r.detail.notifications} ช่องทาง` : ""}
                 </span>
               </li>

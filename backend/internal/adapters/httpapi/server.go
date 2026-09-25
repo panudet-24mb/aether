@@ -213,13 +213,13 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	presenceRoutes(secured, service)
 	signalRoutes(secured, service)
 	memberRoutes(secured, service, cfg.Mode)
-	automationRoutes(secured, service)
+	automationRoutes(secured, service, cfg.AutomationCommands, cfg.AlertsShadow)
 	floorplanRoutes(secured, service)
 	assetRoutes(secured, service)
 	commandRoutes(secured, service)
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
+		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
 	})
 	// The Zigbee2MQTT device catalog (zigbee-herdsman-converters, MIT): "is this model supported, and what will
 	// Aether show it as?" before anything is bought or paired. Read-only and the same for every workspace.

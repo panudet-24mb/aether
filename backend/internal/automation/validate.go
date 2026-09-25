@@ -2,6 +2,7 @@ package automation
 
 import (
 	"aether/backend/internal/domain"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,7 +18,13 @@ var EventTypes = []string{
 	// Door and occupancy (MOS kit). `vacant` is not listed: it is raised by the periodic worker, which
 	// does not run automations, so a trigger on it would never fire.
 	domain.EventDoorOpen, domain.EventDoorClosed, domain.EventOccupied,
+	// Zigbee2MQTT: a switch changing state (from the wall, another controller or a command), a smoke / gas /
+	// CO detector going into and out of alarm, and a remote or button press (narrowed by Data.Actions).
+	domain.EventSwitchOn, domain.EventSwitchOff, domain.EventHazard, domain.EventHazardCleared, domain.EventAction,
 }
+
+// EventTypeAction is the remote / button press event whose value a trigger.event block may filter on.
+const EventTypeAction = domain.EventAction
 
 // Problem is one validation failure, addressed to the block (or edge) the studio should highlight.
 type Problem struct {
@@ -31,9 +38,21 @@ type Problem struct {
 type Options struct {
 	// Channels is the set of notification channel ids the tenant owns; action.notify may use only these.
 	Channels map[string]bool
-	// Enabled is true when the caller wants the flow switched on. An enabled flow may not contain
-	// action.command, because Aether cannot send commands to devices.
+	// Enabled is true when the caller wants the flow switched on.
 	Enabled bool
+	// CommandsEnabled is the deployment switch AUTOMATION_COMMANDS. Off (the default), a flow holding an
+	// action.command block can be saved as a draft but not enabled.
+	CommandsEnabled bool
+	// MayCommand says whether the member switching the flow on may control devices themselves (the same rule
+	// as a click in the web UI). nil means the caller did not ask, e.g. the runtime re-checking a stored flow.
+	MayCommand *bool
+	// Commandable maps a registered device id (lower case) to the properties its Zigbee2MQTT definition lets
+	// Aether set, for the devices this flow may command (its project, or the workspace for an unscoped flow).
+	// nil means the caller did not load them, and the device and property are not checked.
+	Commandable map[string]map[string]bool
+	// CheckValue validates an action.command value against the device's own definition and returns a short
+	// reason ("value", "not_settable", …) or "" when it is acceptable. nil skips the check.
+	CheckValue func(deviceID, property string, value json.RawMessage) string
 }
 
 var errInvalidDefinition = errors.New("automation definition invalid")
@@ -218,6 +237,10 @@ func checkData(n Node, opts Options) []Problem {
 		}
 		out = append(out, checkIDList(n.ID, "external_ids", d.ExternalIDs, validExternal)...)
 		out = append(out, checkIDList(n.ID, "gateway_ids", d.GatewayIDs, validUUID)...)
+		out = append(out, checkIDList(n.ID, "actions", d.Actions, validAction)...)
+		if len(d.Actions) > 0 && !contains(d.EventTypes, EventTypeAction) {
+			add("actions_without_action", "เลือกปุ่มที่กดได้เฉพาะเมื่อฟังเหตุการณ์ “กดปุ่ม / รีโมต”")
+		}
 	case TriggerMetric:
 		if !validExternal(d.ExternalID) {
 			add("no_device", "เลือกอุปกรณ์ที่จะเฝ้าดู")
@@ -302,11 +325,67 @@ func checkData(n Node, opts Options) []Problem {
 			add("message_too_long", "ข้อความยาวเกินไป")
 		}
 	case ActionCommand:
-		if opts.Enabled {
-			add("command_unavailable", "สั่งงานอุปกรณ์ยังใช้ไม่ได้ · ต้องมีช่องทางสั่งงาน gateway ก่อน จึงเปิดใช้ผังที่มีบล็อกนี้ไม่ได้")
+		out = append(out, checkCommand(n, opts)...)
+	}
+	return out
+}
+
+// checkCommand validates one action.command block: what it targets and, when the flow is being switched on,
+// whether this deployment and this member may send commands at all.
+func checkCommand(n Node, opts Options) []Problem {
+	out := []Problem{}
+	add := func(code, message string) { out = append(out, Problem{NodeID: n.ID, Code: code, Message: message}) }
+	d := n.Data
+	device := strings.ToLower(d.DeviceID)
+	okDevice, okProperty := validUUID(device), validProperty(d.Property)
+	if !okDevice {
+		add("no_device", "เลือกอุปกรณ์ที่จะสั่ง")
+	}
+	if !okProperty {
+		add("no_property", "เลือกค่าที่จะตั้ง")
+	}
+	okValue := false
+	switch raw := strings.TrimSpace(string(d.SetValue)); {
+	case raw == "" || raw == "null":
+		add("no_value", "ใส่ค่าที่จะตั้ง")
+	case len(d.SetValue) > MaxCommandValueBytes:
+		add("value_too_long", "ค่าที่จะตั้งยาวเกินไป")
+	case !json.Valid(d.SetValue):
+		add("bad_value", "ค่าที่จะตั้งไม่ถูกต้อง")
+	default:
+		okValue = true
+	}
+	if okDevice && okProperty && opts.Commandable != nil {
+		props, known := opts.Commandable[device]
+		switch {
+		case !known:
+			add("unknown_device", "อุปกรณ์นี้สั่งงานจากผังนี้ไม่ได้ · ต้องเป็นอุปกรณ์ Zigbee2MQTT ที่ลงทะเบียนแล้ว และอยู่ในโปรเจกต์เดียวกับผัง")
+		case !props[d.Property]:
+			add("not_settable", "อุปกรณ์ไม่ให้ตั้งค่านี้")
+		case okValue && opts.CheckValue != nil:
+			if reason := opts.CheckValue(device, d.Property, d.SetValue); reason != "" {
+				add("bad_value", "อุปกรณ์รับค่านี้ไม่ได้ ("+clip(reason)+")")
+			}
+		}
+	}
+	if opts.Enabled {
+		if !opts.CommandsEnabled {
+			add("command_disabled", "ระบบนี้ปิดการสั่งอุปกรณ์จากผังอัตโนมัติไว้ (AUTOMATION_COMMANDS) · บันทึกเป็นฉบับร่างได้ แต่ยังเปิดใช้ไม่ได้")
+		} else if opts.MayCommand != nil && !*opts.MayCommand {
+			add("command_forbidden", "บัญชีนี้ไม่มีสิทธิ์สั่งงานอุปกรณ์ · จึงเปิดใช้ผังที่มีบล็อกนี้ไม่ได้")
 		}
 	}
 	return out
+}
+
+// HasCommand reports whether a flow contains an action.command block, i.e. whether enabling it actuates devices.
+func HasCommand(def Definition) bool {
+	for _, n := range def.Nodes {
+		if n.Type == ActionCommand {
+			return true
+		}
+	}
+	return false
 }
 
 func checkIDList(node, field string, list []string, ok func(string) bool) []Problem {
@@ -406,6 +485,32 @@ func validUUID(s string) bool {
 			continue
 		}
 		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') && !(r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// validProperty is the Zigbee2MQTT property name a command may set (the same pattern the command queue enforces).
+func validProperty(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// validAction is a remote / button action value such as "single", "brightness_move_up" or "1_single".
+func validAction(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '_' && r != '-' && r != '.' {
 			return false
 		}
 	}

@@ -36,6 +36,9 @@ type Reading struct {
 	// Commands names, per switch gang, the Aether command this report confirmed (Zigbee2MQTT). It is never
 	// stored with the sample; the alerts engine uses it to tell a commanded change from a press on the wall.
 	Commands map[int]string `json:"-"`
+	// Confirmed lists every Aether command this report confirmed, on any property (Zigbee2MQTT). Never stored;
+	// the automation loop guard reads it to recognise a change that a command caused.
+	Confirmed []string `json:"-"`
 }
 type Sensor struct {
 	TemplateID *string                   `json:"template_id"`

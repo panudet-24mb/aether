@@ -444,7 +444,7 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 	if e := tx.SavePoint("automations").Error; e != nil {
 		return e
 	}
-	if e := runAutomations(tx, tenant, gateway, view, inserted, at); e != nil {
+	if e := runAutomations(tx, tenant, gateway, view, inserted, at, opts); e != nil {
 		slog.Warn("automations failed; events and alerts kept", "gateway", gateway, "error", e.Error())
 		return tx.RollbackTo("automations").Error
 	}

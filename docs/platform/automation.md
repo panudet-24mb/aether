@@ -2,14 +2,52 @@
 
 Added 2026-09-20. "ถ้า…แล้ว…" flows built from blocks on a canvas. A flow reacts to device events or sensor values, checks conditions across any devices of the workspace, and acts.
 
-## What runs for real, and what does not
+## What runs for real
 
-Aether has no downlink or command channel to gateways or devices today. So:
+- Open an alert, or send through a notification channel (webhook, LINE, email). These use the same alert and notification pipeline as alert rules.
+- **"สั่งอุปกรณ์" (action.command, since 2026-09-25):** set one property of a registered Zigbee2MQTT device to an explicit value (turn a switch gang ON, a bulb's brightness to 200, a curtain to 50 %, a thermostat mode). See "Device commands" below; it is off unless the deployment switches it on.
 
-- **Real:** open an alert, send through a notification channel (webhook, LINE, email). These use the same alert and notification pipeline as alert rules.
-- **Not available:** "สั่งงานอุปกรณ์". The block is in the palette, marked "เร็ว ๆ นี้ · ต้องมีช่องทางสั่งงาน gateway". A flow that contains it cannot be enabled. Validation refuses it in the route and again in the repository, and the evaluator never emits it.
+## Device commands (action.command)
 
-Device control needs a command path first: MQTT downlink topics per gateway, an acknowledgement model, and actuators in the device catalog.
+A command block names a registered device (its registration id), one property its Zigbee2MQTT definition lets Aether set, and the value. There is **no toggle** in a flow: a flow says which state it wants, so firing twice can never flip a relay back.
+
+A firing flow does not queue the command itself. It writes a **request** to an outbox (`core.automation_command_requests`, migration 00031), and `mqtt-commander` turns requests into commands on its next sweep, through **the same queue as a click in the web UI** (`queueCommand`, `docs/platform/zigbee2mqtt.md`). That queue validates against the device's own exposes, allows one command in flight per device and property, applies the workspace budget (60 a minute), delivers at most once, and confirms only when the device reports the value. The command row has `source='automation'`, `automation_id` = the flow, `actor_id` = the member who last switched the flow on (`core.automations.enabled_by`), and the request's id as its own id. The run log shows `requested` until the commander has decided, then `queued` or `blocked` with a reason.
+
+**Why an outbox (lock order).** Every path that queues a command takes the per-tenant command lock first and only then touches gateway rows (the command's foreign keys lock the target's gateway). Ingest already holds its gateway row `FOR UPDATE` when a flow fires, so queueing from ingest took the two in the opposite order: a deadlock with a web command, or with a flow on another gateway commanding this one. Ingest now takes no command lock and no foreign-key lock at all; it only inserts the request (no foreign keys). The commander drains requests with the tenant lock first, like the web. `TestAutomationCommandLockOrderUnderConcurrency` runs ingest, web commands and the drain together, and it deadlocks against the old order.
+
+**Who may arm it.** Two conditions, checked by the route (per-block problems for the studio) and again by the repository:
+
+1. The deployment switch `AUTOMATION_COMMANDS=true` (setup.py `--automation-commands true`, passed to `api` and `mqtt-ingest`). Default **false**: a flow with a command block can be drawn and saved as a draft, but enabling it is refused with `command_disabled`. Switching it off later makes the runtime refuse to queue (run log reason `commands_disabled`); the flows stay enabled for their other actions.
+2. The member switching the flow on must be allowed to control devices themselves: the same rule as a manual command (owner, admin or operator, and the "control" module not set to none/read), `command_forbidden` otherwise. Managing flows at all is still owner/admin only, so in practice this is an owner, or an admin whose control module is open. Enabling a flow with commands is audited as `automation.commands_armed`.
+
+**The armer's authority is re-checked** (`core.member_may_command`, the same rule as a manual command: owner, admin or operator; the control module not none/read; project scope covering the target's gateway). It is checked when the flow fires, and again when the commander queues the command (reason `arming_member_lacks_control`). The team page also acts on it at once. Demoting or removing the armer, closing their control module, restricting their projects, or moving a target's gateway out of their projects **switches the flow off** (audited `automation.disarmed`), so the studio shows it off. It has to be switched on again by someone who may command.
+
+**What it may target.** A registered Zigbee2MQTT actuator on a live gateway, in the flow's project for a project flow (the workspace for an unscoped one). Checked when the flow is enabled, when it fires (`checkFlowProject`), and when the commander queues the command (reason `out_of_project`). `GET /api/v1/automations/commandable?project_id=` lists the candidates with their settable features for the studio's pickers.
+
+**Safety rules at run time** (each refusal is recorded in the run's `detail.commands[]` with a reason, never an error for the other actions):
+
+| Rule | Reason in the run log |
+|---|---|
+| `AUTOMATION_COMMANDS` is off | `commands_disabled` |
+| The member who armed the flow may no longer command the target | `arming_member_lacks_control` |
+| The target left the flow's project | `out_of_project` |
+| **Loop guard:** the change that woke the flow was caused by a command an automation sent. This covers any property (a switch gang, brightness, position, …) and event or metric triggers alike: the commands named by the matched events plus every command the device's report in that packet confirmed | `loop_guard` |
+| All automations together may send one device at most **6 commands a minute** (`domain.AutomationCommandsPerDevice`) | `automation_cap` |
+| All automations together may use at most **30 of the workspace's 60 commands a minute** (`domain.AutomationCommandsPerMinute`), so manual control always keeps at least 30 | `automation_budget` |
+| The request was not processed within the command lifetime (10 s) | `expired` |
+| The queue refuses it (device offline, a command already in flight for that property, workspace budget, value refused, device unpaired) | `offline`, `in_flight`, `rate_limited`, `value`, `not_paired`, … |
+
+The two automation caps are counted under the tenant command lock, atomically with the insert.
+
+Plus the existing per-flow de-duplication: one firing per flow per identity per minute.
+
+The loop guard is what stops two flows ping-ponging a relay: flow A turns a light off when it goes on, flow B turns it on when it goes off. A wall press wakes A; A's command, once the switch confirms it, produces a `switch_off` event naming that command; B is woken by it but sends nothing. The same holds for metric triggers (A: brightness above 150 sets it to 50, B: below 100 sets it to 200).
+
+**Dry run** ("ทดสอบ") never queues anything. Its response lists `would_send`: the commands the flow would have sent.
+
+**Shadow mode.** With `ALERTS_SHADOW=true` automations do not run at all, commands included (only SOS and hazard alerts bypass shadow). The studio says so in a banner. Arming device commands in production therefore needs **both** `ALERTS_SHADOW=false` and `AUTOMATION_COMMANDS=true`, each set deliberately.
+
+**New triggers** for Zigbee: `switch_on`, `switch_off`, `hazard`, `hazard_cleared` and `action` (a remote or button press). A trigger listening to `action` may list the action values it accepts (`single`, `double`, `on`, …); empty means any press. The filter only narrows `action` events; other event types in the same block are unaffected.
 
 ## Blocks
 
@@ -48,7 +86,7 @@ One 42 px toolbar, a collapsible block palette, a React Flow canvas with snap gr
 
 ## Verification (2026-09-20)
 
-Unit tests cover validation (25 cases), AND/OR, false branches, stale readings, midnight windows and cycles. The integration test covers tenant isolation, stale revisions, a tamper flow that opens one critical alert and queues one notification, a metric flow with a cross-device condition, dry run, and the disabled command block. In the browser: a starter template was inserted, saved and enabled, the simulator's MBT01 tamper fired it within seconds, a critical alert opened, and the dry run created nothing.
+Unit tests cover validation (including the command block's target, value, switch and permission problems and the action filter), AND/OR, false branches, stale readings, midnight windows and cycles. The integration tests cover tenant isolation, stale revisions, a tamper flow that opens one critical alert and queues one notification, a metric flow with a cross-device condition, dry run, and — in `tests/automation_commands_test.go` — who may arm device commands (switch off, viewer, admin without control, cross-project target, not-settable property, refused value, unknown device), a door opening that queues exactly one confirmed command attributed to the flow and its armer, the 60 s de-duplication, the action filter, the loop guard between two flows, the per-device cap, the switch turned off at run time, and a dry run that queues nothing. In the browser: a starter template was inserted, saved and enabled, the simulator's MBT01 tamper fired it within seconds, a critical alert opened, and the dry run created nothing.
 
 ## Measured cost (2026-09-20)
 

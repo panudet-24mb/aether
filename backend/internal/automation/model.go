@@ -7,6 +7,7 @@
 package automation
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -24,9 +25,9 @@ const (
 	LogicAny      = "logic.any"
 	ActionAlert   = "action.alert"
 	ActionNotify  = "action.notify"
-	// ActionCommand is a visible placeholder only. Aether has no downlink/command channel to devices
-	// today, so a flow containing one can be drawn and saved but can never be enabled, and the evaluator
-	// never reports it as executed.
+	// ActionCommand sets one property of a registered Zigbee2MQTT device to an explicit value, through the same
+	// command queue as a click in the web UI. Enabling a flow that holds one needs the deployment switch
+	// AUTOMATION_COMMANDS and a member allowed to control devices (docs/platform/automation.md).
 	ActionCommand = "action.command"
 )
 
@@ -58,6 +59,8 @@ const (
 	MaxChannels = 10
 	// MaxSelectors bounds the id lists a trigger may filter on.
 	MaxSelectors = 32
+	// MaxCommandValueBytes bounds action.command's value, the same cap a command from the web UI has.
+	MaxCommandValueBytes = 1024
 )
 
 type Position struct {
@@ -94,6 +97,14 @@ type Data struct {
 	// action.notify
 	ChannelIDs []string `json:"channel_ids,omitempty"`
 	Message    string   `json:"message,omitempty"`
+	// trigger.event: when the block listens to `action` (a remote or button), only these action values fire it;
+	// empty means any press. Other event types in the same block are not filtered.
+	Actions []string `json:"actions,omitempty"`
+	// action.command: the registered device (core.devices id), the Zigbee2MQTT property and the explicit value to
+	// set. There is no toggle here: a flow must say what state it wants, so a repeat can never flip it back.
+	DeviceID string          `json:"device_id,omitempty"`
+	Property string          `json:"property,omitempty"`
+	SetValue json.RawMessage `json:"set_value,omitempty"`
 	// Free label kept by the studio so a block can be renamed without changing its behaviour.
 	Label string `json:"label,omitempty"`
 }

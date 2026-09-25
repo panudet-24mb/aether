@@ -32,6 +32,9 @@ type Options struct {
 	BLEHistoryHours      int
 	DiscoveryLimit       int
 	AlertsShadow         bool
+	// AutomationCommands lets enabled flows send device commands (action.command). Off, a flow holding one can
+	// be saved as a draft but not enabled, and the runtime refuses to queue its commands.
+	AutomationCommands bool
 }
 
 // Configure must be called before the repository is shared between goroutines.

@@ -28,7 +28,7 @@ func TestDeploymentModesSameConfiguration(t *testing.T) {
 	}
 }
 func TestFailClosed(t *testing.T) {
-	for _, tc := range []struct{ key, value string }{{"JWT_SIGNING_KEY", "short"}, {"APP_ORIGIN", "http://aether.example"}, {"APP_ORIGIN", "https://aether.example/path"}, {"DATABASE_URL", "postgresql://aether_app:unused@db/aether?sslmode=disable"}, {"ALLOW_REGISTRATION", "true"}, {"DEPLOYMENT_MODE", "anything"}, {"APP_ENV", "prod"}} {
+	for _, tc := range []struct{ key, value string }{{"JWT_SIGNING_KEY", "short"}, {"APP_ORIGIN", "http://aether.example"}, {"APP_ORIGIN", "https://aether.example/path"}, {"DATABASE_URL", "postgresql://aether_app:unused@db/aether?sslmode=disable"}, {"ALLOW_REGISTRATION", "true"}, {"DEPLOYMENT_MODE", "anything"}, {"APP_ENV", "prod"}, {"AUTOMATION_COMMANDS", "yes"}} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			base(t)
 			t.Setenv(tc.key, tc.value)
@@ -55,5 +55,17 @@ func TestProductionCloudRegistrationGated(t *testing.T) {
 	t.Setenv("ALLOW_REGISTRATION", "true")
 	if _, e := Load(); e == nil {
 		t.Fatal("unverified public registration enabled in production")
+	}
+}
+
+// Device commands from automations are opt-in: absent means off, only "true" turns them on.
+func TestAutomationCommandsOptIn(t *testing.T) {
+	base(t)
+	if c, e := Load(); e != nil || c.AutomationCommands {
+		t.Fatal("AUTOMATION_COMMANDS must default to off", e)
+	}
+	t.Setenv("AUTOMATION_COMMANDS", "true")
+	if c, e := Load(); e != nil || !c.AutomationCommands {
+		t.Fatal("AUTOMATION_COMMANDS=true", e)
 	}
 }

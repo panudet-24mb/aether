@@ -42,7 +42,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer repo.Close()
-	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow})
+	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow, AutomationCommands: cfg.AutomationCommands})
 	service, e := app.New(repo, security.NewTokens(cfg.JWTKey, cfg.Issuer), cfg.Registration)
 	if e != nil {
 		slog.Error("security initialization failed")

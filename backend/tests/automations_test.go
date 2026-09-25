@@ -159,7 +159,7 @@ func TestAutomationStudio(t *testing.T) {
 		t.Fatalf("a stale revision must be a conflict: %d %v", code, out)
 	}
 
-	// --- action.command can be drawn but never enabled ---------------------------------------------
+	// --- action.command can be drafted, but not enabled while AUTOMATION_COMMANDS is off (the default) ---
 	code, out, _ = req(t, api, "POST", "/api/v1/automations", "Bearer "+authA.AccessToken, "", "", map[string]any{
 		"name": "สั่งงานอุปกรณ์ (ร่าง)",
 		"definition": flow([]map[string]any{
@@ -172,8 +172,8 @@ func TestAutomationStudio(t *testing.T) {
 	}
 	commandID := out["id"].(string)
 	code, out, _ = req(t, api, "POST", "/api/v1/automations/"+commandID+"/enable", "Bearer "+authA.AccessToken, "", "", map[string]any{"enabled": true})
-	if code != 400 || !problemCodes(out)["command_unavailable"] {
-		t.Fatalf("Aether has no downlink; a flow with action.command must not be enabled: %d %v", code, out)
+	if code != 400 || !problemCodes(out)["command_disabled"] {
+		t.Fatalf("with AUTOMATION_COMMANDS off a flow with action.command must not be enabled: %d %v", code, out)
 	}
 
 	// --- the metric flow --------------------------------------------------------------------------

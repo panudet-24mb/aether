@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -214,6 +215,10 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 	if !ok {
 		return nil
 	}
+	for _, id := range confirmed {
+		reading.Confirmed = append(reading.Confirmed, id)
+	}
+	sort.Strings(reading.Confirmed)
 	// A confirmed command on a gang's property makes that gang's switch event name the command.
 	for _, g := range d.Gangs {
 		if id := confirmed[g.Property]; id != "" {

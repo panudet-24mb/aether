@@ -24,6 +24,7 @@ services:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       MQTT_CONFIG_FILE: /run/mqtt/collector.json
+      AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}
     volumes:
       - ../.secrets/mqtt/collector:/run/mqtt:ro
     depends_on:

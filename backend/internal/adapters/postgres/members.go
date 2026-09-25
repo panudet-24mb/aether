@@ -252,6 +252,9 @@ func (r *Repository) UpdateMember(ctx context.Context, p domain.Principal, targe
 		if e := setProjects(tx, p.TenantID, target, projects); e != nil {
 			return e
 		}
+		if e := disarmUnauthorisedFlows(tx, p, &target); e != nil {
+			return e
+		}
 		return audit(tx, p, "member.updated", target)
 	}))
 }
@@ -300,6 +303,9 @@ func (r *Repository) RemoveMember(ctx context.Context, p domain.Principal, targe
 		}
 		if res.RowsAffected != 1 {
 			return domain.ErrNotFound
+		}
+		if e := disarmUnauthorisedFlows(tx, p, &target); e != nil {
+			return e
 		}
 		return audit(tx, p, "member.removed", target)
 	}))

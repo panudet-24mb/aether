@@ -171,20 +171,40 @@ func TestEvaluateZoneList(t *testing.T) {
 	}
 }
 
-func TestEvaluateCommandBlockNeverRuns(t *testing.T) {
-	def := Definition{
-		Nodes: []Node{
-			node("t1", TriggerEvent, Data{EventTypes: []string{"tamper"}}),
-			node("k1", ActionCommand, Data{}),
-		},
-		Edges: []Edge{edge("e1", "t1", "k1")},
-	}
+// A reached command block is a decision, carried with its target and explicit value; whether it is sent is the
+// runtime's call (switch, loop guard, caps), never the evaluator's.
+func TestEvaluateCommandBlockCarriesItsTarget(t *testing.T) {
+	def := commandFlow(`"ON"`)
 	r := Evaluate(def, map[string]bool{"t1": true}, newWorld())
-	if r.Fired() {
-		t.Fatalf("Aether has no downlink; action.command must never execute: %+v", r.Actions)
+	if !r.Fired() || len(r.Actions) != 1 || r.Nodes["k1"] != OutcomeRan {
+		t.Fatalf("command decision: %+v %+v", r.Nodes, r.Actions)
 	}
-	if r.Nodes["k1"] != OutcomeBlocked || len(r.Blocked) != 1 {
-		t.Fatalf("blocked trace: %+v %+v", r.Nodes, r.Blocked)
+	a := r.Actions[0]
+	if a.Type != ActionCommand || a.DeviceID != devA || a.Property != "state_l1" || string(a.Value) != `"ON"` {
+		t.Fatalf("command action: %+v", a)
+	}
+	if Evaluate(def, map[string]bool{}, newWorld()).Fired() {
+		t.Fatal("an idle trigger must not decide a command")
+	}
+}
+
+func TestActionFilter(t *testing.T) {
+	n := node("t1", TriggerEvent, Data{EventTypes: []string{"action", "door_open"}, Actions: []string{"single", "double"}})
+	if !MatchesEventAction(n, "action", "x", "g", "single") || MatchesEventAction(n, "action", "x", "g", "hold") {
+		t.Fatal("action values filter action events")
+	}
+	if !MatchesEventAction(n, "door_open", "x", "g", "") {
+		t.Fatal("the filter does not apply to other event types")
+	}
+	if MatchesEvent(n, "action", "x", "g") {
+		t.Fatal("an action event without its value cannot pass a filter")
+	}
+	any := node("t2", TriggerEvent, Data{EventTypes: []string{"action"}})
+	if !MatchesEventAction(any, "action", "x", "g", "hold") {
+		t.Fatal("no filter means any press")
+	}
+	if got := MatchTriggers(Definition{Nodes: []Node{n}}, TestInput{ExternalID: "x", EventType: "action", Action: "double"}); !got["t1"] {
+		t.Fatal("dry run honours the action value")
 	}
 }
 

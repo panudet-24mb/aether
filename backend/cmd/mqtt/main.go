@@ -52,7 +52,7 @@ func main() {
 		fatal("database unavailable or role unsafe")
 	}
 	defer repo.Close()
-	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow})
+	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow, AutomationCommands: cfg.AutomationCommands})
 	if cfg.AlertsShadow {
 		slog.Warn("ALERTS_SHADOW is on: events are recorded; only SOS (button) and smoke/gas/CO (hazard) open alerts; no automations run")
 	}

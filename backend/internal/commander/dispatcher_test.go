@@ -27,6 +27,10 @@ func (s *fakeStore) init() {
 	}
 }
 func (s *fakeStore) ActiveTenants(context.Context) ([]string, error) { return []string{"t1"}, nil }
+
+func (s *fakeStore) ProcessAutomationRequests(context.Context, string, time.Time) (int, error) {
+	return 0, nil
+}
 func (s *fakeStore) PendingCommandGateways(_ context.Context, _ string, now time.Time) ([]string, error) {
 	s.init()
 	seen := map[string]bool{}

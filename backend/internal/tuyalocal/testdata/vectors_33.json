@@ -1,0 +1,59 @@
+{
+  "broadcast": {
+    "frame": "000055aa0000000000000013000000ac00000000d09766676f3369eb10b5e9f132fd802a62042f4f0b88ac02dd9621bc357bb179150931e65e45084a83b35b272a491c4aa41f010dca2abb30c50459a9f88024ffcb5924bb8792fe5eae7c9040e5921a98017f2170860421e6fc66f0a1ade138915fde850cd157270c5f3d1ab5ae90b3006a1e627c92b38e5884660240e05fe7d01c8343bc25f3403c0c4c3db59350d34ae0bd1f2cbad705886d4ed8eed5ab9eb92672236d0000aa55",
+    "json": {
+      "ability": 0,
+      "active": 2,
+      "encrypt": true,
+      "gwId": "eb1234567890abcdefgh",
+      "ip": "192.168.1.50",
+      "mode": 0,
+      "productKey": "keyabcdefghijklm",
+      "version": "3.3"
+    }
+  },
+  "client_iv": "0123456789ab",
+  "control": {
+    "cmd": 7,
+    "frame": "000055aa000000020000000700000087332e33000000000000000000000000bfc717b8347f02cd6ac904efbef429cf2c47c1ea2745a589ab39bdafe29372ac7f39152da46d7673829c5f590200e1b2f1a19c054564288a6c213c3bdced0e6514289c9042f2aa08005786aab66fcc6db883f435ef99497ef326623ef662b1efe2a00c7153090de139adec814981521f860af87c0000aa55",
+    "payload": "{\"devId\":\"eb1234567890abcdefgh\",\"uid\":\"eb1234567890abcdefgh\",\"t\":\"1700000000\",\"dps\":{\"1\":true,\"2\":50}}",
+    "seq": 2
+  },
+  "device_id": "eb1234567890abcdefgh",
+  "device_iv": "abcdefghijkl",
+  "dp_query": {
+    "cmd": 10,
+    "frame": "000055aa000000010000000a000000785956dd2ee96e1227003451fa9acc58e566b6ebab24ddd1c10aec0d538811f254b4efae6da42c0554d3fd20a842acd1e4a3dcf85916f9385950f39819c301f89c4e89caf1875f9766ca7151c5b9f5691178646daf82b996aad0db383396f34939be23f34440aefb47c4fa7fbe7027af01670bb5e20000aa55",
+    "payload": "{\"gwId\":\"eb1234567890abcdefgh\",\"devId\":\"eb1234567890abcdefgh\",\"uid\":\"eb1234567890abcdefgh\",\"t\":\"1700000000\"}",
+    "seq": 1
+  },
+  "heartbeat": {
+    "cmd": 9,
+    "frame": "000055aa0000000300000009000000485956dd2ee96e1227003451fa9acc58e566b6ebab24ddd1c10aec0d538811f254b4efae6da42c0554d3fd20a842acd1e42c6f7c6e3917dc76909ae10a4999a2b7e48cae400000aa55",
+    "payload": "{\"gwId\":\"eb1234567890abcdefgh\",\"devId\":\"eb1234567890abcdefgh\"}",
+    "seq": 3
+  },
+  "local_key": "0123456789abcdef",
+  "now": 1700000000,
+  "query_reply": {
+    "dps": {
+      "1": true,
+      "2": 50
+    },
+    "frame": "000055aa000000080000000a0000004c00000000bfc717b8347f02cd6ac904efbef429cf2c47c1ea2745a589ab39bdafe29372ac79644ab9afbda994a9f8a6c9cecdf2b2c7a57c7703ac4afc8b2a4ea7fdd205265ac4b30b0000aa55",
+    "json": "{\"devId\":\"eb1234567890abcdefgh\",\"dps\":{\"1\":true,\"2\":50}}",
+    "seq": 8
+  },
+  "status_push": {
+    "cmd": 8,
+    "dps": {
+      "1": false,
+      "18": 1234
+    },
+    "frame": "000055aa00000007000000080000006b00000000332e33000000000000000000000000bfc717b8347f02cd6ac904efbef429cf2c47c1ea2745a589ab39bdafe29372ac20732d3448c1530434b02aa5e450ca500351965360507f51bf279155977731271f720078de6e4e8de85f351ee950838490ec26330000aa55",
+    "json": "{\"devId\":\"eb1234567890abcdefgh\",\"dps\":{\"1\":false,\"18\":1234},\"t\":1700000000}",
+    "seq": 7
+  },
+  "tinytuya": "1.20.0",
+  "version": "3.3"
+}

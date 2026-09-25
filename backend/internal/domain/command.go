@@ -81,6 +81,10 @@ type Command struct {
 	ExpiresAt    time.Time       `json:"expires_at"`
 	SentAt       *time.Time      `json:"sent_at,omitempty"`
 	SettledAt    *time.Time      `json:"settled_at,omitempty"`
+	// Transport is what carries the command: "z2m" (Zigbee2MQTT) or "edge" (Aether Edge, Tuya Wi-Fi). Wire is an
+	// edge command in the device's own terms ({"dps":{"1":true}}), computed when it was queued.
+	Transport string          `json:"transport,omitempty"`
+	Wire      json.RawMessage `json:"-"`
 }
 
 // CommandRequest is what a caller asks for; the repository validates it against the device's definition.

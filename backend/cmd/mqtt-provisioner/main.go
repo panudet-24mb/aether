@@ -21,25 +21,34 @@ type account struct {
 	Revision        int
 }
 
-// z2mModel is domain.Z2MGatewayModel; this binary deliberately depends on nothing but the database driver.
-const z2mModel = "zigbee2mqtt"
+// z2mModel is domain.Z2MGatewayModel and edgeModel domain.EdgeGatewayModel; this binary deliberately depends on
+// nothing but the database driver.
+const (
+	z2mModel  = "zigbee2mqtt"
+	edgeModel = "aether-edge"
+)
 
 // render builds the runtime password and ACL files from the static base files and the enrolled gateways.
 // A Minew-style gateway may write only its own status/response topics and read its action topic. A Zigbee2MQTT
 // bridge owns its whole tree aether/z2m/<id>/#: it must SUBSCRIBE to its own base_topic/# (Z2M subscribes to
-// exactly that), so the narrower "read …/+/set" would make its subscription fail. The collector reads both, and
-// the commander writes only …/<ieee>/set.
+// exactly that), so the narrower "read …/+/set" would make its subscription fail. An Aether Edge writes its own
+// tree aether/edge/<id>/# and reads only the command topics of its own devices (…/<device>/set). The collector
+// reads all three trees, and the commander writes only the per-device …/set topics.
 func render(basePasswords, baseACL string, accounts []account) (string, string) {
 	p := strings.TrimSpace(basePasswords) + "\n"
-	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\n"
+	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\ntopic read aether/edge/+/#\n"
 	// mqtt-commander may only WRITE device command topics (aether/z2m/<gateway>/<ieee>/set): no subscription at
 	// all, and no bridge/request/* (so it can never permit joins or remove devices). Without its password in the
 	// base file the block is inert.
-	a += "\nuser aether-commander\ntopic write aether/z2m/+/+/set\n"
+	a += "\nuser aether-commander\ntopic write aether/z2m/+/+/set\ntopic write aether/edge/+/+/set\n"
 	for _, c := range accounts {
 		p += "gw-" + c.ID + ":" + c.Hash + "\n"
 		if c.Model == z2mModel {
 			a += "\nuser gw-" + c.ID + "\ntopic readwrite aether/z2m/" + c.ID + "/#\n"
+			continue
+		}
+		if c.Model == edgeModel {
+			a += "\nuser gw-" + c.ID + "\ntopic write aether/edge/" + c.ID + "/#\ntopic read aether/edge/" + c.ID + "/+/set\n"
 			continue
 		}
 		root := "/aether/gateways/" + c.ID

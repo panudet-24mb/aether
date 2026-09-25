@@ -1,0 +1,11 @@
+{"result":{"category":"cz","functions":[
+ {"code":"switch_1","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"countdown_1","dp_id":9,"type":"Integer","values":"{\"unit\":\"s\",\"min\":0,\"max\":86400,\"scale\":0,\"step\":1}"}],
+ "status":[
+ {"code":"switch_1","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"add_ele","dp_id":17,"type":"Integer","values":"{\"unit\":\"kwh\",\"min\":0,\"max\":50000,\"scale\":3,\"step\":100}"},
+ {"code":"cur_current","dp_id":18,"type":"Integer","values":"{\"unit\":\"mA\",\"min\":0,\"max\":30000,\"scale\":0,\"step\":1}"},
+ {"code":"cur_power","dp_id":19,"type":"Integer","values":"{\"unit\":\"W\",\"min\":0,\"max\":80000,\"scale\":1,\"step\":1}"},
+ {"code":"cur_voltage","dp_id":20,"type":"Integer","values":"{\"unit\":\"V\",\"min\":0,\"max\":5000,\"scale\":1,\"step\":1}"},
+ {"code":"fault","dp_id":26,"type":"Bitmap","values":"{\"label\":[\"ov_cr\"],\"maxlen\":1}"}]},
+ "success":true}

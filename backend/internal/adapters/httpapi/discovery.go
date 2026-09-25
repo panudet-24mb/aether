@@ -36,8 +36,12 @@ func streamModel(name string) string {
 // kept in the stream name), or any decoded FFE1 kind. Bare iBeacon/Eddystone and undecodable
 // advertisements are what phones, AirTags and foreign beacons look like, and stay out.
 func minewDevice(d domain.DiscoveredDevice) bool {
-	return d.Source == "z2m" || d.Model != "" || (d.Kind != "" && d.Kind != "beacon")
+	return d.Source == "z2m" || tuyaSource(d.Source) || d.Model != "" || (d.Kind != "" && d.Kind != "beacon")
 }
+
+// tuyaSource reports a device listed by an Aether Edge: imported ("tuya") or only seen on its LAN ("tuya_lan").
+// Both are deliberate (an import, a device on the site's own network), never a passing phone.
+func tuyaSource(source string) bool { return source == "tuya" || source == "tuya_lan" }
 
 func discoveryRoutes(r fiber.Router, s *app.Service) {
 	r.Get("/discovery", func(c fiber.Ctx) error {
@@ -66,6 +70,18 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 			}
 			kept := 0
 			for _, d := range devices {
+				if tuyaSource(d.Source) {
+					// An imported Tuya device registers as the Tuya Wi-Fi profile when it can be reached locally; one
+					// only seen on the LAN has no key yet, and a battery sensor never answers locally: no profile.
+					if d.Source == "tuya" && d.LocalCapable != nil && *d.LocalCapable {
+						d.Profile = domain.DeviceProfileByID(domain.TuyaWiFiProfile)
+					}
+					if kept < discoveryPerGateway {
+						kept++
+						out = append(out, d)
+					}
+					continue
+				}
 				if d.Model == "" {
 					d.Model = streamModel(d.StreamName)
 				}

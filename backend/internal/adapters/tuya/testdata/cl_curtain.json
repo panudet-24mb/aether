@@ -1,0 +1,8 @@
+{"result":{"category":"cl","functions":[
+ {"code":"control","dp_id":1,"type":"Enum","values":"{\"range\":[\"open\",\"stop\",\"close\",\"continue\"]}"},
+ {"code":"percent_control","dp_id":2,"type":"Integer","values":"{\"unit\":\"%\",\"min\":0,\"max\":100,\"scale\":0,\"step\":1}"}],
+ "status":[
+ {"code":"control","dp_id":1,"type":"Enum","values":"{\"range\":[\"open\",\"stop\",\"close\",\"continue\"]}"},
+ {"code":"percent_control","dp_id":2,"type":"Integer","values":"{\"unit\":\"%\",\"min\":0,\"max\":100,\"scale\":0,\"step\":1}"},
+ {"code":"percent_state","dp_id":3,"type":"Integer","values":"{\"unit\":\"%\",\"min\":0,\"max\":100,\"scale\":0,\"step\":1}"},
+ {"code":"work_state","dp_id":7,"type":"Enum","values":"{\"range\":[\"opening\",\"closing\"]}"}]},"success":true}

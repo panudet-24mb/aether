@@ -471,6 +471,12 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 			return e
 		}
 		count += silent
+		// The same for Aether Edge agents (Tuya Wi-Fi devices), whose heartbeat is far more frequent.
+		silent, e = r.scanSilentAgents(tx, tenant, edgeAgent, "edge_silent", now)
+		if e != nil {
+			return e
+		}
+		count += silent
 		all, e := loadRules(tx, true)
 		if e != nil {
 			return e

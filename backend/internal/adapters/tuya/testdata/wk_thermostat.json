@@ -1,0 +1,11 @@
+{"result":{"category":"wk","functions":[
+ {"code":"switch","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"temp_set","dp_id":2,"type":"Integer","values":"{\"unit\":\"℃\",\"min\":50,\"max\":350,\"scale\":1,\"step\":5}"},
+ {"code":"mode","dp_id":4,"type":"Enum","values":"{\"range\":[\"auto\",\"manual\"]}"}],
+ "status":[
+ {"code":"switch","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"temp_set","dp_id":2,"type":"Integer","values":"{\"unit\":\"℃\",\"min\":50,\"max\":350,\"scale\":1,\"step\":5}"},
+ {"code":"temp_current","dp_id":3,"type":"Integer","values":"{\"unit\":\"℃\",\"min\":-100,\"max\":1000,\"scale\":1,\"step\":1}"},
+ {"code":"mode","dp_id":4,"type":"Enum","values":"{\"range\":[\"auto\",\"manual\"]}"},
+ {"code":"doorcontact_state","dp_id":9,"type":"Boolean","values":"{}"},
+ {"code":"pir_state","dp_id":10,"type":"Enum","values":"{\"range\":[\"pir\",\"none\"]}"}]},"success":true}

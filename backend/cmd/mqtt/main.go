@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/mqttingest"
 	"aether/backend/internal/adapters/postgres"
 	"aether/backend/internal/adapters/zigbee2mqtt"
@@ -94,6 +95,20 @@ func main() {
 				id, err = service.CaptureZ2M(call, tenant, gateway, msg, m.Payload())
 				return err
 			}
+			// Aether Edge agents (Tuya Wi-Fi devices) publish under aether/edge/<gateway id>; commands going TO an
+			// agent (…/set) are acknowledged and dropped.
+			if strings.HasPrefix(m.Topic(), edge.Prefix) {
+				gateway, msg, rerr := edge.Route(m.Topic())
+				if rerr != nil || msg.Kind == edge.Ignore {
+					return rerr
+				}
+				var tenant string
+				if tenant, err = repo.MQTTGatewayTenant(call, gateway); err != nil {
+					return err
+				}
+				id, err = service.CaptureEdge(call, tenant, gateway, msg, m.Payload())
+				return err
+			}
 			if strings.HasPrefix(m.Topic(), "/aether/gateways/") {
 				gateway := strings.TrimSuffix(strings.TrimPrefix(m.Topic(), "/aether/gateways/"), "/status")
 				if !strings.HasSuffix(m.Topic(), "/status") || !security.ValidID(gateway) {
@@ -142,6 +157,10 @@ func main() {
 		t = c.Subscribe(zigbee2mqtt.Prefix+"+/#", 1, handler)
 		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
 			slog.Error("MQTT Zigbee2MQTT subscription failed; Zigbee gateways are not captured until the next reconnect")
+		}
+		t = c.Subscribe(edge.Prefix+"+/#", 1, handler)
+		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+			slog.Error("MQTT Aether Edge subscription failed; Edge gateways are not captured until the next reconnect")
 		}
 		for _, b := range mc.Bindings {
 			t := c.Subscribe(b.Topic, 1, handler)

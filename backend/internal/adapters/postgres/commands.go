@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"aether/backend/internal/adapters/tuya"
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/domain"
 	"context"
@@ -15,7 +16,7 @@ import (
 // CommandChannel is the pg_notify channel that wakes mqtt-commander; the payload is the tenant id.
 const CommandChannel = "aether_command"
 
-const commandColumns = `tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,error,created_at,expires_at,sent_at,settled_at`
+const commandColumns = `tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,error,created_at,expires_at,sent_at,settled_at,transport,wire`
 
 type commandRow struct {
 	TenantID, ID, GatewayID, DeviceID string
@@ -27,12 +28,14 @@ type commandRow struct {
 	Status, Error                     string
 	CreatedAt, ExpiresAt              time.Time
 	SentAt, SettledAt                 *time.Time
+	Transport                         string
+	Wire                              json.RawMessage
 }
 
 func (c commandRow) command() domain.Command {
 	return domain.Command{ID: c.ID, TenantID: c.TenantID, GatewayID: c.GatewayID, DeviceID: c.DeviceID, IEEE: c.IEEE, Property: c.Property,
 		Requested: c.Requested, Value: c.Value, Source: c.Source, ActorID: c.ActorID, AutomationID: c.AutomationID, Status: c.Status, Error: c.Error,
-		CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, SentAt: c.SentAt, SettledAt: c.SettledAt}
+		CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, SentAt: c.SentAt, SettledAt: c.SettledAt, Transport: c.Transport, Wire: c.Wire}
 }
 
 func commands(rows []commandRow) []domain.Command {
@@ -100,23 +103,29 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 	if profile := domain.DeviceProfileByID(d.ProfileID); profile == nil || !profile.Actuator {
 		return domain.Command{}, false, domain.Because(domain.ErrInvalid, "not_an_actuator")
 	}
-	if d.Model != domain.Z2MGatewayModel || d.Revoked {
+	if !commandGateway(d.Model) || d.Revoked {
 		return domain.Command{}, false, domain.Because(domain.ErrConflict, "gateway_unavailable")
 	}
+	// The device as its transport knows it: a Zigbee2MQTT definition, or a Tuya specification translated into the
+	// same exposes shape (plus the dp map that turns a value into the device's data point).
 	var zs []struct {
-		Exposes, State json.RawMessage
-		Available      *bool
-		Bridge         string
+		Exposes, State, DPMap json.RawMessage
+		Available             *bool
+		Bridge                string
+		Transport, KeyStatus  string
 	}
-	if e := tx.Raw(`SELECT z.exposes,z.state,z.available,coalesce(b.state,'') AS bridge FROM core.z2m_devices z
-    LEFT JOIN core.z2m_bridges b ON b.tenant_id=z.tenant_id AND b.gateway_id=z.gateway_id
-    WHERE z.gateway_id=? AND z.ieee=? AND z.removed_at IS NULL`, d.GatewayID, d.ExternalID).Scan(&zs).Error; e != nil {
+	if e := tx.Raw(`SELECT exposes,state,dp_map,available,agent_state AS bridge,transport,key_status FROM core.command_targets
+    WHERE gateway_id=? AND external_id=?`, d.GatewayID, d.ExternalID).Scan(&zs).Error; e != nil {
 		return domain.Command{}, false, e
 	}
 	if len(zs) != 1 {
 		return domain.Command{}, false, domain.Because(domain.ErrConflict, "not_paired")
 	}
 	z := zs[0]
+	if z.KeyStatus != "ok" {
+		// A Tuya device whose local key was never imported, or that the device refused: the Edge cannot talk to it.
+		return domain.Command{}, false, domain.Because(domain.ErrConflict, "key_unavailable")
+	}
 	var value json.RawMessage
 	var e error
 	switch req.Action {
@@ -131,6 +140,18 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 	}
 	if e != nil {
 		return domain.Command{}, false, e
+	}
+	var wire any
+	if z.Transport == "edge" {
+		dpMap := map[string]tuya.Ref{}
+		if e := json.Unmarshal(z.DPMap, &dpMap); e != nil {
+			return domain.Command{}, false, e
+		}
+		w, e := tuya.Wire(dpMap, req.Property, value)
+		if e != nil {
+			return domain.Command{}, false, e
+		}
+		wire = string(w)
 	}
 	var offline []bool
 	if e := tx.Raw(`SELECT offline FROM core.stream_state WHERE gateway_id=? AND external_id=?`, d.GatewayID, d.ExternalID).Scan(&offline).Error; e != nil {
@@ -159,9 +180,9 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 		return domain.Command{}, false, domain.ErrRateLimited
 	}
 	var rows []commandRow
-	if e := tx.Raw(`INSERT INTO core.device_commands(tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,created_at,expires_at)
-    VALUES(?,?,?,?,?,?,?,?::jsonb,?,?,?,'pending',?,?) RETURNING `+commandColumns,
-		tenant, req.ID, d.GatewayID, req.DeviceID, d.ExternalID, req.Property, req.Action, string(value), source, actor, automation, now, now.Add(domain.CommandTTL)).Scan(&rows).Error; e != nil {
+	if e := tx.Raw(`INSERT INTO core.device_commands(tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,created_at,expires_at,transport,wire)
+    VALUES(?,?,?,?,?,?,?,?::jsonb,?,?,?,'pending',?,?,?,?::jsonb) RETURNING `+commandColumns,
+		tenant, req.ID, d.GatewayID, req.DeviceID, d.ExternalID, req.Property, req.Action, string(value), source, actor, automation, now, now.Add(domain.CommandTTL), z.Transport, wire).Scan(&rows).Error; e != nil {
 		if errors.Is(e, gorm.ErrDuplicatedKey) {
 			return domain.Command{}, false, domain.Because(domain.ErrConflict, "in_flight")
 		}
@@ -177,6 +198,14 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 		return domain.Command{}, false, e
 	}
 	return rows[0].command(), true, nil
+}
+
+// commandGatewayModels are the gateway models that carry commands.
+var commandGatewayModels = []string{domain.Z2MGatewayModel, domain.EdgeGatewayModel}
+
+// commandGateway reports the gateway models that carry commands: Zigbee2MQTT and Aether Edge.
+func commandGateway(model string) bool {
+	return model == domain.Z2MGatewayModel || model == domain.EdgeGatewayModel
 }
 
 func sameValue(a, b json.RawMessage) bool {
@@ -358,23 +387,23 @@ func signalGateways(tx *gorm.DB, tenant string, gateways []string) error {
 	return nil
 }
 
-// DeviceControls reads what a registered Zigbee2MQTT device can be set to, within the member's project scope.
+// DeviceControls reads what a registered device can be set to (a Zigbee2MQTT device, or a Tuya device through
+// Aether Edge), within the member's project scope.
 func (r *Repository) DeviceControls(ctx context.Context, p domain.Principal, deviceID string) (domain.DeviceControls, error) {
 	var rows []struct {
 		GatewayID, ExternalID string
 		Exposes, State        json.RawMessage
 		Available             *bool
-		Bridge                string
+		Bridge, KeyStatus     string
 		Offline               *bool
 	}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Raw(`SELECT d.gateway_id,lower(d.external_id) AS external_id,z.exposes,z.state,z.available,coalesce(b.state,'') AS bridge,st.offline
+		return tx.Raw(`SELECT d.gateway_id,lower(d.external_id) AS external_id,t.exposes,t.state,t.available,t.agent_state AS bridge,t.key_status,st.offline
     FROM core.devices d
-    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.model=? AND g.revoked_at IS NULL
-    JOIN core.z2m_devices z ON z.tenant_id=d.tenant_id AND z.gateway_id=d.gateway_id AND z.ieee=lower(d.external_id) AND z.removed_at IS NULL
-    LEFT JOIN core.z2m_bridges b ON b.tenant_id=z.tenant_id AND b.gateway_id=z.gateway_id
+    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.model IN ? AND g.revoked_at IS NULL
+    JOIN core.command_targets t ON t.tenant_id=d.tenant_id AND t.gateway_id=d.gateway_id AND t.external_id=lower(d.external_id)
     LEFT JOIN core.stream_state st ON st.tenant_id=d.tenant_id AND st.gateway_id=d.gateway_id AND st.external_id=lower(d.external_id)
-    WHERE d.id=? AND d.removed_at IS NULL`, domain.Z2MGatewayModel, deviceID).Scan(&rows).Error
+    WHERE d.id=? AND d.removed_at IS NULL`, commandGatewayModels, deviceID).Scan(&rows).Error
 	})
 	if e != nil {
 		return domain.DeviceControls{}, e
@@ -383,6 +412,6 @@ func (r *Repository) DeviceControls(ctx context.Context, p domain.Principal, dev
 		return domain.DeviceControls{}, domain.ErrNotFound
 	}
 	row := rows[0]
-	online := (row.Available == nil || *row.Available) && row.Bridge != "offline" && (row.Offline == nil || !*row.Offline)
+	online := (row.Available == nil || *row.Available) && row.Bridge != "offline" && (row.Offline == nil || !*row.Offline) && row.KeyStatus == "ok"
 	return domain.DeviceControls{DeviceID: deviceID, GatewayID: row.GatewayID, IEEE: row.ExternalID, Exposes: row.Exposes, State: row.State, Online: online}, nil
 }

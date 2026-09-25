@@ -207,6 +207,15 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 			return e
 		}
 	}
+	return r.ingestDeviceState(tx, tenant, gateway, d, features, settable, payload, m.Topic, "", now)
+}
+
+// ingestDeviceState is the part of a state report shared by every definition-backed device (a Zigbee2MQTT device,
+// or a Tuya device reached through Aether Edge, whose data points were converted into the same property form):
+// the commands the report answers, the reading built from the definition, thinning, the sample, reported liveness
+// and the events. The caller has already stored the settable values it carries. frame, when set, is stored next
+// to the generic zigbee2mqtt.FrameState so the source of the reading stays visible.
+func (r *Repository) ingestDeviceState(tx *gorm.DB, tenant, gateway string, d zigbee2mqtt.Device, features []zigbee2mqtt.Feature, settable map[string]json.RawMessage, payload []byte, topic, frame string, now time.Time) error {
 	confirmed, e := confirmCommands(tx, tenant, gateway, d.IEEE, features, settable, now)
 	if e != nil {
 		return e
@@ -214,6 +223,9 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 	reading, ok := zigbee2mqtt.ParseStateWith(payload, d, features, now)
 	if !ok {
 		return nil
+	}
+	if frame != "" {
+		reading.Frames = append(reading.Frames, frame)
 	}
 	for _, id := range confirmed {
 		reading.Confirmed = append(reading.Confirmed, id)
@@ -240,7 +252,7 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 	} else {
 		// A switch legitimately repeats ON, OFF, ON with identical payloads, and a button's action arrives once
 		// per press: the key includes the receive time.
-		key := security.Digest(gateway + "\x00" + m.Topic + "\x00" + string(payload) + "\x00" + strconv.FormatInt(now.UnixNano(), 10))
+		key := security.Digest(gateway + "\x00" + topic + "\x00" + string(payload) + "\x00" + strconv.FormatInt(now.UnixNano(), 10))
 		if e := saveSamples(tx, tenant, gateway, view, key, now, r.opts); e != nil {
 			return e
 		}
@@ -329,10 +341,30 @@ func (r *Repository) setReportedLiveness(tx *gorm.DB, tenant, gateway, ieee, fal
 // configuration snippet), so 25 minutes tolerates one missed heartbeat.
 const Z2MSilentAfter = 25 * time.Minute
 
+// agentKind describes a site agent that publishes on behalf of devices whose liveness it reports: a Zigbee2MQTT
+// bridge, or an Aether Edge. Both keep their own state row (the last will sets it offline) and a device table
+// with the devices' own last availability; the logic below is the same for both.
+type agentKind struct {
+	table   string // the agent's state row: state, state_at, updated_at per gateway
+	model   string // the gateway model
+	devices string // the device table, with available per device
+	key     string // the device table's id column (the stream's external_id)
+	silent  time.Duration
+}
+
+var (
+	z2mAgent  = agentKind{table: "core.z2m_bridges", model: domain.Z2MGatewayModel, devices: "core.z2m_devices", key: "ieee", silent: Z2MSilentAfter}
+	edgeAgent = agentKind{table: "core.edge_agents", model: domain.EdgeGatewayModel, devices: "core.tuya_devices", key: "tuya_id", silent: EdgeSilentAfter}
+)
+
 // bridgeOffline records that the bridge itself is gone (its last will, or silence) and takes every device it
 // reports for offline with it: nothing else would, because reported-liveness streams are not aged by silence.
 func (r *Repository) bridgeOffline(tx *gorm.DB, tenant, gateway, source string, now time.Time) error {
-	if e := tx.Exec(`INSERT INTO core.z2m_bridges(tenant_id,gateway_id,state,state_at,updated_at) VALUES(?,?,'offline',?,?)
+	return r.agentOffline(tx, tenant, gateway, z2mAgent, source, now)
+}
+
+func (r *Repository) agentOffline(tx *gorm.DB, tenant, gateway string, k agentKind, source string, now time.Time) error {
+	if e := tx.Exec(`INSERT INTO `+k.table+`(tenant_id,gateway_id,state,state_at,updated_at) VALUES(?,?,'offline',?,?)
     ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET state='offline',state_at=EXCLUDED.state_at,updated_at=EXCLUDED.updated_at`, tenant, gateway, now, now).Error; e != nil {
 		return e
 	}
@@ -352,19 +384,23 @@ func (r *Repository) bridgeOffline(tx *gorm.DB, tenant, gateway, source string, 
 // back. Devices whose last own availability report was not "offline" are restored at once; the others wait for
 // their availability report, which Zigbee2MQTT publishes (retained) again when it reconnects.
 func (r *Repository) bridgeOnline(tx *gorm.DB, tenant, gateway string, now time.Time) error {
-	res := tx.Exec(`UPDATE core.z2m_bridges SET state='online',state_at=?,updated_at=? WHERE gateway_id=? AND state='offline'`, now, now, gateway)
+	return r.agentOnline(tx, tenant, gateway, z2mAgent, "bridge", now)
+}
+
+func (r *Repository) agentOnline(tx *gorm.DB, tenant, gateway string, k agentKind, source string, now time.Time) error {
+	res := tx.Exec(`UPDATE `+k.table+` SET state='online',state_at=?,updated_at=? WHERE gateway_id=? AND state='offline'`, now, now, gateway)
 	if res.Error != nil || res.RowsAffected == 0 {
 		return res.Error
 	}
 	var streams []struct{ ExternalID, Name string }
 	if e := tx.Raw(`SELECT s.external_id,s.name FROM core.sensor_streams s
     JOIN core.stream_state st ON st.tenant_id=s.tenant_id AND st.gateway_id=s.gateway_id AND st.external_id=s.external_id AND st.offline
-    LEFT JOIN core.z2m_devices z ON z.gateway_id=s.gateway_id AND z.ieee=s.external_id
+    LEFT JOIN `+k.devices+` z ON z.gateway_id=s.gateway_id AND z.`+k.key+`=s.external_id
     WHERE s.gateway_id=? AND s.liveness='reported' AND z.available IS DISTINCT FROM false ORDER BY s.external_id LIMIT 1000`, gateway).Scan(&streams).Error; e != nil {
 		return e
 	}
 	for _, s := range streams {
-		if e := r.setReportedLiveness(tx, tenant, gateway, s.ExternalID, s.Name, true, "bridge", now); e != nil {
+		if e := r.setReportedLiveness(tx, tenant, gateway, s.ExternalID, s.Name, true, source, now); e != nil {
 			return e
 		}
 	}
@@ -375,17 +411,21 @@ func (r *Repository) bridgeOnline(tx *gorm.DB, tenant, gateway string, now time.
 // their last will reaching the broker. It runs whether or not any offline rule exists, because it keeps the
 // device state honest (the UI reads it), exactly like an availability report does.
 func (r *Repository) scanSilentBridges(tx *gorm.DB, tenant string, now time.Time) (int, error) {
+	return r.scanSilentAgents(tx, tenant, z2mAgent, "bridge_silent", now)
+}
+
+func (r *Repository) scanSilentAgents(tx *gorm.DB, tenant string, k agentKind, source string, now time.Time) (int, error) {
 	var gateways []string
 	if e := tx.Raw(`SELECT g.id FROM core.gateways g
     WHERE g.model=? AND g.revoked_at IS NULL
-      AND NOT EXISTS(SELECT 1 FROM core.z2m_bridges b WHERE b.gateway_id=g.id AND b.state='offline')
+      AND NOT EXISTS(SELECT 1 FROM `+k.table+` b WHERE b.gateway_id=g.id AND b.state='offline')
       AND EXISTS(SELECT 1 FROM core.sensor_streams s WHERE s.gateway_id=g.id AND s.liveness='reported')
       AND (SELECT max(p.received_at) FROM core.gateway_packets p WHERE p.gateway_id=g.id) BETWEEN ? AND ?
-    ORDER BY g.id LIMIT 100`, domain.Z2MGatewayModel, now.Add(-7*24*time.Hour), now.Add(-Z2MSilentAfter)).Scan(&gateways).Error; e != nil {
+    ORDER BY g.id LIMIT 100`, k.model, now.Add(-7*24*time.Hour), now.Add(-k.silent)).Scan(&gateways).Error; e != nil {
 		return 0, e
 	}
 	for _, g := range gateways {
-		if e := r.bridgeOffline(tx, tenant, g, "bridge_silent", now); e != nil {
+		if e := r.agentOffline(tx, tenant, g, k, source, now); e != nil {
 			return 0, e
 		}
 	}

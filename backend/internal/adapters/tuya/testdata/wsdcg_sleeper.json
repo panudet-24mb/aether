@@ -1,0 +1,4 @@
+{"result":{"category":"wsdcg","functions":[],"status":[
+ {"code":"va_temperature","dp_id":1,"type":"Integer","values":"{\"unit\":\"℃\",\"min\":-200,\"max\":600,\"scale\":1,\"step\":1}"},
+ {"code":"va_humidity","dp_id":2,"type":"Integer","values":"{\"unit\":\"%\",\"min\":0,\"max\":100,\"scale\":0,\"step\":1}"},
+ {"code":"battery_percentage","dp_id":4,"type":"Integer","values":"{\"unit\":\"%\",\"min\":0,\"max\":100,\"scale\":0,\"step\":1}"}]},"success":true}

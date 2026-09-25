@@ -32,6 +32,27 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
     AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=z.tenant_id AND lower(d.external_id)=z.ieee AND d.removed_at IS NULL)
   ORDER BY z.friendly_name,z.ieee LIMIT 500`, gateway).Scan(&out).Error
 		}
+		// An Aether Edge lists the Tuya devices imported with their keys that are not registered yet (source "tuya"),
+		// then the devices it sees broadcasting on its LAN without an imported key (source "tuya_lan": import them
+		// first). A Tuya device heard on the LAN is keyed by its Tuya id, like the import.
+		if len(model) == 1 && model[0] == domain.EdgeGatewayModel {
+			return tx.Raw(`SELECT * FROM (
+  SELECT t.gateway_id,t.tuya_id AS external_id,coalesce(s.last_seen,l.last_seen,t.updated_at) AS last_seen,'tuya' AS source,coalesce(s.name,'') AS stream_name,
+    t.tuya_category AS model,'Tuya' AS vendor,t.name AS description,t.category AS kind,t.key_status,t.local_capable,
+    coalesce(nullif(l.ip,''),t.ip) AS ip,coalesce(nullif(l.version,''),t.version) AS protocol_version
+  FROM core.tuya_devices t JOIN core.gateways g ON g.tenant_id=t.tenant_id AND g.id=t.gateway_id AND g.revoked_at IS NULL
+  LEFT JOIN core.sensor_streams s ON s.gateway_id=t.gateway_id AND s.external_id=t.tuya_id
+  LEFT JOIN core.edge_lan_devices l ON l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id
+  WHERE t.gateway_id=? AND t.removed_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL)
+  UNION ALL
+  SELECT l.gateway_id,l.device_id,l.last_seen,'tuya_lan','','','Tuya','','','missing',NULL::boolean,l.ip,l.version
+  FROM core.edge_lan_devices l JOIN core.gateways g ON g.tenant_id=l.tenant_id AND g.id=l.gateway_id AND g.revoked_at IS NULL
+  WHERE l.gateway_id=?
+    AND NOT EXISTS (SELECT 1 FROM core.tuya_devices t WHERE t.gateway_id=l.gateway_id AND t.tuya_id=l.device_id AND t.removed_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=l.tenant_id AND lower(d.external_id)=l.device_id AND d.removed_at IS NULL)
+) found ORDER BY source,description,external_id LIMIT 500`, gateway, gateway).Scan(&out).Error
+		}
 		return tx.Raw(`SELECT latest.gateway_id,latest.external_id,latest.received_at AS last_seen,latest.source,
     coalesce(s.name,'') AS stream_name,
     coalesce(smp.reading->>'model','') AS model,

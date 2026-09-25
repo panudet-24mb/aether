@@ -429,6 +429,10 @@ func (r *Repository) CreateDevice(ctx context.Context, p domain.Principal, d dom
 		if e := signal(tx, p.TenantID, "inventory", d.GatewayID); e != nil {
 			return e
 		}
+		// An Aether Edge connects only to registered devices: it must fetch its configuration again.
+		if e := bumpEdgeConfig(tx, d.GatewayID); e != nil {
+			return e
+		}
 		return audit(tx, p, "device.created", d.ID)
 	})
 	return classify(e)
@@ -617,6 +621,7 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 			return domain.ErrNotFound
 		}
 		action := "device.renamed"
+		previous := d.GatewayID
 		if gateway != nil && *gateway != d.GatewayID {
 			var n int64
 			if e := tx.Raw(`SELECT count(*) FROM (SELECT id FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR SHARE) g`, *gateway).Scan(&n).Error; e != nil {
@@ -639,6 +644,14 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 		}
 		if e := signal(tx, p.TenantID, "inventory", d.GatewayID); e != nil {
 			return e
+		}
+		if previous != d.GatewayID {
+			if e := bumpEdgeConfig(tx, previous); e != nil {
+				return e
+			}
+			if e := bumpEdgeConfig(tx, d.GatewayID); e != nil {
+				return e
+			}
 		}
 		return audit(tx, p, action, id)
 	})
@@ -664,6 +677,9 @@ func (r *Repository) RemoveDevice(ctx context.Context, p domain.Principal, id st
 			return domain.ErrNotFound
 		}
 		if e := signal(tx, p.TenantID, "inventory", ""); e != nil {
+			return e
+		}
+		if e := bumpEdgeConfigOfDevice(tx, id); e != nil {
 			return e
 		}
 		return audit(tx, p, "device.removed", id)
@@ -693,6 +709,9 @@ func (r *Repository) RestoreDevice(ctx context.Context, p domain.Principal, id s
 			return domain.ErrNotFound
 		}
 		if e := signal(tx, p.TenantID, "inventory", ""); e != nil {
+			return e
+		}
+		if e := bumpEdgeConfigOfDevice(tx, id); e != nil {
 			return e
 		}
 		return audit(tx, p, "device.restored", id)

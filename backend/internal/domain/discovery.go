@@ -11,10 +11,17 @@ type DiscoveredDevice struct {
 	Model      string    `json:"model,omitempty"`
 	Kind       string    `json:"kind,omitempty"`
 	// Vendor and Description come from a Zigbee2MQTT device's own definition (empty for BLE).
-	Vendor      string         `json:"vendor,omitempty"`
-	Description string         `json:"description,omitempty"`
-	RSSI        *int           `json:"rssi"`
-	Profile     *DeviceProfile `json:"profile,omitempty"`
+	Vendor      string `json:"vendor,omitempty"`
+	Description string `json:"description,omitempty"`
+	RSSI        *int   `json:"rssi"`
+	// For a Tuya device under an Aether Edge: whether its local key was imported (ok / rejected / suspect /
+	// missing), whether a device of its kind can be reached locally at all (battery sensors cannot), and where the
+	// agent saw it on the LAN.
+	KeyStatus       string         `json:"key_status,omitempty"`
+	LocalCapable    *bool          `json:"local_capable,omitempty"`
+	IP              string         `json:"ip,omitempty"`
+	ProtocolVersion string         `json:"protocol_version,omitempty" gorm:"column:protocol_version"`
+	Profile         *DeviceProfile `json:"profile,omitempty"`
 	// StreamName is the device's stream name: "Minew <model>" once an info frame arrived, a user-assigned
 	// name, or a generic one. Used server-side to recognise the device; not part of the API.
 	StreamName string `json:"-" gorm:"column:stream_name"`

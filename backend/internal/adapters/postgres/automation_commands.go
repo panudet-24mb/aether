@@ -39,19 +39,20 @@ type commandOutcome struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// commandTargets returns, for the given device ids, the Zigbee2MQTT definition of each registered actuator the
-// flow may command: a live registration on a Zigbee2MQTT gateway that is not revoked, paired with its
-// coordinator, and inside the flow's project when it has one. Devices that do not qualify are simply absent.
+// commandTargets returns, for the given device ids, the definition of each registered actuator the flow may
+// command: a live registration on a Zigbee2MQTT gateway or an Aether Edge that is not revoked, known to its agent
+// (paired with the coordinator, or imported with its Tuya specification), and inside the flow's project when it
+// has one. Devices that do not qualify are simply absent.
 func commandTargets(tx *gorm.DB, project *string, ids []string) (map[string]json.RawMessage, error) {
 	out := map[string]json.RawMessage{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	query := `SELECT d.id::text AS device_id,d.profile_id,z.exposes FROM core.devices d
-    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.revoked_at IS NULL AND g.model=?
-    JOIN core.z2m_devices z ON z.tenant_id=d.tenant_id AND z.gateway_id=d.gateway_id AND z.ieee=lower(d.external_id) AND z.removed_at IS NULL
+    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.revoked_at IS NULL AND g.model IN ?
+    JOIN core.command_targets z ON z.tenant_id=d.tenant_id AND z.gateway_id=d.gateway_id AND z.external_id=lower(d.external_id)
     WHERE d.removed_at IS NULL AND d.id::text IN ?`
-	args := []any{domain.Z2MGatewayModel, ids}
+	args := []any{commandGatewayModels, ids}
 	if project != nil {
 		query += ` AND g.project_id=?`
 		args = append(args, *project)
@@ -177,10 +178,10 @@ func (r *Repository) CommandableDevices(ctx context.Context, p domain.Principal,
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		query := `SELECT d.id::text AS device_id,d.name,lower(d.external_id) AS external_id,d.gateway_id::text AS gateway_id,d.profile_id,z.exposes,coalesce(z.category,'') AS category
     FROM core.devices d
-    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.revoked_at IS NULL AND g.model=?
-    JOIN core.z2m_devices z ON z.tenant_id=d.tenant_id AND z.gateway_id=d.gateway_id AND z.ieee=lower(d.external_id) AND z.removed_at IS NULL
+    JOIN core.gateways g ON g.tenant_id=d.tenant_id AND g.id=d.gateway_id AND g.revoked_at IS NULL AND g.model IN ?
+    JOIN core.command_targets z ON z.tenant_id=d.tenant_id AND z.gateway_id=d.gateway_id AND z.external_id=lower(d.external_id)
     WHERE d.removed_at IS NULL`
-		args := []any{domain.Z2MGatewayModel}
+		args := []any{commandGatewayModels}
 		if project != nil {
 			query += ` AND g.project_id=?`
 			args = append(args, *project)

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"aether/backend/internal/adapters/edge"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -304,6 +305,32 @@ func (s *Service) CaptureZ2M(ctx context.Context, tenant, gateway string, m zigb
 		}
 	}
 	return s.Repo.CaptureZ2M(ctx, tenant, gateway, m, body)
+}
+
+// CaptureEdge validates one Aether Edge message before it is stored: bounded, UTF-8, free of NUL (PostgreSQL
+// cannot hold it, and it would fail on every redelivery), and a JSON object where one is expected. Status and
+// availability may be the bare string.
+func (s *Service) CaptureEdge(ctx context.Context, tenant, gateway string, m edge.Message, body []byte) (string, error) {
+	limit := 16 * 1024
+	if m.Kind == edge.Discovery {
+		limit = edge.MaxPacket
+	}
+	if len(body) == 0 || len(body) > limit || !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 || bytes.Contains(body, []byte(`\u0000`)) {
+		slog.Warn("Aether Edge message rejected: empty, over the size cap, not UTF-8 or contains NUL", "topic", m.Topic, "bytes", len(body), "cap", limit)
+		return "", domain.ErrInvalid
+	}
+	first := strings.TrimSpace(string(body))
+	switch m.Kind {
+	case edge.State, edge.Health:
+		if !json.Valid(body) || first == "" || first[0] != '{' {
+			return "", domain.ErrInvalid
+		}
+	case edge.Discovery:
+		if !json.Valid(body) || first == "" || first[0] != '[' {
+			return "", domain.ErrInvalid
+		}
+	}
+	return s.Repo.CaptureEdge(ctx, tenant, gateway, m, body)
 }
 func (s *Service) Ingest(ctx context.Context, tenant, gateway, device string, ts time.Time, metrics map[string]float64) (domain.TelemetryEvent, error) {
 	if !security.ValidID(device) || len(metrics) == 0 || len(metrics) > 3 || ts.IsZero() || ts.Before(time.Now().Add(-7*24*time.Hour)) || ts.After(time.Now().Add(time.Minute)) {

@@ -63,10 +63,12 @@ Runtime ACL rendered by `mqtt-provisioner` per gateway model (2026-09-23):
 | `gw-<id>` (Minew-style gateway) | write | `/aether/gateways/<id>/status`, `/aether/gateways/<id>/response` |
 | | read | `/aether/gateways/<id>/action` |
 | `gw-<id>` (Zigbee2MQTT gateway) | readwrite | `aether/z2m/<id>/#` (Zigbee2MQTT subscribes to its own `base_topic/#`, so a narrower read rule would make its SUBSCRIBE fail; it still cannot reach another gateway's tree or `/aether/gateways/...`) |
-| `aether-ingest` (collector) | read | `/aether/gateways/+/status`, `aether/z2m/+/#` |
-| `aether-commander` (mqtt-commander) | write | `aether/z2m/+/+/set` only: device commands, addressed by IEEE. No read, no subscription, no `bridge/request/*`. |
+| `gw-<id>` (Aether Edge, Tuya Wi‑Fi) | write | `aether/edge/<id>/#` (status, health, discovery, `<device>/state`, `<device>/availability`) |
+| | read | `aether/edge/<id>/+/set` only: the command topics of its own devices |
+| `aether-ingest` (collector) | read | `/aether/gateways/+/status`, `aether/z2m/+/#`, `aether/edge/+/#` |
+| `aether-commander` (mqtt-commander) | write | `aether/z2m/+/+/set` and `aether/edge/+/+/set` only: device commands, addressed by IEEE or Tuya device id. No read, no subscription, no `bridge/request/*`. |
 
-See `docs/platform/zigbee2mqtt.md` for the Zigbee topic tree.
+See `docs/platform/zigbee2mqtt.md` for the Zigbee topic tree and `docs/platform/aether-edge.md` for the Edge tree.
 - Collector validates the broker CA/hostname and requires TLS 1.2 or newer. Broker has packet, queue, connection and memory bounds, persistent volume, plaintext only via explicit dev opt-in, non-root UID and dropped capabilities.
 - Exact topic-to-gateway mapping is server-owned. Each message revalidates the registered gateway credential and tenant activity through the existing backend before a tenant-scoped database transaction. Payload tenant IDs are never used for routing.
 - Backend gateway revocation immediately prevents storage of new packets. **Broker login revocation is separate:** remove its broker password/ACL and restart the broker to disconnect existing sessions. Static broker credentials are not automatically synchronized to the database.

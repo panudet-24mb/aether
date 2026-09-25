@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // zigbeeRig is a Zigbee2MQTT gateway fed by the virtual bridge, whose sensors carry the real definitions from
@@ -255,6 +256,7 @@ func TestZigbeeActionFloodIsBounded(t *testing.T) {
 	r.register(door)
 	r.publish(r.bridge.Step(1))
 	r.publish(r.bridge.Set(door.IEEE, "contact", false))
+	start := time.Now()
 	for i := 0; i < 200; i++ {
 		action := "brightness_move_up"
 		if i%2 == 1 {
@@ -265,9 +267,11 @@ func TestZigbeeActionFloodIsBounded(t *testing.T) {
 	if n := r.events(remote, domain.EventAction); n < 1 || n > 30 {
 		t.Fatalf("200 rapid actions kept %d events", n)
 	}
-	// Coalescing: the same action again at once is one event.
-	if n := r.count(`SELECT count(*) FROM core.device_events WHERE gateway_id=$1 AND external_id=$2 AND detail->>'action'='brightness_move_up'`, r.g.ID, remote.IEEE); n != 1 {
-		t.Fatalf("identical actions within 2 s: %d events", n)
+	// Coalescing: the same action repeated within 2 s is one event, so a burst yields at most one per started
+	// 2 s window. Bound by the burst's real duration: 200 ingests take longer than 2 s on a loaded machine.
+	windows := int(time.Since(start)/(2*time.Second)) + 1
+	if n := r.count(`SELECT count(*) FROM core.device_events WHERE gateway_id=$1 AND external_id=$2 AND detail->>'action'='brightness_move_up'`, r.g.ID, remote.IEEE); n < 1 || n > windows {
+		t.Fatalf("identical actions within 2 s: %d events over %d window(s)", n, windows)
 	}
 	// Pruning takes action events first: with the action budget exceeded the door history survives.
 	if _, e := r.f.admin.ExecContext(r.ctx, `INSERT INTO core.device_events(tenant_id,id,gateway_id,external_id,device_name,event_type,detail,occurred_at)

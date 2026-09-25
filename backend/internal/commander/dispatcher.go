@@ -7,9 +7,11 @@
 package commander
 
 import (
+	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/domain"
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"time"
@@ -125,13 +127,9 @@ func (d *Dispatcher) publish(ctx context.Context, tenant string, c domain.Comman
 		}
 		return false
 	}
-	topic, e := zigbee2mqtt.SetTopic(c.GatewayID, c.IEEE)
+	topic, payload, e := message(c)
 	if e != nil {
-		return fail("invalid command target")
-	}
-	payload, e := zigbee2mqtt.SetPayload(c.Property, c.Value)
-	if e != nil {
-		return fail("invalid command payload")
+		return fail(e.Error())
 	}
 	if e := d.Publisher.Publish(topic, payload); e != nil {
 		slog.Warn("command publish refused by the broker", "command", c.ID)
@@ -139,4 +137,34 @@ func (d *Dispatcher) publish(ctx context.Context, tenant string, c domain.Comman
 	}
 	slog.Info("command published", "command", c.ID, "gateway", c.GatewayID, "property", c.Property)
 	return true
+}
+
+// message builds what goes on the wire for one command. A Zigbee2MQTT command is {"<property>": <value>} to
+// aether/z2m/<gateway>/<ieee>/set. An Aether Edge command is its wire form, {"dps":{"<id>":<raw>}}, computed from
+// the device's specification when it was queued, to aether/edge/<gateway>/<device>/set: the commander never knows
+// what a data point means and never holds a local key.
+func message(c domain.Command) (string, []byte, error) {
+	switch c.Transport {
+	case "edge":
+		topic, e := edge.SetTopic(c.GatewayID, c.IEEE)
+		if e != nil {
+			return "", nil, errors.New("invalid command target")
+		}
+		payload, e := edge.SetPayload(c.Wire)
+		if e != nil {
+			return "", nil, errors.New("invalid command payload")
+		}
+		return topic, payload, nil
+	case "", "z2m":
+		topic, e := zigbee2mqtt.SetTopic(c.GatewayID, c.IEEE)
+		if e != nil {
+			return "", nil, errors.New("invalid command target")
+		}
+		payload, e := zigbee2mqtt.SetPayload(c.Property, c.Value)
+		if e != nil {
+			return "", nil, errors.New("invalid command payload")
+		}
+		return topic, payload, nil
+	}
+	return "", nil, errors.New("unknown command transport")
 }

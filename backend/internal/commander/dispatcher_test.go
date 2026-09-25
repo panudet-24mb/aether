@@ -168,3 +168,29 @@ func TestDispatcherPacesPerGatewayWithoutBlocking(t *testing.T) {
 		t.Fatalf("expired: %d", expired)
 	}
 }
+
+// An Aether Edge command goes out in its wire form to the agent's /set topic; the property and value are never
+// sent. A command whose wire form is not a data-point document, or whose transport is unknown, is failed.
+func TestDispatcherPublishesEdgeWire(t *testing.T) {
+	now := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	good := domain.Command{ID: "edge", GatewayID: gwA, IEEE: "bf1234567890abcdefgh", Property: "switch_1", Value: []byte(`"ON"`),
+		Transport: "edge", Wire: []byte(`{"dps": {"1": true}}`), ExpiresAt: now.Add(10 * time.Second)}
+	badWire := good
+	badWire.ID, badWire.Wire = "bad-wire", []byte(`{"switch_1":"ON"}`)
+	badTarget := good
+	badTarget.ID, badTarget.IEEE = "bad-target", "bf12/../set"
+	unknown := good
+	unknown.ID, unknown.Transport = "unknown", "carrier-pigeon"
+	store := &fakeStore{pending: []domain.Command{good, badWire, badTarget, unknown}}
+	pub := &fakePublisher{}
+	d := &Dispatcher{Store: store, Publisher: pub, Now: func() time.Time { return now }}
+	if n, e := d.RunOnce(context.Background()); e != nil || n != 1 {
+		t.Fatalf("run: %d %v", n, e)
+	}
+	if len(pub.sent) != 1 || pub.sent[0] != "aether/edge/"+gwA+`/bf1234567890abcdefgh/set {"dps":{"1":true}}` {
+		t.Fatalf("published: %v", pub.sent)
+	}
+	if store.failed["bad-wire"] != "invalid command payload" || store.failed["bad-target"] != "invalid command target" || store.failed["unknown"] != "unknown command transport" {
+		t.Fatalf("failed: %v", store.failed)
+	}
+}

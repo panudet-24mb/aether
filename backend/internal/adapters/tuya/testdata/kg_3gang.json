@@ -1,0 +1,13 @@
+{"result":{"category":"kg","functions":[
+ {"code":"switch_1","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"switch_2","dp_id":2,"type":"Boolean","values":"{}"},
+ {"code":"switch_3","dp_id":3,"type":"Boolean","values":"{}"},
+ {"code":"countdown_1","dp_id":7,"type":"Integer","values":"{\"unit\":\"s\",\"min\":0,\"max\":86400,\"scale\":0,\"step\":1}"},
+ {"code":"relay_status","dp_id":14,"type":"Enum","values":"{\"range\":[\"power_off\",\"power_on\",\"last\"]}"}],
+ "status":[
+ {"code":"switch_1","dp_id":1,"type":"Boolean","values":"{}"},
+ {"code":"switch_2","dp_id":2,"type":"Boolean","values":"{}"},
+ {"code":"switch_3","dp_id":3,"type":"Boolean","values":"{}"},
+ {"code":"countdown_1","dp_id":7,"type":"Integer","values":"{\"unit\":\"s\",\"min\":0,\"max\":86400,\"scale\":0,\"step\":1}"},
+ {"code":"relay_status","dp_id":14,"type":"Enum","values":"{\"range\":[\"power_off\",\"power_on\",\"last\"]}"}]},
+ "success":true,"t":1790000000000}

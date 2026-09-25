@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/minew"
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/automation"
@@ -99,6 +100,7 @@ type Repository interface {
 	DeviceState(context.Context, domain.Principal, string) (domain.State, error)
 	CapturePacket(context.Context, string, string, json.RawMessage) (string, error)
 	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
+	CaptureEdge(context.Context, string, string, edge.Message, []byte) (string, error)
 	QueueCommand(context.Context, domain.Principal, domain.CommandRequest) (domain.Command, bool, error)
 	ListCommands(context.Context, domain.Principal, string, int) ([]domain.Command, error)
 	GetCommand(context.Context, domain.Principal, string) (domain.Command, error)

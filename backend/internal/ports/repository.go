@@ -104,6 +104,7 @@ type Repository interface {
 	CaptureEdge(context.Context, string, string, edge.Message, []byte) (string, error)
 	SaveTuyaDevices(context.Context, domain.Principal, string, []tuya.Import) (int, error)
 	TuyaDevices(context.Context, domain.Principal, string) ([]domain.TuyaDevice, error)
+	EdgeStatus(context.Context, domain.Principal, string) (domain.EdgeStatus, error)
 	ForgetTuyaKey(context.Context, domain.Principal, string, string) error
 	CreateEdgeInstallCode(context.Context, domain.Principal, string, string, string, time.Time) error
 	BootstrapEdge(context.Context, string, string, string, string) (string, string, string, error)

@@ -26,6 +26,25 @@ type TuyaDevice struct {
 	ImportedAt     time.Time `json:"imported_at"`
 }
 
+// EdgeStatus is what the gateway page shows about an Aether Edge: the agent's last reported state and health, and
+// counts of what it sees and what has been imported. Nothing secret.
+type EdgeStatus struct {
+	GatewayID        string         `json:"gateway_id"`
+	State            string         `json:"state"` // "" (never connected) | online | offline
+	StateAt          *time.Time     `json:"state_at"`
+	Version          string         `json:"version"`
+	LatestVersion    string         `json:"latest_version"`
+	LastHealthAt     *time.Time     `json:"last_health_at"`
+	DevicesConnected int            `json:"devices_connected"`
+	LANSeen          int            `json:"lan_seen"`
+	LANDevices       int            `json:"lan_devices"`
+	ConfigRevision   int64          `json:"config_revision"`
+	ConfigFetchedAt  *time.Time     `json:"config_fetched_at"`
+	Imported         int            `json:"imported"`
+	Registered       int            `json:"registered"`
+	Keys             map[string]int `json:"keys"`
+}
+
 // EdgeSealedDevice is one device an Aether Edge must connect to, as stored: the key still sealed. Only the
 // agent's configuration endpoint opens it.
 type EdgeSealedDevice struct {

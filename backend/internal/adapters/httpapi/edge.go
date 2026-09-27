@@ -49,6 +49,13 @@ func edgeRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 		}
 		return c.JSON(job)
 	})
+	r.Get("/gateways/:id/edge/status", func(c fiber.Ctx) error {
+		out, e := s.EdgeStatus(c.Context(), principal(c), c.Params("id"))
+		if e != nil {
+			return e
+		}
+		return c.JSON(out)
+	})
 	r.Get("/gateways/:id/tuya/devices", func(c fiber.Ctx) error {
 		out, e := s.TuyaDevices(c.Context(), principal(c), c.Params("id"))
 		if e != nil {

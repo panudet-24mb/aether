@@ -17,9 +17,57 @@ func (r *Repository) TuyaDevices(ctx context.Context, p domain.Principal, gatewa
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		return tx.Raw(`SELECT t.tuya_id,t.name,t.tuya_category,t.product_id,t.category,t.sub,t.local_capable,t.key_fingerprint,t.key_status,
       t.version,t.ip,t.available,t.reason,t.imported_at,
-      EXISTS(SELECT 1 FROM core.devices d WHERE d.gateway_id=t.gateway_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered,
+      EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered,
       EXISTS(SELECT 1 FROM core.edge_lan_devices l WHERE l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id) AS lan_seen
     FROM core.tuya_devices t WHERE t.gateway_id=? AND t.removed_at IS NULL ORDER BY t.name,t.tuya_id LIMIT 500`, gateway).Scan(&out).Error
+	})
+	return out, e
+}
+
+// "Registered" means registered anywhere in the workspace, as discovery counts it: a Tuya id adopted under another
+// gateway is not offered again, so it must not look unregistered here either.
+//
+// EdgeStatus is the gateway page's view of an Aether Edge. Only a live aether-edge gateway in the caller's scope
+// answers; anything else is not found.
+func (r *Repository) EdgeStatus(ctx context.Context, p domain.Principal, gateway string) (domain.EdgeStatus, error) {
+	out := domain.EdgeStatus{GatewayID: gateway, LatestVersion: domain.EdgeImageTag, Keys: map[string]int{"ok": 0, "rejected": 0, "suspect": 0, "missing": 0}}
+	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		var rows []struct {
+			State                                string
+			StateAt, LastHealthAt, ConfigFetched *time.Time
+			Version                              string
+			DevicesConnected, LANSeen            int
+			ConfigRevision                       int64
+			LANDevices, Imported, Registered     int
+		}
+		if e := tx.Raw(`SELECT coalesce(a.state,'') AS state,a.state_at,a.last_health_at,a.config_fetched_at AS config_fetched,coalesce(a.version,'') AS version,
+      coalesce(a.devices_connected,0) AS devices_connected,coalesce(a.lan_seen,0) AS lan_seen,coalesce(a.config_revision,0) AS config_revision,
+      (SELECT count(*) FROM core.edge_lan_devices l WHERE l.gateway_id=g.id) AS lan_devices,
+      (SELECT count(*) FROM core.tuya_devices t WHERE t.gateway_id=g.id AND t.removed_at IS NULL) AS imported,
+      (SELECT count(*) FROM core.tuya_devices t WHERE t.gateway_id=g.id AND t.removed_at IS NULL
+        AND EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL)) AS registered
+    FROM core.gateways g LEFT JOIN core.edge_agents a ON a.tenant_id=g.tenant_id AND a.gateway_id=g.id
+    WHERE g.id=? AND g.model=? AND g.revoked_at IS NULL`, gateway, domain.EdgeGatewayModel).Scan(&rows).Error; e != nil {
+			return e
+		}
+		if len(rows) != 1 {
+			return domain.ErrNotFound
+		}
+		row := rows[0]
+		out.State, out.StateAt, out.LastHealthAt, out.ConfigFetchedAt = row.State, row.StateAt, row.LastHealthAt, row.ConfigFetched
+		out.Version, out.DevicesConnected, out.LANSeen, out.ConfigRevision = row.Version, row.DevicesConnected, row.LANSeen, row.ConfigRevision
+		out.LANDevices, out.Imported, out.Registered = row.LANDevices, row.Imported, row.Registered
+		var keys []struct {
+			KeyStatus string
+			N         int
+		}
+		if e := tx.Raw(`SELECT key_status,count(*) AS n FROM core.tuya_devices WHERE gateway_id=? AND removed_at IS NULL GROUP BY key_status`, gateway).Scan(&keys).Error; e != nil {
+			return e
+		}
+		for _, k := range keys {
+			out.Keys[k.KeyStatus] = k.N
+		}
+		return nil
 	})
 	return out, e
 }

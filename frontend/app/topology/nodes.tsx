@@ -2,7 +2,7 @@
 import { memo } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Activity, Blinds, Bluetooth, Cloud, CloudOff, Cpu, DoorOpen, Droplets, Fan, Flame, FlaskConical, Gamepad2, Heater, Lightbulb, Lock, PersonStanding, Radio, RadioTower, Router, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Zap } from "lucide-react";
-import { deviceProfile, formatMAC, gatewayModel } from "./catalog";
+import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel } from "./catalog";
 import type { GatewayHealth } from "./model";
 
 export type BrokerData = { configured: boolean; host: string; port: number | null; scheme: string; receiving: number; total: number };
@@ -53,6 +53,12 @@ export const HEALTH_LABEL: Record<GatewayHealth, string> = {
   receiving: "กำลังรับข้อมูล",
 };
 
+/** An Aether Edge has no MQTT account to wait for; before its first packet it is waiting for its installer. */
+export function gatewayHealthLabel(health: GatewayHealth, model: string): string {
+  if (model === EDGE_GATEWAY_MODEL && (health === "ready" || health === "none" || health === "pending")) return "Aether Edge · รอติดตั้งหรือรอข้อมูล (ดูสถานะที่แผงตั้งค่า)";
+  return HEALTH_LABEL[health];
+}
+
 const Broker = memo(function Broker({ data, selected }: NodeProps<BrokerNode>) {
   return (
     <div className={`topo-node topo-broker ${selected ? "is-selected" : ""} ${data.configured ? "" : "is-unconfigured"}`}>
@@ -72,7 +78,7 @@ const Broker = memo(function Broker({ data, selected }: NodeProps<BrokerNode>) {
 const Gateway = memo(function Gateway({ data, selected }: NodeProps<GatewayNode>) {
   const model = gatewayModel(data.model);
   return (
-    <div className={`topo-node topo-gateway health-${data.health} ${selected ? "is-selected" : ""} ${data.dim ? "is-dim" : ""}`} title={HEALTH_LABEL[data.health]}>
+    <div className={`topo-node topo-gateway health-${data.health} ${selected ? "is-selected" : ""} ${data.dim ? "is-dim" : ""}`} title={gatewayHealthLabel(data.health, data.model)}>
       <Handle type="source" position={Position.Top} id="up" />
       <div className="topo-node-icon">
         {model?.image ? <img className="topo-photo" src={model.image} alt="" /> : model?.logo ? <img src={model.logo} alt="" /> : <Router size={26} />}

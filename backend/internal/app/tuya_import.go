@@ -349,6 +349,15 @@ func (s *Service) TuyaDevices(ctx context.Context, p domain.Principal, gateway s
 	return s.Repo.TuyaDevices(ctx, p, gateway)
 }
 
+// EdgeStatus is the gateway page's view of an Aether Edge. Any member who can see the gateway may read it: it holds
+// no secret, only the agent's state and counts.
+func (s *Service) EdgeStatus(ctx context.Context, p domain.Principal, gateway string) (domain.EdgeStatus, error) {
+	if !security.ValidID(gateway) {
+		return domain.EdgeStatus{}, domain.ErrInvalid
+	}
+	return s.Repo.EdgeStatus(ctx, p, gateway)
+}
+
 // ForgetTuyaKey drops one imported device's local key.
 func (s *Service) ForgetTuyaKey(ctx context.Context, p domain.Principal, gateway, tuyaID string) error {
 	if !p.CanManageDevices() {

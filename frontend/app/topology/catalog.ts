@@ -19,7 +19,7 @@ export type DeviceProfile = {
   brand: string;
   model: string;
   label: string;
-  radio: "ble" | "zigbee" | "any";
+  radio: "ble" | "zigbee" | "tuya-wifi" | "any";
   description: string;
   image?: string;
   metrics: string[];
@@ -105,6 +105,14 @@ export const GATEWAY_MODELS: GatewayModel[] = [
     description: "Zigbee coordinator (เช่น SLZB-06M) + Zigbee2MQTT บนเครื่องในอาคาร · ส่งสถานะอุปกรณ์ Zigbee เข้า Aether ผ่าน MQTT over TLS · ไม่ใช้ Tuya cloud",
   },
   {
+    id: "aether-edge",
+    brand: "Aether",
+    model: "Edge",
+    label: "Aether Edge (Tuya Wi‑Fi)",
+    transport: "mqtt",
+    description: "โปรแกรม Aether Edge บนเครื่องในอาคาร (เช่น Raspberry Pi) คุยกับอุปกรณ์ Tuya Wi‑Fi ในวง LAN ด้วย local key โดยตรง ไม่ใช้ Tuya cloud ขณะทำงาน · ส่งสถานะและรับคำสั่งผ่าน MQTT over TLS",
+  },
+  {
     id: "generic-http",
     brand: "Generic",
     model: "HTTP gateway",
@@ -116,6 +124,17 @@ export const GATEWAY_MODELS: GatewayModel[] = [
 ];
 
 export const DEVICE_PROFILES: DeviceProfile[] = [
+  {
+    id: "tuya-wifi-device@1",
+    brand: "Tuya",
+    model: "Wi‑Fi device",
+    label: "อุปกรณ์ Tuya Wi‑Fi (local ผ่าน Aether Edge)",
+    radio: "tuya-wifi",
+    description: "อุปกรณ์ Tuya Wi‑Fi ที่เสียบไฟตลอด เช่น ปลั๊ก สวิตช์ หลอดไฟ มอเตอร์ม่าน · Aether Edge คุยกับอุปกรณ์ในวง LAN ด้วย local key",
+    metrics: ["ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"],
+    kinds: ["tuya"],
+    actuator: true,
+  },
   {
     id: "minew-s1-pending@1",
     brand: "Minew",
@@ -203,7 +222,8 @@ export function matchesInfo(p: DeviceProfile, name: string): boolean {
 /** The generic profile every Zigbee2MQTT device can register as (backend domain.Z2MGenericProfile). */
 export const Z2M_GENERIC_PROFILE = "zigbee2mqtt-device@1";
 
-export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean }): DeviceProfile | undefined {
+export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean; /** A Tuya Wi‑Fi device under an Aether Edge: always the Tuya Wi‑Fi profile. */ tuya?: boolean }): DeviceProfile | undefined {
+  if (input.tuya) return DEVICE_PROFILES.find((p) => p.id === TUYA_WIFI_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "tuya-wifi");
   if (input.zigbee) {
     const name = input.model?.toLowerCase() ?? "";
     const byZ2M = name ? DEVICE_PROFILES.find((p) => p.radio === "zigbee" && p.z2m_models?.some((m) => m.toLowerCase() === name && (name !== "ts0601" || input.kind === "switch"))) : undefined;
@@ -259,10 +279,16 @@ export function imageForModelLabel(label: string): string | undefined {
 
 /** The gateway model whose MQTT account publishes a Zigbee2MQTT topic tree. */
 export const Z2M_GATEWAY_MODEL = "zigbee2mqtt";
+/** The on-site agent that reaches Tuya Wi‑Fi devices on the LAN (backend domain.EdgeGatewayModel). */
+export const EDGE_GATEWAY_MODEL = "aether-edge";
+/** The profile every Tuya Wi‑Fi device registers as under an Aether Edge (backend domain.TuyaWiFiProfile). */
+export const TUYA_WIFI_PROFILE = "tuya-wifi-device@1";
 
-/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, and only Zigbee profiles there. */
+/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi only under an Aether Edge, and neither anywhere else. */
 export function profileFitsGateway(p: DeviceProfile, gatewayModelId: string): boolean {
-  return gatewayModelId === Z2M_GATEWAY_MODEL ? p.radio === "zigbee" : p.radio !== "zigbee";
+  if (gatewayModelId === Z2M_GATEWAY_MODEL) return p.radio === "zigbee";
+  if (gatewayModelId === EDGE_GATEWAY_MODEL) return p.radio === "tuya-wifi";
+  return p.radio !== "zigbee" && p.radio !== "tuya-wifi";
 }
 
 /** Switch outputs a reading carries, in gang order: [[1, true], [2, false], …] from metrics sw1..sw4. */

@@ -3,7 +3,7 @@
 // and may hold one registration per gateway; the graph shows each as its own link.
 
 import type { Device, Gateway, MQTTState, Reading, Snapshot } from "./api";
-import { gatewayModel } from "./catalog";
+import { EDGE_GATEWAY_MODEL, gatewayModel } from "./catalog";
 
 export const FRESH_MS = 60_000;
 
@@ -72,8 +72,10 @@ export function isFresh(at: string | null | undefined, serverTime: number): bool
 export function gatewayHealth(state: MQTTState | undefined, serverTime: number, model?: string): GatewayHealth {
   if (isFresh(state?.last_packet_at, serverTime)) return "receiving";
   if (state?.last_packet_at) return "stale";
-  // HTTP gateways never get an MQTT account; once created they are simply waiting for their first POST.
-  if (gatewayModel(model ?? "")?.transport === "http") return "ready";
+  // HTTP gateways never get an MQTT account; once created they are simply waiting for their first POST. An Aether
+  // Edge gets its account from its installer, so "no account yet" says nothing about it either: its real state is
+  // the agent status (GET /gateways/:id/edge/status), shown in the inspector.
+  if (gatewayModel(model ?? "")?.transport === "http" || model === EDGE_GATEWAY_MODEL) return "ready";
   if (!state || !state.revision) return "none";
   return state.applied_revision === state.revision ? "ready" : "pending";
 }

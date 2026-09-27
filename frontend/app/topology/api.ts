@@ -87,10 +87,84 @@ export type GatewayCreated = { gateway: Gateway; token: string; capture_path: st
 export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
-export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description. */ vendor?: string; description?: string };
+export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string };
 /** One model of the Zigbee2MQTT device catalog (zigbee-herdsman-converters). */
 export type ZigbeeModel = { vendor: string; model: string; description: string; zigbee_model?: string[]; white_label?: string[]; category: string; features?: string[]; sos?: boolean; dynamic?: boolean };
 export type ZigbeeCatalog = { items: ZigbeeModel[]; total: number; source: string; version: string; license: string; homepage: string; notice: string; vendors?: string[] };
+/** Tuya data centres the one-time key import may use (backend tuyacloud.Regions); most existing Thai Smart Life accounts are on "us". */
+export const TUYA_REGIONS: { id: string; label: string }[] = [
+  { id: "us", label: "Western America" },
+  { id: "sg", label: "Singapore" },
+  { id: "eu", label: "Central Europe" },
+  { id: "in", label: "India" },
+  { id: "us-e", label: "Eastern America" },
+  { id: "eu-w", label: "Western Europe" },
+  { id: "cn", label: "China" },
+];
+/** One device of a Tuya import result: its key fingerprint, never the key. */
+export type TuyaImportedDevice = { tuya_id: string; name: string; tuya_category: string; product_id: string; sub: boolean; local_capable: boolean; has_key: boolean; key_fingerprint?: string; spec: string };
+/** An import job as the page polls it (backend app.TuyaImportJob). */
+export type TuyaImportJob = {
+  id: string;
+  gateway_id: string;
+  region: string;
+  status: "running" | "done" | "failed";
+  stage: "token" | "devices" | "models" | "saving" | "done";
+  error?: string;
+  tuya_code?: number;
+  hint?: string;
+  suggest_regions?: string[];
+  found: number;
+  imported: number;
+  with_key: number;
+  local_capable: number;
+  skipped: number;
+  devices: TuyaImportedDevice[];
+  started_at: string;
+  finished_at?: string;
+  expires_at: string;
+};
+export type TuyaKeyStatus = "ok" | "rejected" | "suspect" | "missing";
+/** An imported Tuya device of an Aether Edge (backend domain.TuyaDevice): never its key. */
+export type TuyaDevice = {
+  tuya_id: string;
+  name: string;
+  tuya_category: string;
+  product_id: string;
+  category: string;
+  sub: boolean;
+  local_capable: boolean;
+  key_fingerprint: string;
+  key_status: TuyaKeyStatus;
+  version: string;
+  ip: string;
+  available: boolean | null;
+  /** Why the agent reports it offline: unreachable, auth_failed, key_suspect, busy, not_found. */
+  reason: string;
+  registered: boolean;
+  lan_seen: boolean;
+  imported_at: string;
+};
+/** What the gateway page shows about an Aether Edge (backend domain.EdgeStatus): nothing secret. */
+export type EdgeStatus = {
+  gateway_id: string;
+  state: "" | "online" | "offline";
+  state_at: string | null;
+  version: string;
+  latest_version: string;
+  last_health_at: string | null;
+  devices_connected: number;
+  lan_seen: number;
+  lan_devices: number;
+  config_revision: number;
+  config_fetched_at: string | null;
+  imported: number;
+  registered: number;
+  keys: Record<TuyaKeyStatus, number>;
+};
+/** A single-use install code for the Aether Edge installer, shown once. */
+export type EdgeInstallCode = { code: string; expires_at: string; install_command: string; install_url: string; bootstrap_url: string; zigbee_paired: boolean; image: string };
+
 export type Snapshot = {
   discovery?: Discovery[];
   /** Per gateway: advertisements that are not a supported model (phones, foreign beacons), left out of `discovery`. */
@@ -203,6 +277,15 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     sendCommand: (key: string, input: { device_id: string; property: string; value?: unknown; action?: "set" | "toggle" }) =>
       call<Command>("/commands", input, { "Idempotency-Key": key }),
     command: (id: string) => call<Command>(`/commands/${id}`),
+    /** Aether Edge: the agent's state and health with import and key counts. */
+    edgeStatus: (gatewayId: string) => call<EdgeStatus>(`/gateways/${gatewayId}/edge/status`),
+    /** A single-use install code (30 minutes); optionally pairs a Zigbee2MQTT gateway installed on the same host. */
+    edgeInstallCode: (gatewayId: string, zigbeeGatewayId?: string) => call<EdgeInstallCode>(`/gateways/${gatewayId}/edge/install-code`, zigbeeGatewayId ? { zigbee_gateway_id: zigbeeGatewayId } : {}),
+    /** Starts the one-time Tuya key import (202). The credentials are sent once and never kept by the page or the server. */
+    startTuyaImport: (gatewayId: string, input: { region: string; access_id: string; access_secret: string }) => call<TuyaImportJob>(`/gateways/${gatewayId}/tuya/imports`, input),
+    tuyaImport: (gatewayId: string, jobId: string) => call<TuyaImportJob>(`/gateways/${gatewayId}/tuya/imports/${jobId}`),
+    tuyaDevices: async (gatewayId: string) => (await call<{ items: TuyaDevice[] }>(`/gateways/${gatewayId}/tuya/devices`)).items,
+    forgetTuyaKey: (gatewayId: string, tuyaId: string) => call<void>(`/gateways/${gatewayId}/tuya/devices/${encodeURIComponent(tuyaId)}/forget`, {}),
 
     /**
      * Loads everything the canvas needs. The API is rate-limited per IP (120/min), so slow-changing data

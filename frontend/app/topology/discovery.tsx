@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { Bluetooth, Search } from "lucide-react";
+import { Bluetooth, Search, Wifi } from "lucide-react";
 import type { Discovery, Gateway } from "./api";
 import { formatMAC, suggestProfile } from "./catalog";
 import { isFresh } from "./model";
+import { LAN_WARNING } from "./tuya-import";
 import { ZIGBEE_KIND_LABEL } from "./zigbee-catalog";
 
 export default function DiscoveryList({ items, gateways, gatewayId, serverTime, busy, onAdopt, hiddenUnknown = 0 }: {
@@ -19,7 +20,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
   const matches = items.filter((d) => (!selected || d.gateway_id === selected) &&
     (!q || `${d.external_id}${d.model ?? ""}${d.profile?.label ?? ""}${d.vendor ?? ""}${d.description ?? ""}`.toLowerCase().replace(/[:\s-]/g, "").includes(q)));
   return <section className="topo-discovery" aria-label="อุปกรณ์ที่พบใหม่">
-    <p className="topo-note">อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew{hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}</p>
+    <p className="topo-note">{matches.length > 0 && matches.every((d) => d.source === "tuya" || d.source === "tuya_lan") ? "อุปกรณ์ Tuya ที่นำเข้าคีย์แล้วแต่ยังไม่ลงทะเบียน และอุปกรณ์ที่ Aether Edge พบใน LAN แต่ยังไม่มีคีย์" : `อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew${hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}`}</p>
     {!gatewayId && <label className="topo-project-select">Gateway
       <select aria-label="กรอง gateway ที่ค้นพบ" value={filter} onChange={(e) => setFilter(e.target.value)}>
         <option value="">ทุก gateway</option>
@@ -34,6 +35,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
       return <div key={g.id} className="topo-discovery-group">
         <h3 className="topo-h3">{g.name} <span className="topo-count">{devices.length}</span></h3>
         {devices.map((d) => {
+          if (d.source === "tuya" || d.source === "tuya_lan") return <TuyaCard key={d.external_id} d={d} busy={busy} onAdopt={onAdopt} />;
           const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind, zigbee: d.source === "z2m" }) : undefined;
           const profile = d.profile ?? suggestion;
           // Zigbee devices come from the coordinator's own list (source "z2m"); their model is the Z2M definition.
@@ -54,4 +56,36 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
       </div>;
     })}
   </section>;
+}
+
+/** A Tuya device an Aether Edge lists: imported with its key ("tuya") or only seen on the LAN ("tuya_lan"). */
+function TuyaCard({ d, busy, onAdopt }: { d: Discovery; busy: boolean; onAdopt: (external: string, gatewayId: string) => void }) {
+  const lan = d.source === "tuya_lan";
+  const key = d.key_status ?? "missing";
+  // Same rule as the Edge panel and the import table (tuyaVerdict): a usable key and local capability; not being
+  // seen on the LAN yet is a warning, not a block.
+  const blocked = lan || key === "missing" ? "นำเข้าคีย์จาก Tuya ก่อน" : key === "rejected" || key === "suspect" ? "คีย์ไม่ตรง · นำเข้าจาก Tuya อีกครั้ง" : d.local_capable === false ? "อุปกรณ์แบตเตอรี่ · ใช้แบบ local ไม่ได้" : "";
+  return (
+    <article className="topo-discovery-card">
+      <div className="topo-discovery-photo">
+        <Wifi size={30} />
+      </div>
+      <div className="topo-discovery-info">
+        <strong>{lan ? "อุปกรณ์ Tuya ใน LAN" : d.description || "อุปกรณ์ Tuya"}</strong>
+        <small>{lan ? "ยังไม่มีคีย์ · ชื่อและรุ่นจะมาจากการนำเข้า" : `Tuya ${d.model || "Wi‑Fi"}${d.kind ? ` · ${ZIGBEE_KIND_LABEL[d.kind] ?? d.kind}` : ""}`}</small>
+        <code>{d.external_id}</code>
+        <small>{d.ip ? `พบที่ ${d.ip}${d.protocol_version ? ` · v${d.protocol_version}` : ""}` : "ไม่พบใน LAN"}</small>
+        {blocked ? (
+          <small className="topo-warn">{blocked}</small>
+        ) : (
+          <>
+            {!d.ip && <small className="topo-warn">{LAN_WARNING}</small>}
+            <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>
+              ลงทะเบียน
+            </button>
+          </>
+        )}
+      </div>
+    </article>
+  );
 }

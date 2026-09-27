@@ -1,14 +1,16 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { Activity, Battery, BellRing, Bluetooth, Check, Copy, DoorOpen, Download, Droplets, Eye, EyeOff, ExternalLink, GraduationCap, KeyRound, Link2, PanelRightClose, Pencil, RotateCcw, Unlink, Radio, RadioTower, RefreshCw, ShieldAlert, ShieldOff, Thermometer, Trash2, Wifi, X } from "lucide-react";
+import { useState } from "react";
+import { Activity, Battery, BellRing, Bluetooth, DoorOpen, Download, Droplets, Eye, EyeOff, ExternalLink, GraduationCap, KeyRound, Link2, PanelRightClose, Pencil, RotateCcw, Unlink, Radio, RadioTower, RefreshCw, ShieldAlert, ShieldOff, Thermometer, Trash2, Wifi, X } from "lucide-react";
 import DiscoveryList from "./discovery";
 import SignalPanel, { type LearnedSignal, type SignalClient } from "./signals";
 import DeviceControlsPanel, { type CommandClient } from "./device-controls";
 import ZigbeeCatalogSearch, { type CatalogClient } from "./zigbee-catalog";
+import EdgePanel, { TuyaDeviceStatus, type EdgeClient } from "./edge-installer";
 import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project, Reading } from "./api";
 import { isZigbeeReading } from "../live/measurements";
-import { deviceProfile, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
-import { HEALTH_LABEL } from "./nodes";
+import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
+import { gatewayHealthLabel } from "./nodes";
+import { CopyButton, Step } from "./panel-bits";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
 
 export type Selection = { kind: "broker" } | { kind: "gateway"; id: string } | { kind: "device"; external: string } | { kind: "draft"; id: string; profile: string } | null;
@@ -25,7 +27,7 @@ export type InspectorProps = {
   onIssueMQTT: (gatewayId: string) => void;
   onRotate: (gatewayId: string) => void;
   onRevoke: (gatewayId: string) => void;
-  onAdopt: (external: string | null, gatewayId: string | null, draftId?: string) => void;
+  onAdopt: (external: string | null, gatewayId: string | null, draftId?: string, name?: string) => void;
   onOpenStudio: (sourceKey: string) => void;
   onRemoveDraft: (draftId: string) => void;
   onSelectGateway: (gatewayId: string) => void;
@@ -44,63 +46,12 @@ export type InspectorProps = {
   /** Collapses the whole panel (distinct from onClose, which only clears the selection). */
   onHide: () => void;
   /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") and the device controls. */
-  client: SignalClient & CommandClient & CatalogClient;
+  client: SignalClient & CommandClient & CatalogClient & EdgeClient;
+  /** Owner/admin: may install an Aether Edge, import and forget Tuya keys. */
+  canManage: boolean;
+  /** Reload the page's snapshot (after an import or a forgotten key). */
+  onReload: () => void;
 };
-
-/** Clipboard API needs a secure context; on-prem LAN over plain HTTP falls back to a selection + execCommand copy. */
-async function copyText(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-    // fall through to the legacy path
-  }
-  try {
-    const area = document.createElement("textarea");
-    area.value = value;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
-function CopyButton({ value, label, onNotice }: { value: string; label: string; onNotice: (m: string) => void }) {
-  const [done, setDone] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
-  return (
-    <button
-      type="button"
-      className="topo-icon-btn"
-      aria-label={`คัดลอก ${label}`}
-      onClick={() => {
-        void copyText(value).then((ok) => {
-          if (!ok) {
-            onNotice("คัดลอกไม่สำเร็จ · เลือกข้อความแล้วกด Ctrl+C / ⌘C");
-            return;
-          }
-          setDone(true);
-          onNotice(`คัดลอก ${label} แล้ว`);
-          if (timer.current) clearTimeout(timer.current);
-          timer.current = setTimeout(() => setDone(false), 1500);
-        });
-      }}
-    >
-      {done ? <Check size={14} /> : <Copy size={14} />}
-    </button>
-  );
-}
 
 function Field({ label, value, onNotice, mono = true }: { label: string; value: string; onNotice: (m: string) => void; mono?: boolean }) {
   return (
@@ -208,20 +159,14 @@ function BrokerPanel({ settings, topology }: { settings: MQTTSettings | null; to
   );
 }
 
-function Step({ done, active, label, detail }: { done: boolean; active?: boolean; label: string; detail?: string }) {
-  return (
-    <li className={`topo-step ${done ? "is-done" : active ? "is-active" : ""}`}>
-      <span className="topo-step-dot">{done ? <Check size={11} /> : null}</span>
-      <div>
-        <strong>{label}</strong>
-        {detail && <small>{detail}</small>}
-      </div>
-    </li>
-  );
-}
 
 function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: GatewayEntity; topology: Topology; credentials?: MQTTCredentials; httpToken?: GatewayCreated; busy: boolean; p: InspectorProps }) {
-  const [tab, setTab] = useState("devices");
+  // An Aether Edge is set up by its installer, not by typing MQTT settings into a device: its panel replaces the steps.
+  const edge = g.gateway.model === EDGE_GATEWAY_MODEL;
+  const [tab, setTab] = useState(edge ? "config" : "devices");
+  // An Edge's state is its agent's own report (edge_agents), not the MQTT account view behind g.health: that view is
+  // owner/admin only and knows nothing about the agent. Undefined until EdgePanel's first status answer.
+  const [edgeState, setEdgeState] = useState<string | undefined>(undefined);
   const model = gatewayModel(g.gateway.model);
   const settings = topology.broker.settings;
   const id = g.gateway.id;
@@ -263,7 +208,11 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
           <span className="topo-kicker">GATEWAY · {model ? `${model.brand} ${model.model}` : g.gateway.model}</span>
           <h2>{g.gateway.name}</h2>
         </div>
-        <span className={`topo-chip health-${g.health}`}>{HEALTH_LABEL[g.health]}</span>
+        {edge && edgeState !== undefined ? (
+          <span className={`topo-chip health-${edgeState === "online" ? "receiving" : edgeState === "offline" ? "stale" : "none"}`}>{edgeState === "online" ? "ออนไลน์" : edgeState === "offline" ? "ออฟไลน์" : "รอติดตั้ง Aether Edge"}</span>
+        ) : (
+          <span className={`topo-chip health-${g.health}`}>{gatewayHealthLabel(g.health, g.gateway.model)}</span>
+        )}
       </header>
 
       <nav className="topo-actions" role="tablist" aria-label="รายละเอียด gateway">{[["devices", "อุปกรณ์"], ["discovery", "ค้นพบใหม่"], ["config", "ตั้งค่า"]].map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={`topo-btn ${tab === id ? "primary" : ""}`} onClick={() => setTab(id)}>{label}</button>)}</nav>
@@ -292,7 +241,19 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         </div>
       )}
 
-      {model?.transport === "mqtt" ? (
+      {edge ? (
+        <EdgePanel
+          gateway={g.gateway}
+          gateways={topology.gateways.map((x) => x.gateway)}
+          client={p.client}
+          canManage={p.canManage}
+          refreshKey={g.lastPacketAt}
+          onNotice={p.onNotice}
+          onRegister={(tuyaId, name) => p.onAdopt(tuyaId, id, undefined, name)}
+          onReload={p.onReload}
+          onStatus={(s) => setEdgeState(s.state)}
+        />
+      ) : model?.transport === "mqtt" ? (
         <ol className="topo-steps">
           <Step done={hasAccount} active={!hasAccount} label="1 · บัญชี MQTT" detail={hasAccount ? `revision ${g.state!.revision}` : "สร้างบัญชีเพื่อรับ username / password"} />
           <Step done={applied} active={hasAccount && !applied} label="2 · Broker รับบัญชี" detail={applied ? "provisioner ตั้งค่าแล้ว" : hasAccount ? "กำลังรอ provisioner…" : undefined} />
@@ -306,7 +267,7 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         </ol>
       )}
 
-      {model?.transport === "mqtt" && !hasAccount && (
+      {model?.transport === "mqtt" && !edge && !hasAccount && (
         <div className="topo-callout">
           gateway นี้ยังไม่มีบัญชี MQTT ที่ออกจาก Aether · ระบบไม่เปลี่ยนค่าในตัวอุปกรณ์ให้อัตโนมัติ
           <button type="button" className="topo-btn primary" disabled={busy || !settings} onClick={() => p.onIssueMQTT(id)}>
@@ -350,7 +311,7 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         </div>
       )}
 
-      {model?.transport === "mqtt" && hasAccount && (
+      {model?.transport === "mqtt" && !edge && hasAccount && (
         <>
           <h3 className="topo-h3">{z2m ? "ค่าสำหรับ Zigbee2MQTT" : "ค่าสำหรับแอป Gateway Config"}</h3>
           <dl className="topo-fields">
@@ -491,6 +452,9 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
   // A Zigbee switch only reports when it is switched: its own availability, not freshness, says whether it is online.
   const fresh = d.reportedOffline != null ? !d.reportedOffline : isFresh(d.reading?.received_at, topology.serverTime);
   const zigbee = d.external.startsWith("0x");
+  // A Tuya Wi‑Fi device under an Aether Edge: commanded like a Zigbee device, keyed by its Tuya id.
+  const tuyaGateway = reg ? topology.gateways.find((g) => g.gateway.id === reg.gateway_id && g.gateway.model === EDGE_GATEWAY_MODEL) : undefined;
+  const tuya = !!tuyaGateway;
   const best = d.heard[0];
   const here = currentGateway(d, topology.serverTime);
   const gatewayName = (id: string) => topology.gateways.find((g) => g.gateway.id === id)?.gateway.name ?? id.slice(0, 8);
@@ -504,7 +468,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
     <>
       <header className="topo-inspector-head">
         <div>
-          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `${zigbee ? "Zigbee" : "Minew"} ${d.model}` : r ? `${zigbee ? "Zigbee" : "BLE"} · ${kind}` : zigbee ? "Zigbee" : "BLE"}</span>
+          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : "Minew"} ${d.model}` : r ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : "BLE"} · ${kind}` : zigbee ? "Zigbee" : tuya ? "Tuya Wi‑Fi" : "BLE"}</span>
           <h2>{d.name}</h2>
         </div>
         <span className={`topo-chip ${reg ? (fresh ? "health-receiving" : "health-ready") : "health-none"}`}>{reg ? (fresh ? "online" : d.reportedOffline ? "offline" : r ? "รอข้อมูลใหม่" : "ลงทะเบียนแล้ว") : "ยังไม่ adopt"}</span>
@@ -631,12 +595,13 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
             {fresh ? "รับข้อมูลล่าสุด" : "ข้อมูลเก่า / รอข้อมูลใหม่"} · {time}
           </p>
         </div>
-      ) : zigbee ? null : (
+      ) : zigbee || tuya ? null : (
         <p className="topo-note">ยังไม่มีเฟรมที่ Aether ถอดรหัสได้จากอุปกรณ์นี้ · เห็นเพียง BLE advertisement ดิบ</p>
       )}
 
       {/* A registered Zigbee2MQTT device can be commanded: its controls come from its own definition. */}
-      {reg && zigbee && <DeviceControlsPanel client={p.client} deviceId={reg.id} refreshKey={r?.received_at} />}
+      {reg && (zigbee || tuya) && <DeviceControlsPanel client={p.client} deviceId={reg.id} refreshKey={r?.received_at} />}
+      {reg && tuyaGateway && <TuyaDeviceStatus gatewayId={tuyaGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} onNotice={p.onNotice} />}
 
       {d.log.length > 0 && (
         <>
@@ -783,11 +748,11 @@ export default function Inspector(p: InspectorProps) {
   if (selection.kind === "broker") body = <BrokerPanel settings={topology.broker.settings} topology={topology} />;
   if (selection.kind === "gateway") {
     const g = topology.gateways.find((x) => x.gateway.id === selection.id);
-    body = g ? <GatewayPanel g={g} topology={topology} credentials={p.credentials[g.gateway.id]} httpToken={p.httpTokens[g.gateway.id]} busy={p.busy} p={p} /> : <p className="topo-note">gateway นี้ไม่อยู่ในรายการแล้ว</p>;
+    body = g ? <GatewayPanel key={g.gateway.id} g={g} topology={topology} credentials={p.credentials[g.gateway.id]} httpToken={p.httpTokens[g.gateway.id]} busy={p.busy} p={p} /> : <p className="topo-note">gateway นี้ไม่อยู่ในรายการแล้ว</p>;
   }
   if (selection.kind === "device") {
     const d = topology.devices.find((x) => x.external === selection.external);
-    body = d ? <DevicePanel d={d} topology={topology} busy={p.busy} p={p} /> : <p className="topo-note">อุปกรณ์นี้หายจากช่วงข้อมูลล่าสุด</p>;
+    body = d ? <DevicePanel key={d.external} d={d} topology={topology} busy={p.busy} p={p} /> : <p className="topo-note">อุปกรณ์นี้หายจากช่วงข้อมูลล่าสุด</p>;
   }
   if (selection.kind === "draft") {
     const profile = deviceProfile(selection.profile);

@@ -5610,6 +5610,36 @@
     }
    }
   },
+  "/api/v1/gateways/{id}/edge/status": {
+   "get": {
+    "summary": "Aether Edge agent state and health (online/offline, version, devices connected, LAN seen) with import and key counts; nothing secret (any member who can see the gateway).",
+    "operationId": "get__api_v1_gateways_id_edge_status",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "EdgeStatus"
+     },
+     "404": {
+      "description": "not a live Aether Edge gateway in scope"
+     }
+    }
+   }
+  },
   "/api/v1/gateways/{id}/tuya/devices": {
    "get": {
     "summary": "Imported Tuya devices of an Aether Edge gateway: key status and fingerprint, LAN and registration state; never the key (owner/admin).",

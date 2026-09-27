@@ -23,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import "./topology.css";
 import { ApiError, createClientFrom, type Device, type GatewayCreated, type MQTTCredentials, type Snapshot } from "./api";
 import { useLatest } from "./use-latest";
-import { DEVICE_PROFILES, deviceBrands, deviceProfile, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
+import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
 import ZigbeeCatalogSearch from "./zigbee-catalog";
 import Inspector, { type Selection } from "./inspector";
@@ -36,7 +36,7 @@ import { useSignals } from "./use-signals";
 
 type Draft = { id: string; profile: string; gatewayId: string | null };
 type GatewayDialog = { model: string; position: XYPosition } | null;
-type AdoptDialog = { external: string | null; gatewayId: string | null; draftId?: string } | null;
+type AdoptDialog = { external: string | null; gatewayId: string | null; draftId?: string; /** A name to start from (e.g. the Tuya device name from an import). */ name?: string } | null;
 
 const POLL_MS = 8000;
 /** With a live signal socket the poll is only a safety net. */
@@ -81,6 +81,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const [tenant, setTenant] = useState("");
+  // Owner/admin manage gateways (installers, key imports); others see the board read-only.
+  const [role, setRole] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [receivedAt, setReceivedAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -215,6 +217,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           // storage unavailable
         }
         setTenant(me.tenant_id);
+        setRole(me.role);
       })
       .catch((e: unknown) => {
         if (!active) return;
@@ -779,10 +782,12 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           onIssueMQTT={(id) => void action(() => issueMQTT(id, false).then(reload), false)}
           onRotate={setRotateId}
           onRevoke={setRevokeId}
-          onAdopt={(external, gatewayId, draftId) => {
+          onAdopt={(external, gatewayId, draftId, name) => {
             setDialogError("");
-            setAdopt({ external, gatewayId, draftId });
+            setAdopt({ external, gatewayId, draftId, name });
           }}
+          canManage={role === "owner" || role === "admin"}
+          onReload={() => void reload()}
           onOpenStudio={onAdd}
           onRemoveDraft={(id) => {
             setDrafts((d) => d.filter((x) => x.id !== id));
@@ -854,7 +859,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
                 if (model?.transport === "http") setHttpTokens((prev) => ({ ...prev, [created.gateway.id]: created }));
                 setGatewayDialog(null);
                 setSelection({ kind: "gateway", id: created.gateway.id });
-                if (model?.transport === "mqtt" && topology.broker.configured) {
+                if (dialog.model === EDGE_GATEWAY_MODEL) setNotice("สร้าง Aether Edge แล้ว · สร้างคำสั่งติดตั้งในแถบขวา แล้วรันบน Pi");
+                else if (model?.transport === "mqtt" && topology.broker.configured) {
                   try {
                     await issueMQTT(created.gateway.id, false);
                   } catch (err) {
@@ -868,7 +874,15 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <label htmlFor="topo-gateway-name">ชื่อ gateway</label>
             <input id="topo-gateway-name" autoFocus required placeholder="เช่น MG3 · ชั้น 1 โถงหน้า" value={gatewayName} onChange={(e) => setGatewayName(e.target.value)} aria-invalid={gatewayName.trim() !== "" && !validName(gatewayName.trim())} />
             <ByteHint value={gatewayName} />
-            <p className="topo-note">{gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? (gatewayDialogModel.id === Z2M_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที แล้วแสดงส่วน mqtt ของ configuration.yaml (มีรหัสผ่าน แสดงครั้งเดียว) ให้นำไปใส่ใน Zigbee2MQTT บนเครื่องในอาคาร" : "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา") : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
+            {gatewayDialogModel?.id === EDGE_GATEWAY_MODEL && (
+              <ul className="topo-note topo-edge-intro">
+                <li>Aether Edge เป็นโปรแกรมเล็ก ๆ ที่ติดตั้งบน Raspberry Pi หรือ mini PC ที่มี Docker ในวง LAN เดียวกับอุปกรณ์ Tuya</li>
+                <li>คุยกับอุปกรณ์ Tuya Wi‑Fi ที่เสียบไฟตลอด (ปลั๊ก สวิตช์ หลอดไฟ ม่าน) ด้วย local key โดยไม่ผ่าน Tuya cloud · ติดตั้ง Zigbee2MQTT บนเครื่องเดียวกันได้</li>
+                <li>เซนเซอร์ Tuya Wi‑Fi ที่ใช้แบตเตอรี่ใช้แบบ local ไม่ได้ (หลับเกือบตลอด) · ถ้าต้องการเซนเซอร์แบตเตอรี่ แนะนำรุ่น Zigbee</li>
+                <li>อุปกรณ์ Tuya รับการเชื่อมต่อ local ได้ทีละหนึ่ง · ถ้ามี Home Assistant/LocalTuya ต่ออยู่ต้องปิดก่อน</li>
+              </ul>
+            )}
+            <p className="topo-note">{gatewayDialogModel?.id === EDGE_GATEWAY_MODEL ? "หลังสร้าง ระบบจะแสดงคำสั่งติดตั้งหนึ่งบรรทัดในแถบขวา · ไม่ต้องตั้งค่า MQTT เอง" : gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? (gatewayDialogModel.id === Z2M_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที แล้วแสดงส่วน mqtt ของ configuration.yaml (มีรหัสผ่าน แสดงครั้งเดียว) ให้นำไปใส่ใน Zigbee2MQTT บนเครื่องในอาคาร" : "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา") : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
             {dialogError && (
               <p className="topo-warn" role="alert">
                 {dialogError}
@@ -901,8 +915,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           topology={topology}
           busy={busy}
           error={dialogError}
-          initialName={adoptDevice?.name ?? ""}
-          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
+          initialName={adopt.name || snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.source === "tuya")?.description || (adoptDevice?.name ?? "")}
+          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL), tuya: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === EDGE_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
           onCancel={() => setAdopt(null)}
           onSubmit={(input) =>
             void action(async () => {

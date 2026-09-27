@@ -65,12 +65,25 @@ func TestScript(t *testing.T) {
 // Argument handling, run for real without Docker: bad input is refused before Docker is touched.
 func TestScriptArguments(t *testing.T) {
 	path := render(t)
+	// A PATH with every system tool except docker: on Linux CI runners docker lives in /usr/bin, so trimming
+	// PATH to /usr/bin:/bin would still find it and the script would really try to pull the image.
+	noDocker := t.TempDir()
+	for _, dir := range []string{"/usr/bin", "/bin"} {
+		entries, _ := os.ReadDir(dir)
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, "docker") {
+				continue
+			}
+			if _, e := os.Lstat(filepath.Join(noDocker, name)); e == nil {
+				continue
+			}
+			_ = os.Symlink(filepath.Join(dir, name), filepath.Join(noDocker, name))
+		}
+	}
 	run := func(args ...string) string {
 		cmd := exec.Command("sh", append([]string{path}, args...)...)
-		cmd.Env = []string{"PATH=/usr/bin:/bin"}
-		if _, e := exec.LookPath("docker"); e == nil {
-			cmd.Env = []string{"PATH=/nonexistent-docker-free:/usr/bin:/bin"}
-		}
+		cmd.Env = []string{"PATH=" + noDocker}
 		cmd.Dir = t.TempDir()
 		out, _ := cmd.CombinedOutput()
 		return string(out)

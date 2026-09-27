@@ -67,7 +67,7 @@ type EdgeCredentials struct {
 // both forms.
 const (
 	EdgeImage    = "ghcr.io/panudet-24mb/aether-edge"
-	EdgeImageTag = "0.1.0"
+	EdgeImageTag = "0.1.1"
 )
 
 // Zigbee2MQTTImage is the Zigbee2MQTT release the installer and its --update pin on the site host (2.x; EmberZNet

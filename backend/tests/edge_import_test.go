@@ -289,7 +289,7 @@ func TestTuyaImportFailuresAndHints(t *testing.T) {
 	if _, e := r.f.service.StartTuyaImport(r.ctx, viewer, r.gateway, "us", fakeAccessID, fakeAccessSecret); !errors.Is(e, domain.ErrForbidden) {
 		t.Fatalf("viewer import: %v", e)
 	}
-	if _, _, e := r.f.service.CreateEdgeInstallCode(r.ctx, viewer, r.gateway); !errors.Is(e, domain.ErrForbidden) {
+	if _, _, e := r.f.service.CreateEdgeInstallCode(r.ctx, viewer, r.gateway, ""); !errors.Is(e, domain.ErrForbidden) {
 		t.Fatalf("viewer install code: %v", e)
 	}
 	// Another workspace cannot read this workspace's job.
@@ -326,7 +326,7 @@ func TestEdgeInstallCodeBootstrap(t *testing.T) {
 	}
 	issue := func() string {
 		code, out := r.call("POST", "/api/v1/gateways/"+r.gateway+"/edge/install-code", nil)
-		if code != 201 || len(out["code"].(string)) != 26 || !strings.Contains(out["install_command"].(string), out["code"].(string)) {
+		if code != 201 || len(out["code"].(string)) != 26 || strings.Contains(out["install_command"].(string), out["code"].(string)) {
 			t.Fatalf("install code: %d %v", code, out)
 		}
 		return out["code"].(string)

@@ -5702,7 +5702,7 @@
   },
   "/api/v1/gateways/{id}/edge/install-code": {
    "post": {
-    "summary": "Issue a single-use install code (30 minutes; only its hash is stored) for an Aether Edge gateway, with the one-line install command. Shown once (owner/admin).",
+    "summary": "Issue a single-use install code (30 minutes; only its hash is stored) for an Aether Edge gateway, with the one-line install command. Shown once (owner/admin). Optionally pairs a Zigbee2MQTT gateway whose credentials the installer receives too.",
     "operationId": "post__api_v1_gateways_id_edge_install_code",
     "security": [
      {
@@ -5722,7 +5722,7 @@
     ],
     "responses": {
      "201": {
-      "description": "{code, expires_at, bootstrap_url, install_command}; install.sh ships in phase E",
+      "description": "{code, expires_at, bootstrap_url, install_url, install_command, zigbee_paired, image}",
       "content": {
        "application/json": {
         "schema": {
@@ -5737,6 +5737,24 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": false,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+         "zigbee_gateway_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "A Zigbee2MQTT gateway of this workspace to bring up on the same site host."
+         }
         }
        }
       }
@@ -5831,6 +5849,35 @@
           "type": "string",
           "pattern": "^[a-z2-7]{26}$"
          }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/edge/install.sh": {
+   "get": {
+    "summary": "The Aether Edge installer script, with this server's public origin and the pinned image filled in. Public; holds no secret (the install code is given on the site host).",
+    "operationId": "get__edge_install_sh",
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "POSIX sh script",
+      "content": {
+       "text/plain": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
         }
        }
       }

@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"aether/backend/internal/adapters/edge"
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/app"
 	"aether/backend/internal/config"
 	"aether/backend/internal/domain"
+	"aether/backend/internal/edgeinstall"
 	"aether/backend/internal/security"
 	"crypto/x509"
 	"encoding/pem"
@@ -61,15 +63,31 @@ func edgeRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 		return c.SendStatus(204)
 	})
 	r.Post("/gateways/:id/edge/install-code", func(c fiber.Ctx) error {
-		code, expires, e := s.CreateEdgeInstallCode(c.Context(), principal(c), c.Params("id"))
+		// An optional body pairs a Zigbee2MQTT gateway: the installer then brings up Zigbee2MQTT on the same host
+		// with that gateway's (rotated) credentials.
+		var in struct {
+			ZigbeeGatewayID string `json:"zigbee_gateway_id"`
+		}
+		if len(c.Body()) > 0 {
+			if e := body(c, &in, 256); e != nil {
+				return e
+			}
+		}
+		code, expires, e := s.CreateEdgeInstallCode(c.Context(), principal(c), c.Params("id"), strings.ToLower(strings.TrimSpace(in.ZigbeeGatewayID)))
 		if e != nil {
 			return e
 		}
+		// The command never carries the code: the script asks for it at a prompt, so it stays out of shell history,
+		// sudo logs and process lists. The UI shows the code separately, to paste at that prompt.
+		command := fmt.Sprintf("curl -fsSL %s/edge/install.sh | sudo sh", cfg.Origin)
+		if in.ZigbeeGatewayID != "" {
+			command += " -s -- --zigbee <SLZB_IP>"
+		}
 		return c.Status(201).JSON(fiber.Map{
 			"code": code, "expires_at": expires, "credential_display": "shown_once",
-			"bootstrap_url": cfg.Origin + "/edge/bootstrap",
-			// install.sh ships with the Edge image (phase E); it POSTs the code to bootstrap_url.
-			"install_command": fmt.Sprintf("curl -fsSL %s/edge/install.sh | sh -s -- %s", cfg.Origin, code),
+			"bootstrap_url": cfg.Origin + "/edge/bootstrap", "install_url": cfg.Origin + "/edge/install.sh",
+			"install_command": command, "zigbee_paired": in.ZigbeeGatewayID != "",
+			"image": domain.EdgeImage + ":" + domain.EdgeImageTag,
 		})
 	})
 }
@@ -110,6 +128,19 @@ func readPEM(path string) (string, bool) {
 // the same.
 func edgePublicRoutes(api *fiber.App, s *app.Service, cfg config.Config) {
 	limit := limiter.New(limiter.Config{Max: 10, Expiration: time.Minute, LimitReached: func(c fiber.Ctx) error { return fiber.ErrTooManyRequests }})
+	// The installer script, with this server's public origin and pinned image filled in: a script piped into sh
+	// cannot know where it came from. It holds no secret; the install code is given on the site host.
+	scriptLimit := limiter.New(limiter.Config{Max: 60, Expiration: time.Minute, LimitReached: func(c fiber.Ctx) error { return fiber.ErrTooManyRequests }})
+	api.Get("/edge/install.sh", scriptLimit, func(c fiber.Ctx) error {
+		text, e := edgeinstall.Script(cfg.Origin, domain.EdgeImage+":"+domain.EdgeImageTag, domain.Zigbee2MQTTImage)
+		if e != nil {
+			return fiber.ErrServiceUnavailable
+		}
+		c.Set("Content-Type", "text/plain; charset=utf-8")
+		c.Set("Cache-Control", "no-store")
+		c.Set("X-Content-Type-Options", "nosniff")
+		return c.SendString(text)
+	})
 	// The code travels in the body, never the path: proxies and CDNs log paths, and a code that failed before it
 	// was spent (a 503, a 429) must not sit valid in someone's access log.
 	api.Post("/edge/bootstrap", limit, func(c fiber.Ctx) error {
@@ -152,6 +183,11 @@ func edgePublicRoutes(api *fiber.App, s *app.Service, cfg config.Config) {
 		}
 		if haveCA {
 			out["ca_pem"] = ca
+		}
+		if creds.ZigbeeGatewayID != "" {
+			zuser := "gw-" + creds.ZigbeeGatewayID
+			out["zigbee"] = fiber.Map{"gateway_id": creds.ZigbeeGatewayID, "base_topic": zigbee2mqtt.BaseTopic(creds.ZigbeeGatewayID),
+				"server": zigbee2mqtt.Server(tls, host, port), "username": zuser, "client_id": zuser, "password": creds.ZigbeePassword, "tls": tls}
 		}
 		// When the web front uses a private CA (AETHER_TLS=internal), the operator exports its root once and sets
 		// EDGE_WEB_CA_FILE (docs/production.md): the agent needs it to fetch its configuration over HTTPS.

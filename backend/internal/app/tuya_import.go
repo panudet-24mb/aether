@@ -367,11 +367,12 @@ var installCodePattern = regexp.MustCompile(`^[a-z2-7]{26}$`)
 
 // CreateEdgeInstallCode issues a single-use install code for an Aether Edge gateway. Only its hash is stored; the
 // code itself is returned once.
-func (s *Service) CreateEdgeInstallCode(ctx context.Context, p domain.Principal, gateway string) (string, time.Time, error) {
+// zigbee optionally pairs a Zigbee2MQTT gateway whose credentials the installer receives too.
+func (s *Service) CreateEdgeInstallCode(ctx context.Context, p domain.Principal, gateway, zigbee string) (string, time.Time, error) {
 	if !p.CanManageDevices() {
 		return "", time.Time{}, domain.ErrForbidden
 	}
-	if !security.ValidID(gateway) {
+	if !security.ValidID(gateway) || (zigbee != "" && (!security.ValidID(zigbee) || zigbee == gateway)) {
 		return "", time.Time{}, domain.ErrInvalid
 	}
 	raw := make([]byte, 16)
@@ -380,7 +381,7 @@ func (s *Service) CreateEdgeInstallCode(ctx context.Context, p domain.Principal,
 	}
 	code := installCodeEncoding.EncodeToString(raw)
 	expires := time.Now().UTC().Add(EdgeInstallTTL)
-	if e := s.Repo.CreateEdgeInstallCode(ctx, p, gateway, security.Digest(code), expires); e != nil {
+	if e := s.Repo.CreateEdgeInstallCode(ctx, p, gateway, zigbee, security.Digest(code), expires); e != nil {
 		return "", time.Time{}, e
 	}
 	return code, expires, nil
@@ -397,12 +398,23 @@ func (s *Service) BootstrapEdge(ctx context.Context, code string) (domain.EdgeCr
 	if e != nil {
 		return domain.EdgeCredentials{}, e
 	}
-	token := security.RandomToken()
-	tenant, gateway, e := s.Repo.BootstrapEdge(ctx, security.Digest(code), hash, security.Digest(token))
+	// The paired Zigbee2MQTT gateway's password is prepared up front (hashing is the slow part); the repository
+	// applies it only when the code paired one.
+	zigbeePassword := security.RandomToken()
+	zigbeeHash, e := security.MQTTHash(zigbeePassword)
 	if e != nil {
 		return domain.EdgeCredentials{}, e
 	}
-	return domain.EdgeCredentials{TenantID: tenant, GatewayID: gateway, MQTTPassword: password, HTTPToken: token}, nil
+	token := security.RandomToken()
+	tenant, gateway, zigbee, e := s.Repo.BootstrapEdge(ctx, security.Digest(code), hash, zigbeeHash, security.Digest(token))
+	if e != nil {
+		return domain.EdgeCredentials{}, e
+	}
+	out := domain.EdgeCredentials{TenantID: tenant, GatewayID: gateway, MQTTPassword: password, HTTPToken: token}
+	if zigbee != "" {
+		out.ZigbeeGatewayID, out.ZigbeePassword = zigbee, zigbeePassword
+	}
+	return out, nil
 }
 
 // EdgeConfig is the agent's configuration: its registered, keyed devices with their local keys opened. This is

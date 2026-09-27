@@ -1,7 +1,8 @@
 # Aether Edge: Tuya Wi‑Fi devices, locally
 
-Status: phases A–C (protocol library, ingest, commands) are implemented. Key import from the Tuya cloud, the
-agent's configuration endpoint and installer (phase D), the agent binary (phase E) and the UI (phase F) follow.
+Status: phases A–E are implemented: protocol library, ingest, commands, key import and install codes, and the agent
+binary with its image and one-line installer. The UI (phase F) follows. Install guide (Thai):
+[aether-edge-install.md](aether-edge-install.md).
 Nothing here has been verified with a real Tuya device yet; the gateway model and profile are `Verified: false`.
 
 ## What it is
@@ -157,8 +158,12 @@ Automation "สั่งอุปกรณ์" blocks target Tuya devices the sa
 **Install code** (`POST /api/v1/gateways/:id/edge/install-code`, owner/admin):
 - 128 random bits, written as 26 base32 characters; only its SHA-256 is stored.
 - Valid 30 minutes and single use. A newer code voids older unused ones.
-- Returns `install_command` (`curl -fsSL <origin>/edge/install.sh | sh -s -- <code>`). **`install.sh` ships with the
-  Edge image in phase E**; until then the command does not work, and the bootstrap call below can be made by hand.
+- Optional body `{"zigbee_gateway_id":"<Zigbee2MQTT gateway>"}` pairs a Zigbee2MQTT gateway of the same workspace
+  (migration 00033): the installer then also brings up Zigbee2MQTT on the site host.
+- Returns `install_command` (`curl -fsSL <origin>/edge/install.sh | sudo sh [-s -- --zigbee <SLZB_IP>]`), which
+  never contains the code: the script asks for it at a prompt on `/dev/tty` (or reads `AETHER_INSTALL_CODE` for
+  unattended installs), so it stays out of shell history, sudo logs and process lists. The UI shows the code
+  separately. Also returns `zigbee_paired` and the pinned `image`.
 
 **Bootstrap** (`POST /edge/bootstrap`, body `{"code":"…"}`, at most 256 bytes):
 - **The code travels in the body, never the path**: proxies and CDNs log paths, and a code that failed before it
@@ -174,7 +179,10 @@ Automation "สั่งอุปกรณ์" blocks target Tuya devices the sa
   - `mqtt` (url, host, port, username, client id, password, base topic);
   - `ca_pem`, the broker CA from `MQTT_CA_FILE`;
   - optionally `web_ca_pem`, from `EDGE_WEB_CA_FILE`;
-  - the image reference (tag pinned in phase E);
+  - the image reference (`domain.EdgeImage:EdgeImageTag`);
+  - when the code paired a Zigbee2MQTT gateway, `zigbee` (gateway id, base topic, server, username, password): that
+    gateway's MQTT password is rotated in the same transaction. A paired gateway revoked since fails the bootstrap
+    with 400 `zigbee_gateway_unavailable`, code unspent;
   - `notice: previous_agent_must_stop`.
 - Only X.509 `CERTIFICATE` blocks from those files are returned, re-encoded. A file that also holds a private key
   never passes the key on.
@@ -199,9 +207,79 @@ which this deployment does not use.
 - This is the **only** place a local key is opened.
 - `ETag` is the configuration revision; `If-None-Match` gives 304. The agent keeps keys in memory only.
 
+## The agent (`cmd/aether-edge`, phase E)
+
+`internal/edge` imports no server code (`TestAgentDependencies` checks `go list -deps`): standard library, paho and
+`internal/tuyalocal` only.
+
+- **Configuration** from the environment (`.env` written by the installer): `AETHER_API`, `GATEWAY_ID`,
+  `HTTP_TOKEN`, `MQTT_URL` (`mqtts://host:8883`), `MQTT_USERNAME` (`gw-<id>`), `MQTT_PASSWORD`, `MQTT_CA_FILE`,
+  optional `WEB_CA_FILE` and `LOG_LEVEL`. Secrets and local keys are never logged.
+- **Broker:** client id `gw-<id>`, TLS with the site's CA, clean session. The retained last will is
+  `status {"state":"offline"}`; the agent publishes `online` on every connection and `offline` on SIGTERM. It
+  sends `health` every 60 s and subscribes to `aether/edge/<id>/+/set`.
+- **Configuration pull** every 30 s with `If-None-Match`. On a new revision it starts, stops and restarts device
+  connections to match. On 401/403 (the gateway was installed again elsewhere, or revoked) it closes every device
+  connection, because devices accept a single local client.
+- **Discovery:** it listens for UDP broadcasts on 6666/6667 (and 7000 when it can bind it). The list of devices
+  seen in the last 15 minutes goes out only when it changed, at most every 30 s, matching the server's throttle.
+  - A device seen broadcasting is dialled at the packet's **UDP source address**, so DHCP moves are followed. A
+    broadcast whose payload claims another address is dropped.
+  - A broadcast never overrides a configured protocol version.
+  - When 500 devices are known, the one heard longest ago is forgotten (never a configured device).
+- **Devices:** one persistent connection each, with a 10 s Tuya heartbeat.
+  - A full status is published at once. A change to a boolean, enum or text data point is published at once;
+    numbers alone at most every 2 s per device, latest values winning.
+  - Availability is retained and debounced: offline after 60 s of failed reconnects, at once after three missed
+    heartbeats, and at once for `auth_failed`. Backoff runs 5 s → 60 s. Reasons are `unreachable`, `auth_failed`,
+    `key_suspect`, `busy` and `not_found`.
+- **Commands:** `{"dps":{…}}` of at most 1024 bytes, ids 1..255, scalar values only; commands for devices this
+  agent does not hold are refused. The device's own status push is the confirmation the server matches.
+- `aether-edge health` passes while the heartbeat file (`/tmp`, a tmpfs) is under 3 minutes old; it is the image's
+  HEALTHCHECK. `aether-edge version` prints the version.
+
+**Image:** `backend/edge.Dockerfile`: static binary (CGO off) on `gcr.io/distroless/static-debian12:nonroot`
+pinned by digest, user 10001, about 16 MB. The workflow's actions are pinned to full commit SHAs. After the first
+publish, `domain.EdgeImageTag` may also be pinned by digest (`0.1.0@sha256:…`); the installer accepts both forms. `.github/workflows/edge.yml` tests, then builds linux/amd64 and linux/arm64 and pushes
+`ghcr.io/<owner>/aether-edge:<version>` and `:latest-stable`, for tags `edge-v<semver>` only; a manual run builds
+without pushing. The server pins the tag in `domain.EdgeImageTag`.
+
+**Installer:** `GET /edge/install.sh` (public; Caddy routes it to the API) is `internal/edgeinstall/install.sh.tmpl`
+with this server's origin and the pinned image filled in, because a script piped into `sh` cannot know where it
+came from.
+- It checks Docker and the compose plugin. It does not install Docker; it prints the get.docker.com hint.
+- It refuses `--dir` values that are relative, contain `..`, or name a system or home root (`/`, `/etc…`, `/usr…`
+  except `/usr/local/…`, `/bin`, `/sbin`, `/boot`, `/proc`, `/sys`, `/dev`, `/lib`, `/run`, `/var`, `/root`,
+  `/home`, `/opt`, `/srv`, `/tmp`); `aether-edge install` checks the same.
+- It pulls the image **before** asking for the code, then runs it once as `aether-edge install`. The code reaches
+  only that container, in the environment (never an argument), and every capability is dropped. The script takes
+  `AETHER_INSTALL_CODE` out of its own environment at start, so no other command sees it. That step redeems the code and writes `.env` (0600), `ca.crt`,
+  `compose.yaml` (0600) and, with `--zigbee`, `zigbee2mqtt/`. Then `docker compose up -d`.
+- JSON parsing and file writing happen in Go, so the Pi needs neither `jq` nor Python.
+- `--update` rewrites `EDGE_IMAGE` and `Z2M_IMAGE` in `.env` to the images this server pins
+  (`domain.EdgeImageTag`, `domain.Zigbee2MQTTImage`), then pulls and restarts.
+- A server-supplied `api_origin` is written to `.env` only when it is a clean origin; otherwise the origin the
+  script was fetched from is used.
+- The generated compose file: `aether-edge` uses `network_mode: host` (UDP broadcasts never reach a bridged
+  container), `read_only`, `cap_drop: ALL`, `no-new-privileges` and a small `/tmp` tmpfs. Zigbee2MQTT
+  (`${Z2M_IMAGE}`, default `ghcr.io/koenkk/zigbee2mqtt:2.14.1`) is under profile `zigbee`, with
+  `serial: tcp://<SLZB_IP>:6638`, `adapter: ember` (EmberZNet coordinators such as the SLZB-06M/06MU;
+  https://www.zigbee2mqtt.io/guide/adapters/emberznet.html), `cap_drop: ALL` and `no-new-privileges` (verified: 2.14.1
+  boots to the adapter under these), and no Docker socket.
+- **Zigbee2MQTT's page** can run code (external converters/extensions, which Zigbee2MQTT 2.x offers no switch to
+  disable), shows the network key and can re-point `mqtt.server`. So:
+  - it requires `frontend.auth_token: '!secret auth_token'`. The installer generates the token (192 random bits),
+    keeps it in `zigbee2mqtt/secret.yaml` (0600) across installs, and prints it once;
+  - it is published on `127.0.0.1:8080` unless `--zigbee-ui <this host's LAN IPv4>` names one interface. It is
+    never published on every interface, because a Docker-published port bypasses the host firewall;
+  - for an existing `configuration.yaml`, only the top-level `frontend` block is edited to add the token
+    reference (`edge.EnsureFrontendAuth`); every other line, the network key included, is kept byte for byte.
+- `zigbee2mqtt/configuration.yaml` is written only when it does not exist: Zigbee2MQTT stores the network key in
+  it, and losing it means pairing every device again. The broker credentials live in `zigbee2mqtt/secret.yaml`
+  (`!secret user` / `!secret password`), which every install rewrites.
+
 ## Not yet (later phases)
 
-- Phase E: the `aether-edge` binary, its image and `install.sh`; phase F: the UI (installer card, import wizard, key
-  status).
+- Phase F: the UI (installer card, import wizard, key status).
 - Manual key entry and open firmware (OpenBeken/ESPHome) are not in this round.
 - A Tuya SOS button is not wired to the SOS path: SOS buttons are battery devices and cannot be reached locally.

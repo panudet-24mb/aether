@@ -47,7 +47,9 @@ func (r *Repository) ForgetTuyaKey(ctx context.Context, p domain.Principal, gate
 
 // CreateEdgeInstallCode stores a single-use install code (its hash only) for an Aether Edge gateway. Any earlier
 // unused code of the gateway stops working: only the newest install command is valid.
-func (r *Repository) CreateEdgeInstallCode(ctx context.Context, p domain.Principal, gateway, codeHash string, expires time.Time) error {
+// zigbee, when not empty, is a Zigbee2MQTT gateway of the same workspace (and in the member's scope) to pair: its MQTT
+// password is rotated and handed over with the Edge's when the code is redeemed.
+func (r *Repository) CreateEdgeInstallCode(ctx context.Context, p domain.Principal, gateway, zigbee, codeHash string, expires time.Time) error {
 	return classify(r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		var models []string
 		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, gateway).Scan(&models).Error; e != nil {
@@ -59,14 +61,25 @@ func (r *Repository) CreateEdgeInstallCode(ctx context.Context, p domain.Princip
 		if models[0] != domain.EdgeGatewayModel {
 			return domain.Because(domain.ErrInvalid, "not_an_edge_gateway")
 		}
+		var pair any
+		if zigbee != "" {
+			var zmodels []string
+			if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL`, zigbee).Scan(&zmodels).Error; e != nil {
+				return e
+			}
+			if len(zmodels) != 1 || zmodels[0] != domain.Z2MGatewayModel {
+				return domain.Because(domain.ErrInvalid, "not_a_zigbee2mqtt_gateway")
+			}
+			pair = zigbee
+		}
 		if e := tx.Exec(`DELETE FROM core.edge_install_codes WHERE gateway_id=? AND redeemed_at IS NULL`, gateway).Error; e != nil {
 			return e
 		}
 		if e := tx.Exec(`DELETE FROM core.edge_install_codes WHERE expires_at<now()-interval '1 day'`).Error; e != nil {
 			return e
 		}
-		if e := tx.Exec(`INSERT INTO core.edge_install_codes(tenant_id,id,gateway_id,code_hash,created_by,expires_at) VALUES(?,?,?,?,?,?)`,
-			p.TenantID, uuid.NewString(), gateway, codeHash, p.UserID, expires).Error; e != nil {
+		if e := tx.Exec(`INSERT INTO core.edge_install_codes(tenant_id,id,gateway_id,zigbee_gateway_id,code_hash,created_by,expires_at) VALUES(?,?,?,?,?,?,?)`,
+			p.TenantID, uuid.NewString(), gateway, pair, codeHash, p.UserID, expires).Error; e != nil {
 			return e
 		}
 		return audit(tx, p, "edge.install_code_created", gateway)
@@ -76,8 +89,11 @@ func (r *Repository) CreateEdgeInstallCode(ctx context.Context, p domain.Princip
 // BootstrapEdge redeems an install code and, in the same transaction, rotates the gateway's MQTT password and
 // HTTP token to the given hashes: the credentials the installer receives are the only valid ones from then on, and
 // a code that fails half-way is not spent. Unknown, used, expired or revoked all read as ErrUnauthorized.
-func (r *Repository) BootstrapEdge(ctx context.Context, codeHash, mqttHash, tokenDigest string) (string, string, error) {
-	var tenant, gateway string
+//
+// When the code paired a Zigbee2MQTT gateway, its MQTT password is rotated to zigbeeHash in the same transaction and
+// its id returned (empty otherwise); a paired gateway revoked since then makes the whole bootstrap fail, unspent.
+func (r *Repository) BootstrapEdge(ctx context.Context, codeHash, mqttHash, zigbeeHash, tokenDigest string) (string, string, string, error) {
+	var tenant, gateway, zigbee string
 	e := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []struct{ TenantID, GatewayID string }
 		// Runs as the owner (SECURITY DEFINER): no tenant is known yet. It marks the code used and returns its
@@ -102,28 +118,63 @@ func (r *Repository) BootstrapEdge(ctx context.Context, codeHash, mqttHash, toke
 		if active != 1 {
 			return domain.ErrUnauthorized
 		}
-		var creators []sql.NullString
-		if e := tx.Raw(`SELECT created_by::text FROM core.edge_install_codes WHERE code_hash=?`, codeHash).Scan(&creators).Error; e != nil {
+		var codes []struct{ CreatedBy, ZigbeeGatewayID sql.NullString }
+		if e := tx.Raw(`SELECT created_by::text AS created_by,zigbee_gateway_id::text AS zigbee_gateway_id FROM core.edge_install_codes WHERE code_hash=?`, codeHash).Scan(&codes).Error; e != nil {
 			return e
+		}
+		var creators []sql.NullString
+		for _, c := range codes {
+			creators = append(creators, c.CreatedBy)
+			if c.ZigbeeGatewayID.Valid {
+				zigbee = c.ZigbeeGatewayID.String
+			}
+		}
+		if zigbee != "" {
+			var zmodels []string
+			if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL`, zigbee).Scan(&zmodels).Error; e != nil {
+				return e
+			}
+			if len(zmodels) != 1 || zmodels[0] != domain.Z2MGatewayModel {
+				return domain.Because(domain.ErrInvalid, "zigbee_gateway_unavailable")
+			}
+			if e := setMQTTPassword(tx, tenant, zigbee, zigbeeHash); e != nil {
+				return e
+			}
 		}
 		if e := rotateGatewayToken(tx, gateway, tokenDigest); e != nil {
 			return e
 		}
-		q := tx.Exec(`UPDATE core.mqtt_accounts SET password_hash=?,revision=revision+1 WHERE gateway_id=?`, mqttHash, gateway)
-		if q.Error != nil {
-			return q.Error
+		if e := setMQTTPassword(tx, tenant, gateway, mqttHash); e != nil {
+			return e
 		}
-		if q.RowsAffected == 0 {
-			if e := tx.Exec(`INSERT INTO core.mqtt_accounts(tenant_id,gateway_id,password_hash) VALUES(?,?,?)`, tenant, gateway, mqttHash).Error; e != nil {
+		actor := domain.Principal{TenantID: tenant}
+		if len(creators) == 1 && creators[0].Valid {
+			actor.UserID = creators[0].String
+		}
+		if zigbee != "" && actor.UserID != "" {
+			// The paired Zigbee2MQTT gateway's broker password changed too: its own audit trail says so.
+			if e := audit(tx, actor, "zigbee2mqtt.credentials_rotated_by_edge", zigbee); e != nil {
 				return e
 			}
 		}
-		if len(creators) == 1 && creators[0].Valid {
-			return audit(tx, domain.Principal{TenantID: tenant, UserID: creators[0].String}, "edge.bootstrapped", gateway)
+		if actor.UserID != "" {
+			return audit(tx, actor, "edge.bootstrapped", gateway)
 		}
 		return nil
 	})
-	return tenant, gateway, classify(e)
+	return tenant, gateway, zigbee, classify(e)
+}
+
+// setMQTTPassword rotates (or creates) a gateway's broker account; the provisioner renders it within seconds.
+func setMQTTPassword(tx *gorm.DB, tenant, gateway, hash string) error {
+	q := tx.Exec(`UPDATE core.mqtt_accounts SET password_hash=?,revision=revision+1 WHERE gateway_id=?`, hash, gateway)
+	if q.Error != nil {
+		return q.Error
+	}
+	if q.RowsAffected == 0 {
+		return tx.Exec(`INSERT INTO core.mqtt_accounts(tenant_id,gateway_id,password_hash) VALUES(?,?,?)`, tenant, gateway, hash).Error
+	}
+	return nil
 }
 
 // RotateGatewayToken replaces a gateway's HTTP ingest token (only its digest is stored). The old token stops

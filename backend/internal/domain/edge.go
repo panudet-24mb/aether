@@ -55,11 +55,21 @@ type EdgeCredentials struct {
 	GatewayID    string
 	MQTTPassword string
 	HTTPToken    string
+	// ZigbeeGatewayID and ZigbeePassword are set when the install code paired a Zigbee2MQTT gateway: its MQTT
+	// password was rotated with the Edge's and is handed over once, for the Zigbee2MQTT container on the same host.
+	ZigbeeGatewayID string
+	ZigbeePassword  string
 }
 
-// The Aether Edge container image the installer pulls. The tag is pinned when the image is published (phase E);
-// until then the bootstrap bundle carries an empty tag and the installer must be given one explicitly.
+// The Aether Edge container image the installer pulls, published by .github/workflows/edge.yml when a tag
+// edge-v<EdgeImageTag> is pushed. Bump the tag here after publishing a new release.
+// Once the first release is published the tag may also be pinned by digest ("0.1.0@sha256:…"); the installer accepts
+// both forms.
 const (
 	EdgeImage    = "ghcr.io/panudet-24mb/aether-edge"
-	EdgeImageTag = ""
+	EdgeImageTag = "0.1.0"
 )
+
+// Zigbee2MQTTImage is the Zigbee2MQTT release the installer and its --update pin on the site host (2.x; EmberZNet
+// coordinators such as the SMLIGHT SLZB-06M/06MU use `adapter: ember`). internal/edge carries the same default.
+const Zigbee2MQTTImage = "ghcr.io/koenkk/zigbee2mqtt:2.14.1"

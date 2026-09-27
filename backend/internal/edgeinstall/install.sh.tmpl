@@ -1,0 +1,122 @@
+#!/bin/sh
+# Aether Edge installer · served by Aether at /edge/install.sh with this server's address and the pinned images
+# filled in. Usage:
+#
+#   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh
+#   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --zigbee <SLZB_IP> [--zigbee-ui <THIS_HOST_LAN_IP>]
+#   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --update
+#   options: --dir <absolute path> (default /opt/aether-edge)
+#
+# The install code (from the gateway panel; 30 minutes, single use) is typed at the prompt, never on the command
+# line, so it does not end up in shell history, sudo logs or a process list. For unattended installs it may come
+# from the environment variable AETHER_INSTALL_CODE instead.
+#
+# It needs Docker with the compose plugin. It pulls the Aether Edge image first, then lets that image redeem the
+# code (passed in the environment) and write .env, ca.crt and compose.yaml into the directory, and starts the stack.
+# Running it again with a new code replaces the credentials; --update only moves to the images this server pins.
+set -eu
+
+ORIGIN='__AETHER_ORIGIN__'
+IMAGE='__EDGE_IMAGE__'
+Z2M_IMAGE='__Z2M_IMAGE__'
+DIR=/opt/aether-edge
+ZIGBEE=
+ZIGBEE_UI=
+UPDATE=0
+# Taken out of the environment at once: only the one `docker run` that redeems it gets it back.
+ENV_CODE=${AETHER_INSTALL_CODE:-}
+unset AETHER_INSTALL_CODE
+
+die() { echo "aether-edge: $*" >&2; exit 1; }
+usage() { die "usage: sh [-s -- [--zigbee <SLZB_IP> [--zigbee-ui <LAN_IP>]] [--dir <path>] | --update [--dir <path>]]"; }
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--zigbee) [ $# -ge 2 ] || usage; ZIGBEE=$2; shift 2 ;;
+	--zigbee-ui) [ $# -ge 2 ] || usage; ZIGBEE_UI=$2; shift 2 ;;
+	--dir) [ $# -ge 2 ] || usage; DIR=$2; shift 2 ;;
+	--update) UPDATE=1; shift ;;
+	-h | --help) usage ;;
+	-*) usage ;;
+	*) die "the install code is not given on the command line: run without it and type it at the prompt" ;;
+	esac
+done
+
+# The directory becomes root-owned and 0700: never a system directory or a whole home root.
+case "$DIR" in /*) ;; *) die "--dir must be an absolute path" ;; esac
+case "$DIR" in *[!A-Za-z0-9/._-]*) die "--dir contains unsupported characters" ;; esac
+case "$DIR" in *..*) die "--dir must not contain .." ;; esac
+DIR=$(printf '%s' "$DIR" | sed 's#//*#/#g; s#/$##')
+case "$DIR" in
+'' | /var | /root | /home | /opt | /srv | /tmp | /usr | /usr/local) die "--dir $DIR is not a safe place: use a directory of its own, e.g. /opt/aether-edge" ;;
+/etc | /etc/* | /bin | /bin/* | /sbin | /sbin/* | /boot | /boot/* | /proc | /proc/* | /sys | /sys/* | /dev | /dev/* | /lib | /lib/* | /lib64 | /lib64/* | /run | /run/*)
+	die "--dir $DIR is a system directory" ;;
+/usr/local/*) ;;
+/usr/*) die "--dir $DIR is a system directory" ;;
+esac
+if [ -n "$ZIGBEE" ]; then
+	case "$ZIGBEE" in -* | *[!A-Za-z0-9.-]*) die "--zigbee must be the coordinator's IP address or host name" ;; esac
+fi
+if [ -n "$ZIGBEE_UI" ]; then
+	[ -n "$ZIGBEE" ] || die "--zigbee-ui needs --zigbee"
+	case "$ZIGBEE_UI" in *[!0-9.]* | 0.0.0.0) die "--zigbee-ui must be one IPv4 address of this host (not 0.0.0.0)" ;; esac
+fi
+
+command -v docker >/dev/null 2>&1 || die "Docker is not installed. Install it first: curl -fsSL https://get.docker.com | sh"
+docker info >/dev/null 2>&1 || die "cannot talk to Docker (run with sudo, or add this user to the docker group)"
+docker compose version >/dev/null 2>&1 || die "the Docker compose plugin is missing (docker compose version failed)"
+
+compose() { docker compose --project-directory "$DIR" -f "$DIR/compose.yaml" "$@"; }
+
+set_env() { # set_env KEY VALUE: replace or add one line of .env
+	tmp="$DIR/.env.update"
+	grep -v "^$1=" "$DIR/.env" >"$tmp" || true
+	echo "$1=$2" >>"$tmp"
+	chmod 600 "$tmp"
+	mv "$tmp" "$DIR/.env"
+}
+
+if [ "$UPDATE" = 1 ]; then
+	[ -f "$DIR/.env" ] || die "no installation in $DIR (run the installer with an install code first)"
+	set_env EDGE_IMAGE "$IMAGE"
+	set_env Z2M_IMAGE "$Z2M_IMAGE"
+	compose pull
+	compose up -d --remove-orphans
+	echo "aether-edge: updated to $IMAGE (Zigbee2MQTT $Z2M_IMAGE)"
+	exit 0
+fi
+
+# Pull first: a slow download must not eat the code's 30 minutes, and a failed pull must not waste it.
+echo "aether-edge: pulling $IMAGE"
+docker pull "$IMAGE" >/dev/null
+
+CODE=$ENV_CODE
+if [ -z "$CODE" ]; then
+	[ -r /dev/tty ] || die "no terminal to ask for the install code: set AETHER_INSTALL_CODE in the environment"
+	printf 'Install code (from the gateway panel in Aether): ' >/dev/tty
+	stty -echo </dev/tty 2>/dev/null || true
+	IFS= read -r CODE </dev/tty || true
+	stty echo </dev/tty 2>/dev/null || true
+	printf '\n' >/dev/tty
+fi
+CODE=$(printf '%s' "$CODE" | tr -d ' \r\n\t')
+[ -n "$CODE" ] || die "no install code given"
+case "$CODE" in *[!A-Za-z0-9_-]*) die "the install code contains unsupported characters" ;; esac
+
+mkdir -p "$DIR"
+chmod 700 "$DIR"
+
+# The image redeems the code and writes the files. It runs as root only to write into the root-owned directory,
+# with every capability dropped and a read-only root file system; the code reaches it in the environment.
+set -- install --server "$ORIGIN" --dir /out --image "$IMAGE" --z2m-image "$Z2M_IMAGE"
+[ -z "$ZIGBEE" ] || set -- "$@" --zigbee "$ZIGBEE"
+[ -z "$ZIGBEE_UI" ] || set -- "$@" --zigbee-ui "$ZIGBEE_UI"
+AETHER_INSTALL_CODE=$CODE
+export AETHER_INSTALL_CODE
+docker run --rm --user 0:0 --read-only --cap-drop ALL --security-opt no-new-privileges \
+	--network host -e AETHER_INSTALL_CODE -v "$DIR:/out" "$IMAGE" "$@"
+unset AETHER_INSTALL_CODE CODE
+
+compose pull --quiet
+compose up -d --remove-orphans
+echo "aether-edge: running. Check the gateway panel in Aether; logs: docker compose --project-directory $DIR logs -f"

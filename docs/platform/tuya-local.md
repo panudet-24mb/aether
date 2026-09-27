@@ -2,7 +2,7 @@
 
 อุปกรณ์ Tuya Wi‑Fi คุยกันในวง LAN ได้ด้วย **local key** ของแต่ละเครื่อง Aether Edge (โปรแกรมที่ติดตั้งบน Pi ในอาคาร) ใช้ key นี้ต่อกับอุปกรณ์โดยตรงทาง TCP 6668 แล้วส่งข้อมูลขึ้น Aether จึง **ไม่ต้องพึ่ง Tuya Cloud ตอนใช้งานเลย** ต้องใช้ cloud **ครั้งเดียว** ตอนดึง local key และตารางความหมายของ data point (DP) ของแต่ละรุ่นเข้ามา
 
-ดูภาพรวมระบบ topic และสิทธิ์ได้ที่ [aether-edge.md](aether-edge.md)
+ดูภาพรวมระบบ topic และสิทธิ์ได้ที่ [aether-edge.md](aether-edge.md) · ขั้นตอนติดตั้ง Aether Edge บน Pi ดูที่ [aether-edge-install.md](aether-edge-install.md)
 
 ## สิ่งที่ต้องเตรียม (ทำครั้งเดียว)
 

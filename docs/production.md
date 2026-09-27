@@ -322,7 +322,13 @@ docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mqtt-in
   - ถ้าไม่มีไฟล์นี้ `POST /edge/bootstrap` จะตอบ 503 **โดยไม่ใช้โค้ดติดตั้งทิ้ง**
   - ส่งให้ตัวติดตั้งเฉพาะบล็อก `CERTIFICATE` ที่เป็น X.509 จริงเท่านั้น ต่อให้ mount ไฟล์ที่มี private key ปนมาผิดๆ ก็จะไม่หลุดออกไป
 - **Caddy ส่ง `/edge/bootstrap` ไปที่ API** (ต้อง `up -d` ให้ proxy อ่าน Caddyfile ใหม่ หรือ `restart proxy`) · โค้ดติดตั้งส่งใน body ไม่อยู่ใน URL จึงไม่ติดไปใน access log ของ Caddy/nginx/Cloudflare
-- คำสั่งติดตั้งบรรทัดเดียว (`install.sh`) **มากับ image ของ Aether Edge ใน phase E** ตอนนี้ยังใช้ไม่ได้
+- **Caddy ส่ง `/edge/install.sh` ไปที่ API ด้วย** (ตั้งแต่ phase E) API สร้างสคริปต์โดยใส่ origin ของเซิร์ฟเวอร์และ image ที่ pin ไว้ (`domain.EdgeImageTag`) ให้ ต้อง `restart proxy` หลัง deploy รอบที่แก้ Caddyfile
+- migration `00033` ให้โค้ดติดตั้งจับคู่กับ gateway Zigbee2MQTT ได้ (ติดตั้ง Edge + Zigbee2MQTT ด้วยคำสั่งเดียว)
+- **Image ของ Aether Edge** สร้างโดย GitHub Actions (`.github/workflows/edge.yml`) เมื่อ push tag `edge-v<เวอร์ชัน>` เช่น `edge-v0.1.0` → `ghcr.io/panudet-24mb/aether-edge:0.1.0`
+  - หลัง push ครั้งแรก **ต้องตั้ง package เป็น public ครั้งเดียว**: GitHub → โปรไฟล์ → Packages → `aether-edge` → Package settings → Change visibility → Public (ไม่งั้น Pi ดึง image ไม่ได้)
+  - ออกเวอร์ชันใหม่: push tag ใหม่ → แก้ `EdgeImageTag` ใน `backend/internal/domain/edge.go` (หลัง publish แล้วจะ pin ด้วย digest ด้วยก็ได้ เช่น `0.1.0@sha256:…`) → deploy เซิร์ฟเวอร์ → ที่ Pi รัน `curl -fsSL <origin>/edge/install.sh | sudo sh -s -- --update`
+  - เวอร์ชัน Zigbee2MQTT ที่ติดตั้งให้ที่ Pi กำหนดที่ `domain.Zigbee2MQTTImage` (`--update` ปรับให้ด้วย)
+  - คำสั่งติดตั้งที่หน้าเว็บ **ไม่มีโค้ด** สคริปต์จะถามโค้ดตอนรัน (โค้ดจึงไม่อยู่ใน log ของ sudo หรือ history)
 - **หลัง bootstrap ให้หยุด agent ตัวเก่าของ gateway นั้น**
   - Mosquitto ไม่ตัด session ที่ login ไว้แล้ว ตอนเปลี่ยนรหัสผ่าน
   - session เก่าจะหลุดเมื่อ agent ตัวใหม่ต่อเข้ามาด้วย client id เดียวกัน (`gw-<id>`)

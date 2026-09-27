@@ -1,0 +1,38 @@
+# Aether Edge · written by the installer (https://<aether>/edge/install.sh). Re-run the installer to update.
+name: aether-edge
+services:
+  aether-edge:
+    image: ${EDGE_IMAGE}
+    # Host networking: Tuya devices announce themselves with UDP broadcasts (6666/6667/7000) that a bridged
+    # container never receives, and the agent dials each device on the LAN.
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:mode=1777,size=1m
+__VOLUMES__
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  zigbee2mqtt:
+    image: ${Z2M_IMAGE}
+    profiles: [zigbee]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./zigbee2mqtt:/app/data
+    ports:
+      # Zigbee2MQTT's page (pairing, device settings) asks for the token in zigbee2mqtt/secret.yaml. It is published
+      # on loopback unless the installer was given --zigbee-ui <this host's LAN address>; never on every interface,
+      # because a Docker-published port bypasses the host firewall.
+      - "${Z2M_UI_BIND:-127.0.0.1}:8080:8080"
+    environment:
+      TZ: Asia/Bangkok
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

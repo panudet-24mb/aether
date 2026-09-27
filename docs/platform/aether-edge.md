@@ -131,10 +131,77 @@ the device read from `core.command_targets`:
 
 Automation "สั่งอุปกรณ์" blocks target Tuya devices the same way.
 
+## Key import, install codes and the agent's configuration (phase D)
+
+**Import** (`POST /api/v1/gateways/:id/tuya/imports`, owner/admin; steps in Thai: [tuya-local.md](tuya-local.md)):
+- The user's own Tuya IoT project, one region from a fixed list (`us, us-e, eu, eu-w, cn, in, sg`). The host comes
+  only from that list, so there is no SSRF, and redirects are not followed.
+- `internal/adapters/tuyacloud` signs each call with Tuya's HMAC-SHA256 scheme; the reference signatures in its test
+  were produced by tinytuya. Calls, in order:
+  - the token;
+  - the device list with local keys, from `/v1.0/iot-01/associated-users/devices`, falling back to
+    `/v1.3/iot-03/devices` and `/v1.0/users/{uid}/devices`;
+  - one data-point model per product, from `/v2.0/cloud/thing/{id}/model`, falling back to
+    `/v1.1/devices/{id}/specifications`.
+- Bounds: 10 s per call, 90 s per import, at most 200 devices.
+- The job runs in the API process (`app/tuya_import.go`) and is polled at `GET …/tuya/imports/:job`. It lives 10
+  minutes, allows one running import per gateway and 10 jobs per workspace, and is lost on restart.
+- The **Access ID/Secret exist only inside the job's goroutine**: they are never in the job record, the database, a
+  log or a response.
+- Each local key is sealed at once with `DeriveKey(CHANNEL_SEAL_KEY or the JWT key, "tuya-local-keys")` and stored
+  with a 16-hex fingerprint, through `SaveTuyaDevices` (`tuya.Validate` applies). The result lists fingerprints, never
+  keys. Audited as `tuya.keys_imported`.
+- `GET …/tuya/devices` shows key status and fingerprint, LAN and registration state.
+  `POST …/tuya/devices/:tuya_id/forget` drops a key, moves the configuration revision and is audited.
+
+**Install code** (`POST /api/v1/gateways/:id/edge/install-code`, owner/admin):
+- 128 random bits, written as 26 base32 characters; only its SHA-256 is stored.
+- Valid 30 minutes and single use. A newer code voids older unused ones.
+- Returns `install_command` (`curl -fsSL <origin>/edge/install.sh | sh -s -- <code>`). **`install.sh` ships with the
+  Edge image in phase E**; until then the command does not work, and the bootstrap call below can be made by hand.
+
+**Bootstrap** (`POST /edge/bootstrap`, body `{"code":"…"}`, at most 256 bytes):
+- **The code travels in the body, never the path**: proxies and CDNs log paths, and a code that failed before it
+  was spent (a 503, a 429) must not sit valid in an access log for up to 30 minutes.
+- Public and limited to 10 requests per minute per address. Caddy routes exactly `/edge/bootstrap` to the API. The
+  per-address limit only sees real clients when the outer proxy is trusted (`setup.py --upstream-proxy`).
+- The broker endpoint and CA are checked **before** the code is spent.
+- `core.redeem_edge_install_code` marks the code used. In the same transaction, the gateway's HTTP token and MQTT
+  password are rotated. Audited as `edge.bootstrapped`, with the code's creator as actor.
+- Returns once:
+  - the gateway id and API origin;
+  - `http.token` and `http.config_url`;
+  - `mqtt` (url, host, port, username, client id, password, base topic);
+  - `ca_pem`, the broker CA from `MQTT_CA_FILE`;
+  - optionally `web_ca_pem`, from `EDGE_WEB_CA_FILE`;
+  - the image reference (tag pinned in phase E);
+  - `notice: previous_agent_must_stop`.
+- Only X.509 `CERTIFICATE` blocks from those files are returned, re-encoded. A file that also holds a private key
+  never passes the key on.
+- Any failure is 401.
+
+**What rotation does to a connected agent.** Mosquitto re-reads the password file on SIGHUP (the provisioner
+applies a changed hash within about 3 s) but **keeps sessions that are already authenticated**. After a bootstrap:
+- the old HTTP token stops working at once;
+- an agent still connected with the old MQTT password is disconnected when the new agent connects **with the same
+  client id** (`gw-<id>`, MQTT session takeover). If it drops, it cannot reconnect: the old password is refused;
+- until then its session lasts. It stays confined to its own gateway's topics by the ACL.
+
+So stop the previous agent before, or right after, reinstalling. If an old credential may be compromised and no new
+agent is connecting yet, restart the broker to drop every session:
+`docker compose --env-file .env.prod -f infra/prod/compose.yaml restart mqtt`. Gateways reconnect on their own, so
+there is a few seconds' gap in data. Mosquitto has no per-client disconnect without its dynamic-security plugin,
+which this deployment does not use.
+
+**Agent configuration** (`GET /ingest/gateways/:id/edge/config`, the gateway's HTTP Basic credential):
+- Returns `{revision, devices:[{id, key, version, ip, dev22, refresh_dps}]}`. Only devices that are registered, have
+  an imported key and can be reached locally are included.
+- This is the **only** place a local key is opened.
+- `ETag` is the configuration revision; `If-None-Match` gives 304. The agent keeps keys in memory only.
+
 ## Not yet (later phases)
 
-- Phase D: importing specifications and local keys from the Tuya IoT Platform (keys sealed with a purpose-derived
-  key; Access ID/Secret never stored), the agent's configuration pull over HTTPS with its gateway token (keys held
-  in memory only on the Pi), and the single-use install code redeemed by the one-line installer.
-- Phase E: the `aether-edge` binary and its image; phase F: the UI (installer card, import wizard, key status).
+- Phase E: the `aether-edge` binary, its image and `install.sh`; phase F: the UI (installer card, import wizard, key
+  status).
+- Manual key entry and open firmware (OpenBeken/ESPHome) are not in this round.
 - A Tuya SOS button is not wired to the SOS path: SOS buttons are battery devices and cannot be reached locally.

@@ -3,6 +3,7 @@ package ports
 import (
 	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/minew"
+	"aether/backend/internal/adapters/tuya"
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/automation"
 	"aether/backend/internal/domain"
@@ -101,6 +102,13 @@ type Repository interface {
 	CapturePacket(context.Context, string, string, json.RawMessage) (string, error)
 	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
 	CaptureEdge(context.Context, string, string, edge.Message, []byte) (string, error)
+	SaveTuyaDevices(context.Context, domain.Principal, string, []tuya.Import) (int, error)
+	TuyaDevices(context.Context, domain.Principal, string) ([]domain.TuyaDevice, error)
+	ForgetTuyaKey(context.Context, domain.Principal, string, string) error
+	CreateEdgeInstallCode(context.Context, domain.Principal, string, string, time.Time) error
+	BootstrapEdge(context.Context, string, string, string) (string, string, error)
+	RotateGatewayToken(context.Context, domain.Principal, string, string) error
+	EdgeConfig(context.Context, string, string) (int64, []domain.EdgeSealedDevice, error)
 	QueueCommand(context.Context, domain.Principal, domain.CommandRequest) (domain.Command, bool, error)
 	ListCommands(context.Context, domain.Principal, string, int) ([]domain.Command, error)
 	GetCommand(context.Context, domain.Principal, string) (domain.Command, error)

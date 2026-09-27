@@ -28,8 +28,15 @@ type Service struct {
 	Secrets []byte
 	// LegacySecrets opens secrets sealed before CHANNEL_SEAL_KEY was introduced (the JWT-derived key).
 	LegacySecrets []byte
-	dummyHash     string
-	hashing       chan struct{}
+	// TuyaKeys seals the Tuya devices' local keys (purpose "tuya-local-keys"); LegacyTuyaKeys still opens keys
+	// sealed before CHANNEL_SEAL_KEY was set.
+	TuyaKeys       []byte
+	LegacyTuyaKeys []byte
+	// TuyaCloud builds the Tuya OpenAPI client of an import (tests substitute a fake cloud).
+	TuyaCloud func(region, accessID, accessSecret string) (TuyaCloud, error)
+	dummyHash string
+	hashing   chan struct{}
+	tuyaJobs  *tuyaJobs
 }
 type AuthResult struct {
 	AccessToken    string    `json:"access_token"`
@@ -46,7 +53,8 @@ type AuthResult struct {
 
 func New(repo ports.Repository, tokens *security.Tokens, registration bool) (*Service, error) {
 	dummy, e := security.HashPassword(security.RandomToken())
-	return &Service{Repo: repo, Tokens: tokens, Registration: registration, Secrets: tokens.DeriveKey("notification-channels"), dummyHash: dummy, hashing: make(chan struct{}, 2)}, e
+	return &Service{Repo: repo, Tokens: tokens, Registration: registration, Secrets: tokens.DeriveKey("notification-channels"), TuyaKeys: tokens.DeriveKey("tuya-local-keys"),
+		TuyaCloud: DefaultTuyaCloud, dummyHash: dummy, hashing: make(chan struct{}, 2), tuyaJobs: &tuyaJobs{jobs: map[string]*TuyaImportJob{}}}, e
 }
 func validName(s string) bool {
 	return utf8.ValidString(s) && len(s) >= 1 && len(s) <= 128 && !strings.ContainsAny(s, "\x00\r\n")

@@ -51,6 +51,8 @@ func main() {
 	if len(cfg.SealKey) > 0 { // a dedicated, separately escrowed key; secrets sealed earlier still open
 		service.LegacySecrets = service.Secrets
 		service.Secrets = security.DeriveKey(cfg.SealKey, "notification-channels")
+		service.LegacyTuyaKeys = service.TuyaKeys
+		service.TuyaKeys = security.DeriveKey(cfg.SealKey, "tuya-local-keys")
 	}
 	if cfg.AlertsShadow {
 		slog.Warn("ALERTS_SHADOW is on: events are recorded; only SOS (button) and smoke/gas/CO (hazard) open alerts; no automations run")

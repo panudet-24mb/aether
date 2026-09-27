@@ -281,3 +281,17 @@ func TestValidateSpec(t *testing.T) {
 		t.Fatal("too many data points accepted")
 	}
 }
+
+func TestFingerprintAndLocalKey(t *testing.T) {
+	if f := Fingerprint("0123456789abcdef"); len(f) != 16 || f != Fingerprint("0123456789abcdef") || f == Fingerprint("0123456789abcdeg") {
+		t.Fatalf("fingerprint %q", f)
+	}
+	for k, want := range map[string]bool{"0123456789abcdef": true, "short": false, "0123456789abcde\x00": false, "0123456789abcde ": false, "0123456789abcdefg": false} {
+		if ValidLocalKey(k) != want {
+			t.Fatalf("%q", k)
+		}
+	}
+	if ids := RefreshDPs([]DP{{ID: 1, Code: "switch_1"}, {ID: 19, Code: "cur_power"}, {ID: 20, Code: "cur_voltage"}}); len(ids) != 2 || ids[0] != 19 {
+		t.Fatalf("refresh %v", ids)
+	}
+}

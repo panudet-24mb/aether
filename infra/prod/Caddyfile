@@ -68,7 +68,7 @@
 
 	# Backend. /ws is a WebSocket upgrade (Caddy passes upgrades through unchanged) and the API
 	# compares its Origin header with APP_ORIGIN exactly, so the header must survive untouched.
-	@backend path /api/* /ws /health/* /openapi.json /ingest/*
+	@backend path /api/* /ws /health/* /openapi.json /ingest/* /edge/bootstrap
 	handle @backend {
 		reverse_proxy api:8080 {
 			# OVERWRITE, never append: the per-IP rate limiter trusts this header because

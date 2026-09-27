@@ -265,6 +265,11 @@ def main() -> int:
     dbca = sec / "db-ca"
     dbca.mkdir(exist_ok=True)
     dbca.chmod(0o711)
+    # Optional root of a private web CA (AETHER_TLS=internal) for Aether Edge installers; empty unless the operator
+    # exports Caddy's root into it (docs/production.md). Mounted read-only into the api container.
+    webca = sec / "edge-web-ca"
+    webca.mkdir(exist_ok=True)
+    webca.chmod(0o755)
     if make_ca(pg / "ca.key", pg / "ca.crt", "Aether PostgreSQL CA", 3650):
         created.append("postgres CA")
     if not (pg / "server.crt").exists():

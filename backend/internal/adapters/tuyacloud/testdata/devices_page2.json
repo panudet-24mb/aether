@@ -1,0 +1,20 @@
+{
+ "success": true,
+ "t": 1790000000123,
+ "tid": "fake-tid",
+ "result": {
+  "has_more": false,
+  "last_row_key": "",
+  "devices": [
+   {
+    "id": "bf00000000000000zb01",
+    "name": "Zigbee sensor via hub",
+    "local_key": "FAKEKEY-zb01-000",
+    "category": "wsdcg",
+    "product_id": "fakeprod0003",
+    "sub": true,
+    "online": true
+   }
+  ]
+ }
+}

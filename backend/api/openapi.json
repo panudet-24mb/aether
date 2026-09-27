@@ -5473,6 +5473,370 @@
      }
     }
    }
+  },
+  "/api/v1/gateways/{id}/tuya/imports": {
+   "post": {
+    "summary": "Start a one-time import of Tuya devices, local keys and data-point models from the user's Tuya IoT cloud project into an Aether Edge gateway (owner/admin). Returns at once; poll the job. The Access ID/Secret are used only by the job and never stored or returned.",
+    "operationId": "post__api_v1_gateways_id_tuya_imports",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Import job (no keys)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "region",
+         "access_id",
+         "access_secret"
+        ],
+        "additionalProperties": false,
+        "properties": {
+         "region": {
+          "type": "string",
+          "enum": [
+           "us",
+           "us-e",
+           "eu",
+           "eu-w",
+           "cn",
+           "in",
+           "sg"
+          ]
+         },
+         "access_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{8,64}$"
+         },
+         "access_secret": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{8,64}$",
+          "writeOnly": true
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya/imports/{job}": {
+   "get": {
+    "summary": "An import job's progress and result: devices with key fingerprints, never keys (owner/admin). Jobs live 10 minutes.",
+    "operationId": "get__api_v1_gateways_id_tuya_imports_job",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "job",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Import job",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya/devices": {
+   "get": {
+    "summary": "Imported Tuya devices of an Aether Edge gateway: key status and fingerprint, LAN and registration state; never the key (owner/admin).",
+    "operationId": "get__api_v1_gateways_id_tuya_devices",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{items:[TuyaDevice]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya/devices/{tuya_id}/forget": {
+   "post": {
+    "summary": "Drop one imported device's local key; the agent stops connecting to it (owner/admin).",
+    "operationId": "post__api_v1_gateways_id_tuya_devices_tuya_id_forget",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "tuya_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9]{16,32}$"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Forgotten"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/edge/install-code": {
+   "post": {
+    "summary": "Issue a single-use install code (30 minutes; only its hash is stored) for an Aether Edge gateway, with the one-line install command. Shown once (owner/admin).",
+    "operationId": "post__api_v1_gateways_id_edge_install_code",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "{code, expires_at, bootstrap_url, install_command}; install.sh ships in phase E",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/ingest/gateways/{id}/edge/config": {
+   "get": {
+    "summary": "The Aether Edge agent's configuration: its registered Tuya devices with local keys, protocol version, address and refresh data points. ETag = revision; If-None-Match gives 304.",
+    "operationId": "get__ingest_gateways_id_edge_config",
+    "security": [
+     {
+      "gatewayBasic": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "{revision, devices:[{id,key,version,ip,dev22,refresh_dps}]}",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/edge/bootstrap": {
+   "post": {
+    "summary": "Redeem an install code (in the body, never the path, so it does not land in access logs) once for the agent's freshly rotated MQTT password and HTTP token, the broker endpoint and CA certificate, and the image reference. Public, 10 per minute per address; every failure is 401. A session the previous agent opened with the old password lasts until it disconnects or the new agent connects with the same client id.",
+    "operationId": "post__edge_bootstrap",
+    "security": [],
+    "parameters": [],
+    "responses": {
+     "201": {
+      "description": "Credential bundle, shown once",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "code"
+        ],
+        "additionalProperties": false,
+        "properties": {
+         "code": {
+          "type": "string",
+          "pattern": "^[a-z2-7]{26}$"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {

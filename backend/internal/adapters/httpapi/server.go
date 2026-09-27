@@ -217,6 +217,8 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	floorplanRoutes(secured, service)
 	assetRoutes(secured, service)
 	commandRoutes(secured, service)
+	edgeRoutes(secured, service, cfg)
+	edgePublicRoutes(api, service, cfg)
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
@@ -458,6 +460,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 		c.Locals("gateway_tenant", tenant)
 		return c.Next()
 	})
+	edgeAgentRoutes(ingest, service)
 	ingest.Post("/packets", func(c fiber.Ctx) error {
 		media, _, e := mime.ParseMediaType(c.Get("Content-Type"))
 		if e != nil || media != "application/json" {

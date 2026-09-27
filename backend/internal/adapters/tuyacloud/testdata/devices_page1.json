@@ -1,0 +1,32 @@
+{
+ "success": true,
+ "t": 1790000000123,
+ "tid": "fake-tid",
+ "result": {
+  "has_more": true,
+  "last_row_key": "row-2",
+  "devices": [
+   {
+    "id": "bf00000000000000sw01",
+    "name": "สวิตช์ห้องประชุม",
+    "local_key": "FAKEKEY-sw01-000",
+    "category": "kg",
+    "product_id": "fakeprod0001",
+    "sub": false,
+    "online": true,
+    "uuid": "fakeuuid01",
+    "ip": "203.0.113.10",
+    "time_zone": "+07:00"
+   },
+   {
+    "id": "bf00000000000000pl01",
+    "name": "ปลั๊กวัดไฟ",
+    "local_key": "FAKEKEY-pl01-000",
+    "category": "cz",
+    "product_id": "fakeprod0002",
+    "sub": false,
+    "online": true
+   }
+  ]
+ }
+}

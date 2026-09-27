@@ -226,8 +226,15 @@ services:
       MQTT_PUBLIC_SCHEME: ${MQTT_PUBLIC_SCHEME:-ssl}
       MQTT_ALLOW_PLAINTEXT: ${MQTT_ALLOW_PLAINTEXT:-false}
       MQTT_PLAIN_PORT: ${MQTT_PLAIN_PORT:-1883}
+      # Handed to an Aether Edge installer with its credentials (POST /edge/bootstrap/<code>): the broker's CA,
+      # and the web front's root when it is a private CA (optional; see docs/production.md).
+      MQTT_CA_FILE: /run/mqtt-ca/ca.crt
+      EDGE_WEB_CA_FILE: /run/edge-web-ca/root.crt
     volumes:
       - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+      # The broker's CA certificate only (public): never the broker directory, which holds its private key.
+      - ${AETHER_SECRETS_DIR}/mqtt/broker/ca.crt:/run/mqtt-ca/ca.crt:ro
+      - ${AETHER_SECRETS_DIR}/edge-web-ca:/run/edge-web-ca:ro
     healthcheck:
       test: ["CMD", "/app/api", "health"]
       interval: 15s

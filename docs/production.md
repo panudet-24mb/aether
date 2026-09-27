@@ -258,7 +258,7 @@ python3 infra/prod/setup.py --host aether.example.com \
 | `--host` | ต้องเป็น**ชื่อเดียวกับที่ nginx ส่งมาใน Host/SNI** ไม่อย่างนั้น Caddy จะไม่มี site ที่ตรง |
 | `--public-origin` | URL ที่เบราว์เซอร์เห็นจริง (ไม่มีพอร์ต 8443) → `APP_ORIGIN` ที่ API ใช้ตรวจ Origin |
 | `--mqtt-host` | ชื่อ/IP ที่ gateway ใช้ต่อ MQTT เมื่อต่างจากเว็บ (เช่น เว็บอยู่หลัง Cloudflare ซึ่งส่ง MQTT ไม่ได้) · ใช้เป็น SAN ของใบรับรอง broker ตอนออกครั้งแรก ถ้าเปลี่ยนภายหลัง setup จะเตือนให้ออกใบใหม่ |
-| `--upstream-proxy` | IP/CIDR ของ proxy ด้านหน้าที่ Caddy เชื่อ `X-Forwarded-For` (อ่านจากขวาไปซ้าย `trusted_proxies_strict`) · nginx ที่ต่อเข้า `127.0.0.1` จะปรากฏเป็น gateway ของ subnet compose คือ `.1` |
+| `--upstream-proxy` | IP/CIDR ของ proxy ด้านหน้าที่ Caddy เชื่อ `X-Forwarded-For` (อ่านจากขวาไปซ้าย `trusted_proxies_strict`) · nginx ที่ต่อเข้า `127.0.0.1` จะปรากฏเป็น gateway ของ subnet compose คือ `.1` · **ต้องตั้งเสมอเมื่อมี nginx/Cloudflare ข้างหน้า** ไม่งั้นทุก request ดูเหมือนมาจาก IP ของ proxy ตัวเดียว ทำให้ rate limit ต่อ IP (login, bootstrap ของ Edge) นับรวมกันทุกคน |
 | `--web-bind` | IPv4 ที่ Caddy เปิดพอร์ต · `127.0.0.1` = เข้าได้เฉพาะผ่าน nginx |
 
 ฝั่ง nginx: `proxy_pass https://127.0.0.1:8443;` พร้อม `proxy_ssl_server_name on; proxy_ssl_name <host>;` ตรวจใบของ Caddy ด้วย root ที่ดึงจาก `proxy:/data/caddy/pki/authorities/local/root.crt`, ส่ง `Host $host`, **เขียนทับ** `X-Forwarded-For $remote_addr` (ไม่ append) และส่ง `Upgrade`/`Connection` สำหรับ `/ws`
@@ -312,6 +312,32 @@ docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mqtt-in
 - คำสั่งจากผังผ่าน `mqtt-commander` (ผังเขียนคำขอลง outbox แล้ว commander ส่งเข้าคิว) ถ้า `mqtt-commander` ไม่ทำงาน ผังจะไม่สั่งอะไร
 - ปิดสวิตช์ภายหลัง (`--automation-commands false`) ผังยังเปิดอยู่แต่จะไม่ส่งคำสั่ง (ประวัติการทำงานบอกเหตุผล `commands_disabled`)
 - **รัน `setup.py` ซ้ำโดยไม่ใส่ `--automation-commands` จะคงค่าเดิมไว้** ในไฟล์ env · ต่างจาก `--shadow` ที่ **ถูกตั้งใหม่ทุกครั้ง** (เป็น `true` ถ้าไม่ใส่ `--shadow false` ซ้ำ) ดังนั้นเมื่อปิด shadow แล้ว ต้องใส่ `--shadow false` ทุกครั้งที่รัน setup.py
+
+### 4.10 Aether Edge และการนำเข้า Tuya Wi‑Fi
+
+ตั้งแต่ migration `00032` (ไม่มี migration ใหม่ในรอบนำเข้า) มี 3 อย่างเพิ่มในชุด production:
+
+- **CA ของ broker ถูก mount เข้า container `api`** แบบอ่านอย่างเดียว เฉพาะไฟล์ `mqtt/broker/ca.crt` ซึ่งเป็นใบรับรองสาธารณะ ไม่ใช่ทั้งโฟลเดอร์ เพราะโฟลเดอร์มี private key ของ broker อยู่
+  - ตั้ง env ไว้เป็น `MQTT_CA_FILE=/run/mqtt-ca/ca.crt` เพื่อส่งให้ตัวติดตั้ง Edge
+  - ถ้าไม่มีไฟล์นี้ `POST /edge/bootstrap` จะตอบ 503 **โดยไม่ใช้โค้ดติดตั้งทิ้ง**
+  - ส่งให้ตัวติดตั้งเฉพาะบล็อก `CERTIFICATE` ที่เป็น X.509 จริงเท่านั้น ต่อให้ mount ไฟล์ที่มี private key ปนมาผิดๆ ก็จะไม่หลุดออกไป
+- **Caddy ส่ง `/edge/bootstrap` ไปที่ API** (ต้อง `up -d` ให้ proxy อ่าน Caddyfile ใหม่ หรือ `restart proxy`) · โค้ดติดตั้งส่งใน body ไม่อยู่ใน URL จึงไม่ติดไปใน access log ของ Caddy/nginx/Cloudflare
+- คำสั่งติดตั้งบรรทัดเดียว (`install.sh`) **มากับ image ของ Aether Edge ใน phase E** ตอนนี้ยังใช้ไม่ได้
+- **หลัง bootstrap ให้หยุด agent ตัวเก่าของ gateway นั้น**
+  - Mosquitto ไม่ตัด session ที่ login ไว้แล้ว ตอนเปลี่ยนรหัสผ่าน
+  - session เก่าจะหลุดเมื่อ agent ตัวใหม่ต่อเข้ามาด้วย client id เดียวกัน (`gw-<id>`)
+  - ถ้าสงสัยว่ารหัสเก่ารั่ว ให้ `restart mqtt` เพื่อตัดทุก session (gateway ต่อกลับเองภายในไม่กี่วินาที)
+  - รายละเอียดที่ [aether-edge.md](platform/aether-edge.md)
+- ถ้าเว็บใช้ CA ภายใน (`--tls internal`) Edge ต้องเชื่อ root ของ Caddy เพื่อดึงค่าตั้งผ่าน HTTPS ให้ export ครั้งเดียว:
+  ```sh
+  docker compose --env-file .env.prod -f infra/prod/compose.yaml cp proxy:/data/caddy/pki/authorities/local/root.crt <secrets>/edge-web-ca/root.crt
+  docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api
+  ```
+  ถ้าเว็บใช้ใบรับรองจริง (ACME หรือหลัง Cloudflare) ไม่ต้องทำขั้นนี้
+
+`setup.py` สร้างโฟลเดอร์ `<secrets>/edge-web-ca` ให้ ลำดับ rollout คือ `git pull` → รัน `setup.py` ด้วย flag ชุดเดิม → `build` → `up -d` (api และ proxy ถูกสร้างใหม่)
+
+local key ของ Tuya ถูกเข้ารหัสด้วยกุญแจที่ derive จาก `CHANNEL_SEAL_KEY` (หรือ JWT key ถ้าไม่ได้ตั้ง) **สำรอง `.env.prod` ไว้แยกจาก backup ฐานข้อมูล** เหมือนกรณี secret ของช่องทางแจ้งเตือน ถ้ากุญแจหาย ต้องนำเข้าจาก Tuya ใหม่
 
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 

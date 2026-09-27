@@ -265,15 +265,8 @@ func (r *Repository) saveTuyaAvailability(tx *gorm.DB, tenant, gateway string, m
 	return r.setReportedLiveness(tx, tenant, gateway, d.IEEE, d.FriendlyName, online, source, now)
 }
 
-// TuyaImport is one device of a key import (phase D fills it from the Tuya cloud). The local key is already
-// sealed; the repository never sees it in the clear.
-type TuyaImport struct {
-	TuyaID, Name, Category, ProductID string
-	Sub                               bool
-	Spec                              []tuya.DP
-	LocalKeySealed                    string
-	KeyFingerprint                    string
-}
+// TuyaImport is one device of a key import (tuya.Import): the local key is already sealed.
+type TuyaImport = tuya.Import
 
 // SaveTuyaDevices stores imported devices under an Aether Edge gateway: their specification, its translation, and
 // the sealed local key. A device imported again gets the new key and specification (a re-paired device changes

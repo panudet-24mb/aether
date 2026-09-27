@@ -14,29 +14,32 @@ import (
 	"time"
 )
 
-func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
-	settings := func() (fiber.Map, error) {
-		host := os.Getenv("MQTT_PUBLIC_HOST")
-		port, e := strconv.Atoi(os.Getenv("MQTT_PUBLIC_PORT"))
-		scheme := os.Getenv("MQTT_PUBLIC_SCHEME")
-		if host == "" || strings.ContainsAny(host, "/ @\r\n") || port < 1 || port > 65535 || e != nil || (scheme != "ssl" && scheme != "tcp") || (cfg.Environment != "development" && cfg.Environment != "test" && scheme != "ssl") {
-			return nil, fiber.ErrServiceUnavailable
-		}
-		if strings.Contains(host, ":") && net.ParseIP(host) == nil {
-			return nil, fiber.ErrServiceUnavailable
-		}
-		out := fiber.Map{"host": host, "port": port, "scheme": scheme, "tls": scheme == "ssl", "qos": 1, "keep_alive": 120}
-		// Gateways that cannot do TLS: the operator must opt in explicitly (MQTT_ALLOW_PLAINTEXT=true). The
-		// broker still demands the per-gateway password and ACL, but both travel unencrypted on the LAN.
-		if os.Getenv("MQTT_ALLOW_PLAINTEXT") == "true" {
-			plain, e := strconv.Atoi(os.Getenv("MQTT_PLAIN_PORT"))
-			if e != nil || plain < 1 || plain > 65535 || plain == port {
-				return nil, fiber.ErrServiceUnavailable
-			}
-			out["plaintext"] = fiber.Map{"port": plain, "scheme": "tcp"}
-		}
-		return out, nil
+// mqttSettings is the broker endpoint gateways connect to, from the deployment's MQTT_PUBLIC_* settings.
+func mqttSettings(cfg config.Config) (fiber.Map, error) {
+	host := os.Getenv("MQTT_PUBLIC_HOST")
+	port, e := strconv.Atoi(os.Getenv("MQTT_PUBLIC_PORT"))
+	scheme := os.Getenv("MQTT_PUBLIC_SCHEME")
+	if host == "" || strings.ContainsAny(host, "/ @\r\n") || port < 1 || port > 65535 || e != nil || (scheme != "ssl" && scheme != "tcp") || (cfg.Environment != "development" && cfg.Environment != "test" && scheme != "ssl") {
+		return nil, fiber.ErrServiceUnavailable
 	}
+	if strings.Contains(host, ":") && net.ParseIP(host) == nil {
+		return nil, fiber.ErrServiceUnavailable
+	}
+	out := fiber.Map{"host": host, "port": port, "scheme": scheme, "tls": scheme == "ssl", "qos": 1, "keep_alive": 120}
+	// Gateways that cannot do TLS: the operator must opt in explicitly (MQTT_ALLOW_PLAINTEXT=true). The
+	// broker still demands the per-gateway password and ACL, but both travel unencrypted on the LAN.
+	if os.Getenv("MQTT_ALLOW_PLAINTEXT") == "true" {
+		plain, e := strconv.Atoi(os.Getenv("MQTT_PLAIN_PORT"))
+		if e != nil || plain < 1 || plain > 65535 || plain == port {
+			return nil, fiber.ErrServiceUnavailable
+		}
+		out["plaintext"] = fiber.Map{"port": plain, "scheme": "tcp"}
+	}
+	return out, nil
+}
+
+func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
+	settings := func() (fiber.Map, error) { return mqttSettings(cfg) }
 	principal := func(c fiber.Ctx) (domain.Principal, error) {
 		p := c.Locals("principal").(domain.Principal)
 		if !p.CanManageDevices() {

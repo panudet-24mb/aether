@@ -7,19 +7,19 @@ import "encoding/json"
 // beacon, battery, rssi), the persisted device events (input.events), the workspace's open alerts
 // (input.alerts) and the server clock (input.now). No DOM, timers or network exist in this runtime.
 
-const kitCSS = `body{margin:0;padding:20px;background:#10191f;color:#e6f2ee;font-family:system-ui,sans-serif}
-.eyebrow{font-size:11px;letter-spacing:3px;color:#8fa3a8;text-transform:uppercase}
+const kitCSS = `body{margin:0;padding:20px;background:#0e1312;color:#e6edea;font-family:'Avenir Next','Segoe UI',Tahoma,system-ui,sans-serif}
+.eyebrow{font-size:11px;letter-spacing:3px;color:#939e9c;text-transform:uppercase}
 .state{font-size:40px;font-weight:500;margin:14px 0 6px;line-height:1.1}
 .state.zone{font-size:24px;line-height:1.3;overflow-wrap:anywhere}
-.ok{color:#a7f3d0}.warn{color:#f6c177}.bad{color:#ff8f70}
-.row{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:#9fb1b6}
-.row strong{display:block;font-size:18px;font-weight:500;color:#e6f2ee}
-.muted{font-size:12px;color:#8fa3a8;margin-top:10px;line-height:1.6}
+.ok{color:#58eda9}.warn{color:#f8b74f}.bad{color:#ff8164}
+.row{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:#939e9c}
+.row strong{display:block;font-size:18px;font-weight:500;color:#e6edea}
+.muted{font-size:12px;color:#939e9c;margin-top:10px;line-height:1.6}
 ul{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
-li{display:flex;justify-content:space-between;gap:12px;padding:9px 11px;border-radius:8px;background:#16232a;font-size:13px}
-li small{color:#8fa3a8;white-space:nowrap}
-li.bad{border-left:3px solid #ff8f70}li.warn{border-left:3px solid #f6c177}li.ok{border-left:3px solid #a7f3d0}
-svg{width:100%;height:70px;margin-top:10px}code{font-family:ui-monospace,monospace;font-size:12px;color:#b5c7cc;overflow-wrap:anywhere}`
+li{display:flex;justify-content:space-between;gap:12px;padding:9px 11px;border-radius:8px;background:#121a18;font-size:13px}
+li small{color:#939e9c;white-space:nowrap}
+li.bad{border-left:3px solid #ff8164}li.warn{border-left:3px solid #f8b74f}li.ok{border-left:3px solid #58eda9}
+svg{width:100%;height:70px;margin-top:10px}code{font-family:ui-monospace,monospace;font-size:12px;color:#939e9c;overflow-wrap:anywhere}`
 
 // Shared helpers are repeated in each widget because every render runs in a fresh, isolated context.
 const kitHelpers = `function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
@@ -35,7 +35,7 @@ var TONE={tamper:'bad',button:'bad',leak:'bad',offline:'bad',threshold:'warn',mo
 
 // Presence list shared by the wearable widgets: one row per gateway that hears the tag, with a signal bar.
 var presenceJS = `function bar(r){if(r==null)return 0;return Math.max(4,Math.min(100,Math.round((r+100)/55*100)));}
-function zones(s,now){if(!s.length)return '';return '<ul>'+s.map(function(x){return '<li class="'+(x.current?'ok':x.fresh?'warn':'')+'" style="display:block"><div style="display:flex;justify-content:space-between;gap:12px"><span>'+esc(x.gateway_name)+(x.current?' · อยู่ที่นี่':'')+'</span><small>'+(x.fresh?(x.rssi==null?'—':x.rssi+' dBm'):ago(x.last_seen,now))+'</small></div><div style="height:4px;border-radius:2px;background:#22323a;margin-top:7px"><div style="height:4px;border-radius:2px;width:'+(x.fresh?bar(x.rssi):0)+'%;background:'+(x.current?'#a7f3d0':'#f6c177')+'"></div></div></li>';}).join('')+'</ul>';}
+function zones(s,now){if(!s.length)return '';return '<ul>'+s.map(function(x){return '<li class="'+(x.current?'ok':x.fresh?'warn':'')+'" style="display:block"><div style="display:flex;justify-content:space-between;gap:12px"><span>'+esc(x.gateway_name)+(x.current?' · อยู่ที่นี่':'')+'</span><small>'+(x.fresh?(x.rssi==null?'—':x.rssi+' dBm'):ago(x.last_seen,now))+'</small></div><div style="height:4px;border-radius:2px;background:#222b29;margin-top:7px"><div style="height:4px;border-radius:2px;width:'+(x.fresh?bar(x.rssi):0)+'%;background:'+(x.current?'#58eda9':'#f8b74f')+'"></div></div></li>';}).join('')+'</ul>';}
 `
 
 func kitWidgets() []Item {
@@ -48,7 +48,7 @@ func kitWidgets() []Item {
  if(m.accel_g==null&&m.vibration==null&&m.motion==null)return {html:'<div class="eyebrow">MOTION</div><div class="state warn">ไม่มีข้อมูลการเคลื่อนไหว</div><div class="muted">อุปกรณ์นี้ยังไม่ส่งเฟรม accelerometer / vibration</div>'};
  var moving=m.vibration===1||m.motion===1;
  var pts=(input.history||[]).map(function(h){return h.metrics&&h.metrics.accel_g;}).filter(function(v){return typeof v==='number';}).slice(-60);
- var chart='';if(pts.length>1){var lo=Math.min.apply(null,pts),hi=Math.max.apply(null,pts);if(hi-lo<0.05){hi=lo+0.05;}chart='<svg viewBox="0 0 600 70"><polyline fill="none" stroke="#a7f3d0" stroke-width="2" points="'+pts.map(function(v,i){return (i/(pts.length-1)*600).toFixed(1)+','+(64-(v-lo)/(hi-lo)*58).toFixed(1);}).join(' ')+'"/></svg>';}
+ var chart='';if(pts.length>1){var lo=Math.min.apply(null,pts),hi=Math.max.apply(null,pts);if(hi-lo<0.05){hi=lo+0.05;}chart='<svg viewBox="0 0 600 70"><polyline fill="none" stroke="#58eda9" stroke-width="2" points="'+pts.map(function(v,i){return (i/(pts.length-1)*600).toFixed(1)+','+(64-(v-lo)/(hi-lo)*58).toFixed(1);}).join(' ')+'"/></svg>';}
  return {html:'<div class="eyebrow">MOTION</div><div class="state '+(moving?'warn':'ok')+'">'+(moving?'กำลังเคลื่อนไหว':'นิ่ง')+'</div><div class="row">'+(m.accel_g!=null?'<div><strong>'+Number(m.accel_g).toFixed(2)+' g</strong>แรงรวม |a|</div>':'')+meta(d)+'</div>'+chart+foot(d,input.source,now)};}`),
 		make("official-tamper-v1", "Tamper status", "MBT01 / A1-20", []string{"tamper"}, `function render(input){var d=input.data||{},m=d.metrics||{},now=input.now;
  if(m.tamper==null)return {html:'<div class="eyebrow">TAMPER</div><div class="state warn">ไม่มีเฟรม tamper</div><div class="muted">อุปกรณ์นี้ยังไม่ส่งเฟรม A1-20</div>'};

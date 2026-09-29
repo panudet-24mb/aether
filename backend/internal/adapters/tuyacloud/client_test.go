@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -54,26 +55,34 @@ type fakeTuya struct {
 	respond  func(path string, q url.Values) (int, string)
 	now      func() time.Time
 	badSigns int
+	// Last request seen, for assertions on method and body.
+	method, contentType string
+	body                []byte
 }
 
 func (f *fakeTuya) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if len(body) == 0 {
+		body = nil
+	}
 	f.mu.Lock()
 	f.paths = append(f.paths, r.URL.Path)
+	f.method, f.contentType, f.body = r.Method, r.Header.Get("Content-Type"), body
 	f.mu.Unlock()
 	token := r.Header.Get("access_token")
-	want := Sign(r.Method, signedPath(r.URL.Path, r.URL.Query()), nil, f.id, f.key, token, r.Header.Get("t"), "")
+	want := Sign(r.Method, signedPath(r.URL.Path, r.URL.Query()), body, f.id, f.key, token, r.Header.Get("t"), "")
 	if r.Header.Get("client_id") != f.id || r.Header.Get("sign") != want || r.Header.Get("sign_method") != "HMAC-SHA256" {
 		f.badSigns++
 		w.Write([]byte(`{"success":false,"code":1004,"msg":"sign invalid"}`))
 		return
 	}
-	if r.URL.Path != "/v1.0/token" && token != f.token {
+	if !strings.HasPrefix(r.URL.Path, "/v1.0/token") && token != f.token {
 		w.Write([]byte(`{"success":false,"code":1010,"msg":"token invalid"}`))
 		return
 	}
-	code, body := f.respond(r.URL.Path, r.URL.Query())
+	code, reply := f.respond(r.URL.Path, r.URL.Query())
 	w.WriteHeader(code)
-	w.Write([]byte(body))
+	w.Write([]byte(reply))
 }
 
 func fixture(t *testing.T, name string) string {

@@ -12,7 +12,10 @@ import (
 // Ref is how one Aether property maps back to its data point. The wire value of a command and the real value
 // of a report are converted through it; the Edge itself never knows what a data point means.
 type Ref struct {
-	DP   int    `json:"dp"`
+	DP int `json:"dp"`
+	// Code is the data point's Tuya code, which Tuya Cloud commands address (the LAN protocol uses DP). Dp maps
+	// stored before cloud mode lack it; cloud devices are always translated fresh, so theirs carry it.
+	Code string `json:"code,omitempty"`
 	Kind string `json:"kind"` // onoff | bool | enumbool | value | enum | string | bitmap
 	// Scale: real = raw / 10^Scale (value). Div is an extra read-only divisor (mA reported, A kept).
 	Scale int     `json:"scale,omitempty"`
@@ -149,7 +152,7 @@ func Translate(category string, dps []DP) Translation {
 			access |= zigbee2mqtt.AccessSet
 		}
 		f := zigbee2mqtt.Feature{Name: name, Property: name, Access: access, Unit: d.Unit}
-		ref := Ref{DP: d.ID, Writable: d.Writable()}
+		ref := Ref{DP: d.ID, Code: d.Code, Writable: d.Writable()}
 		switch d.Type {
 		case "bool":
 			f.Type = "binary"

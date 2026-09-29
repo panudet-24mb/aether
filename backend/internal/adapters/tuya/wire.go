@@ -76,40 +76,70 @@ func realValue(ref Ref, raw json.RawMessage) (json.RawMessage, bool) {
 // Wire encodes a command's real value (already validated against the exposes) into the data point the device
 // takes: {"dps":{"<id>":<raw>}}. Anything that does not fit the data point exactly is refused.
 func Wire(dpMap map[string]Ref, property string, value json.RawMessage) (json.RawMessage, error) {
+	ref, raw, e := rawCommand(dpMap, property, value)
+	if e != nil {
+		return nil, e
+	}
+	b, e := json.Marshal(map[string]map[string]any{"dps": {strconv.Itoa(ref.DP): raw}})
+	if e != nil {
+		return nil, domain.Because(domain.ErrInvalid, "value")
+	}
+	return b, nil
+}
+
+// CloudWire encodes the same command for Tuya Cloud, which addresses data points by code: {"<code>":<raw>}, the
+// properties object of POST /v2.0/cloud/thing/{id}/shadow/properties/issue. The value checks are Wire's.
+func CloudWire(dpMap map[string]Ref, property string, value json.RawMessage) (json.RawMessage, error) {
+	ref, raw, e := rawCommand(dpMap, property, value)
+	if e != nil {
+		return nil, e
+	}
+	if !codePattern.MatchString(ref.Code) {
+		return nil, domain.Because(domain.ErrInvalid, "unknown_code")
+	}
+	b, e := json.Marshal(map[string]any{ref.Code: raw})
+	if e != nil {
+		return nil, domain.Because(domain.ErrInvalid, "value")
+	}
+	return b, nil
+}
+
+// rawCommand converts a real value into the raw data-point value, refusing anything that does not fit exactly.
+func rawCommand(dpMap map[string]Ref, property string, value json.RawMessage) (Ref, any, error) {
 	ref, ok := dpMap[property]
 	if !ok {
-		return nil, domain.Because(domain.ErrInvalid, "unknown_property")
+		return ref, nil, domain.Because(domain.ErrInvalid, "unknown_property")
 	}
 	if !ref.Writable {
-		return nil, domain.Because(domain.ErrInvalid, "not_settable")
+		return ref, nil, domain.Because(domain.ErrInvalid, "not_settable")
 	}
 	var raw any
 	switch ref.Kind {
 	case "onoff":
 		var s string
 		if json.Unmarshal(value, &s) != nil || (s != "ON" && s != "OFF") {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		raw = s == "ON"
 	case "bool":
 		var b bool
 		if json.Unmarshal(value, &b) != nil {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		raw = b
 	case "value":
 		var n float64
 		if json.Unmarshal(value, &n) != nil || math.IsNaN(n) || math.IsInf(n, 0) || !isNumber(value) {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		scaled := n * math.Pow(10, float64(ref.Scale))
 		r := math.Round(scaled)
 		if math.Abs(scaled-r) > 1e-6*math.Max(1, math.Abs(scaled)) || math.Abs(r) > 1e15 {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		v := int64(r)
 		if ref.Min != nil && v < *ref.Min || ref.Max != nil && v > *ref.Max {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		if ref.Step != nil && *ref.Step > 1 {
 			base := int64(0)
@@ -117,24 +147,20 @@ func Wire(dpMap map[string]Ref, property string, value json.RawMessage) (json.Ra
 				base = *ref.Min
 			}
 			if (v-base)%*ref.Step != 0 {
-				return nil, domain.Because(domain.ErrInvalid, "value")
+				return ref, nil, domain.Because(domain.ErrInvalid, "value")
 			}
 		}
 		raw = v
 	case "enum":
 		var s string
 		if json.Unmarshal(value, &s) != nil || !contains(ref.Values, s) {
-			return nil, domain.Because(domain.ErrInvalid, "value")
+			return ref, nil, domain.Because(domain.ErrInvalid, "value")
 		}
 		raw = s
 	default:
-		return nil, domain.Because(domain.ErrInvalid, "unsupported_feature")
+		return ref, nil, domain.Because(domain.ErrInvalid, "unsupported_feature")
 	}
-	b, e := json.Marshal(map[string]map[string]any{"dps": {strconv.Itoa(ref.DP): raw}})
-	if e != nil {
-		return nil, domain.Because(domain.ErrInvalid, "value")
-	}
-	return b, nil
+	return ref, raw, nil
 }
 
 func isNumber(v json.RawMessage) bool {

@@ -1,11 +1,11 @@
-// Package tuyacloud is the one-time import side of Aether Edge: it asks the Tuya IoT Platform (OpenAPI) for the
-// devices of the app account linked to the user's own cloud project, with their local keys, and for each
-// product's data-point model. It is used for the duration of one import and never at runtime: afterwards the
-// devices are reached on the LAN by the agent (docs/platform/tuya-local.md).
+// Package tuyacloud talks to the Tuya IoT Platform of the user's own cloud project. The import side of Aether
+// Edge asks the OpenAPI for the devices of the linked app account, with their local keys, and for each product's
+// data-point model, for the duration of one import (docs/platform/tuya-local.md). Tuya Cloud mode additionally
+// reads and sets device properties through the OpenAPI and consumes the project's Message Service (mq.go,
+// events.go).
 //
-// Hosts come only from the region enum below, never from input, so a request can go nowhere but Tuya. The
-// credentials live in the Client for the length of one import and are never logged: errors carry Tuya's code
-// and a category, not the request.
+// Hosts come only from the region enums, never from input, so a request can go nowhere but Tuya. Credentials
+// are never logged: errors carry Tuya's code and a category, not the request or Tuya's message text.
 //
 // Signing follows Tuya's "new signature" algorithm (the same as tinytuya's Cloud._tuyaplatform, MIT):
 //
@@ -14,6 +14,7 @@
 package tuyacloud
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -49,12 +50,15 @@ var RegionOrder = []string{"us", "sg", "eu", "in", "us-e", "eu-w", "cn"}
 
 // Limits of one import.
 const (
-	CallTimeout  = 10 * time.Second
-	MaxDevices   = 200
-	maxBody      = 2 << 20
-	pageSize     = 50
-	maxPages     = 8
-	credentialRe = `^[A-Za-z0-9]{8,64}$`
+	CallTimeout = 10 * time.Second
+	// CommandTimeout bounds a property issue: a command must be delivered, or failed, well inside the 10 s
+	// confirmation window.
+	CommandTimeout = 5 * time.Second
+	MaxDevices     = 200
+	maxBody        = 2 << 20
+	pageSize       = 50
+	maxPages       = 8
+	credentialRe   = `^[A-Za-z0-9]{8,64}$`
 )
 
 var credentialPattern = regexp.MustCompile(credentialRe)
@@ -104,15 +108,17 @@ func classify(code int, msg string) error {
 	return apiError(ErrResponse, code)
 }
 
-// Client talks to one region for one import.
+// Client talks to one region with one project's credentials. It is not safe for concurrent use.
 type Client struct {
-	base   string
-	id     string
-	secret string
-	token  string
-	uid    string
-	http   *http.Client
-	now    func() time.Time
+	base    string
+	id      string
+	secret  string
+	token   string
+	refresh string
+	expires time.Time
+	uid     string
+	http    *http.Client
+	now     func() time.Time
 }
 
 // New validates the region and the credentials' shape.
@@ -177,15 +183,25 @@ type envelope struct {
 
 // get performs one signed GET and returns the result document.
 func (c *Client) get(ctx context.Context, path string, query url.Values) (json.RawMessage, error) {
+	return c.do(ctx, http.MethodGet, path, query, nil, c.token, CallTimeout)
+}
+
+// do performs one signed call and returns the result document. token is the access token to sign with, empty for
+// the token-management calls, which Tuya signs without one.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body []byte, token string, timeout time.Duration) (json.RawMessage, error) {
 	t := strconv.FormatInt(c.now().UnixMilli(), 10)
-	sign := Sign(http.MethodGet, signedPath(path, query), nil, c.id, c.secret, c.token, t, "")
+	sign := Sign(method, signedPath(path, query), body, c.id, c.secret, token, t, "")
 	target := c.base + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, e := http.NewRequestWithContext(ctx, method, target, reader)
 	if e != nil {
 		return nil, apiError(ErrResponse, 0)
 	}
@@ -193,8 +209,11 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) (json.R
 	req.Header.Set("sign", sign)
 	req.Header.Set("t", t)
 	req.Header.Set("sign_method", "HMAC-SHA256")
-	if c.token != "" {
-		req.Header.Set("access_token", c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("access_token", token)
 	}
 	res, e := c.http.Do(req)
 	if e != nil {
@@ -224,20 +243,49 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) (json.R
 // Authenticate gets an access token (GET /v1.0/token?grant_type=1). It must be the first call.
 func (c *Client) Authenticate(ctx context.Context) error {
 	c.token = ""
-	raw, e := c.get(ctx, "/v1.0/token", url.Values{"grant_type": {"1"}})
+	raw, e := c.do(ctx, http.MethodGet, "/v1.0/token", url.Values{"grant_type": {"1"}}, nil, "", CallTimeout)
 	if e != nil {
 		return e
 	}
-	var r struct {
-		AccessToken string `json:"access_token"`
-		UID         string `json:"uid"`
+	return c.acceptToken(raw)
+}
+
+// RefreshToken renews the access token with the refresh token (GET /v1.0/token/{refresh_token}, signed without an
+// access token). The path is Tuya's token-management API as documented, not yet exercised against a real project;
+// a caller whose refresh fails simply authenticates again.
+func (c *Client) RefreshToken(ctx context.Context) error {
+	if c.refresh == "" {
+		return apiError(ErrAuth, 0)
 	}
-	if json.Unmarshal(raw, &r) != nil || r.AccessToken == "" || len(r.AccessToken) > 512 {
+	raw, e := c.do(ctx, http.MethodGet, "/v1.0/token/"+url.PathEscape(c.refresh), nil, nil, "", CallTimeout)
+	if e != nil {
+		return e
+	}
+	return c.acceptToken(raw)
+}
+
+func (c *Client) acceptToken(raw json.RawMessage) error {
+	var r struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpireTime   int64  `json:"expire_time"`
+		UID          string `json:"uid"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.AccessToken == "" || len(r.AccessToken) > 512 || len(r.RefreshToken) > 512 {
 		return apiError(ErrResponse, 0)
 	}
-	c.token, c.uid = r.AccessToken, r.UID
+	c.token, c.refresh, c.uid = r.AccessToken, r.RefreshToken, r.UID
+	ttl := time.Duration(r.ExpireTime) * time.Second
+	if ttl <= 0 || ttl > 30*24*time.Hour {
+		ttl = 2 * time.Hour // Tuya's documented token lifetime
+	}
+	c.expires = c.now().Add(ttl)
 	return nil
 }
+
+// ExpiresAt is when the current access token stops working (zero before Authenticate). A worker renews it a few
+// minutes before.
+func (c *Client) ExpiresAt() time.Time { return c.expires }
 
 // Device is one device of the linked app account, as the import needs it. LocalKey is the secret the agent
 // uses on the LAN; the caller seals it at once.
@@ -249,6 +297,10 @@ type Device struct {
 	ProductID string `json:"product_id"`
 	Sub       bool   `json:"sub"`
 	Online    bool   `json:"online"`
+	// GatewayID and NodeID are set for a sub-device (Zigbee or BLE behind a Tuya hub) when the listing carries
+	// them (tinytuya reads gateway_id from the per-user listing); not every endpoint returns them.
+	GatewayID string `json:"gateway_id"`
+	NodeID    string `json:"node_id"`
 }
 
 // Devices lists the linked account's devices, at most MaxDevices. The associated-users endpoint is Tuya's current
@@ -344,3 +396,84 @@ func (c *Client) Model(ctx context.Context, deviceID string) (json.RawMessage, s
 	}
 	return raw, "specifications", nil
 }
+
+// IssueProperties sets properties of a device through Tuya Cloud: POST /v2.0/cloud/thing/{id}/shadow/properties/issue
+// with {"properties": "<JSON object as a string>"} (Tuya "Send Property"). Properties are addressed by data-point
+// code; values must already be validated and encoded (tuya.CloudWire). Tuya fails the call when the device is
+// offline. The call is bounded by CommandTimeout.
+func (c *Client) IssueProperties(ctx context.Context, deviceID string, properties map[string]any) error {
+	if !deviceIDPattern.MatchString(deviceID) || len(properties) == 0 || len(properties) > maxProperties {
+		return apiError(ErrResponse, 0)
+	}
+	for code := range properties {
+		if !codeIDPattern.MatchString(code) {
+			return apiError(ErrResponse, 0)
+		}
+	}
+	inner, e := json.Marshal(properties)
+	if e != nil || len(inner) > maxIssue {
+		return apiError(ErrResponse, 0)
+	}
+	body, e := json.Marshal(map[string]string{"properties": string(inner)})
+	if e != nil {
+		return apiError(ErrResponse, 0)
+	}
+	_, e = c.do(ctx, http.MethodPost, "/v2.0/cloud/thing/"+url.PathEscape(deviceID)+"/shadow/properties/issue", nil, body, c.token, CommandTimeout)
+	return e
+}
+
+// Property is one property of a device's shadow as Tuya Cloud reports it.
+type Property struct {
+	Code  string          `json:"code"`
+	DPID  int             `json:"dp_id"`
+	Time  int64           `json:"time"`
+	Value json.RawMessage `json:"value"`
+}
+
+// Properties reads a device's current properties (GET /v2.0/cloud/thing/{id}/shadow/properties, optionally only
+// some codes). Used once per device when a link starts and on explicit refresh, never on a timer: a trial project
+// has very few API calls a month.
+func (c *Client) Properties(ctx context.Context, deviceID string, codes ...string) ([]Property, error) {
+	if !deviceIDPattern.MatchString(deviceID) || len(codes) > maxProperties {
+		return nil, apiError(ErrResponse, 0)
+	}
+	var query url.Values
+	if len(codes) > 0 {
+		for _, code := range codes {
+			if !codeIDPattern.MatchString(code) {
+				return nil, apiError(ErrResponse, 0)
+			}
+		}
+		query = url.Values{"codes": {strings.Join(codes, ",")}}
+	}
+	raw, e := c.get(ctx, "/v2.0/cloud/thing/"+url.PathEscape(deviceID)+"/shadow/properties", query)
+	if e != nil {
+		return nil, e
+	}
+	var r struct {
+		Properties []Property `json:"properties"`
+	}
+	if json.Unmarshal(raw, &r) != nil || len(r.Properties) > maxProperties {
+		return nil, apiError(ErrResponse, 0)
+	}
+	out := make([]Property, 0, len(r.Properties))
+	for _, p := range r.Properties {
+		if !codeIDPattern.MatchString(p.Code) || len(p.Value) > maxPropertyValue || (len(p.Value) > 0 && !json.Valid(p.Value)) {
+			return nil, apiError(ErrResponse, 0)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// Bounds of the property calls: a device has at most 128 data points (tuya.MaxDPs); a value is small.
+const (
+	maxProperties    = 128
+	maxPropertyValue = 1 << 10
+	maxIssue         = 16 << 10
+)
+
+var (
+	deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{16,32}$`)
+	codeIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+)

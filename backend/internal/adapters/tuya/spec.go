@@ -35,6 +35,18 @@ const MaxDPs = 128
 
 var codePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
 
+// ValidCode reports a Tuya data-point code as Aether accepts it.
+func ValidCode(s string) bool { return codePattern.MatchString(s) }
+
+// CodeIndex maps each data point's code to its id (the cloud reports and takes codes, the LAN protocol ids).
+func CodeIndex(spec []DP) map[string]int {
+	out := make(map[string]int, len(spec))
+	for _, d := range spec {
+		out[d.Code] = d.ID
+	}
+	return out
+}
+
 // Readable and Writable follow the access mode.
 func (d DP) Readable() bool { return d.Access == "ro" || d.Access == "rw" }
 func (d DP) Writable() bool { return d.Access == "rw" || d.Access == "wr" }

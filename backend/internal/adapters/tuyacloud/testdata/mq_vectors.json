@@ -1,0 +1,28 @@
+{
+ "access_id": "testaccessid00000000",
+ "secret": "testsecret000000000000000000000a",
+ "password": "47f5b8720a9763bf",
+ "password_formula": "md5hex(access_id + md5hex(secret))[8:24]",
+ "check_password": "47f5b8720a9763bf",
+ "consumer_url": "wss://mqe.tuyaus.com:8285/ws/v2/consumer/persistent/testaccessid00000000/out/event/testaccessid00000000-sub?ackTimeoutMillis=3000&subscriptionType=Failover",
+ "ecb": {
+  "status4": {
+   "plaintext": "{\"dataId\":\"AAXI3c1i6xxx0001\",\"devId\":\"bf1111111111111111aa01\",\"productKey\":\"awgmk9pixxx00001\",\"status\":[{\"code\":\"switch_1\",\"value\":true,\"t\":1790000000123,\"1\":\"true\"},{\"code\":\"cur_power\",\"value\":1234,\"t\":1790000000123,\"19\":\"1234\"}]}",
+   "data": "75JarMJGWsOSlZ5KosXcQtUwlc7rdhD+QzUl7+YFRX38tc8JER3/lS+4HRQKqfGcGWbFHpLarpH5cZnMfAaEmu7Xd2xd/nGmDqMlczxxFn82XWgeOGwAZO7jpzwpfwfsdLcB3men9wmXXRkUjqni8jg/EOnKDgiVJmhcXrvzYQwBF7Ds9AjZuL8yIUjtN1DjxJps6LeFYle8yGTG/C3GAA79E+i2MSfDdnl9/osoSPwLBILzYr900v7KL3Hr7kpRFC5sHOB4Da3t/9ZRIfuyBg4m/owzPsz8Kxugwj/zM7I9Xz+EvEkLvy8Lo9NvQkYD"
+  },
+  "online20": {
+   "plaintext": "{\"devId\":\"bf1111111111111111aa01\",\"productKey\":\"awgmk9pixxx00001\",\"bizCode\":\"online\",\"bizData\":{\"time\":1790000000},\"ts\":1790000000456}",
+   "data": "1cHS+6WwmyLcJDpC4u3mkWen1vkFKFotNwti6B1O2XIpr3hspy2UvGeX9wJri3riURpvy76F3JikEM+2NfABuTtfMDBLKnIJ72NyNCg6fc0DhZnNT+fVLXvkc/l4jHNaRddo820n7C5syWt7JRKIJsj5AEUYvDHaYDfqlOuhlRJ7g88vdgWRDXhgcB6MDcP9"
+  }
+ },
+ "gcm": {
+  "status4": {
+   "plaintext": "{\"dataId\":\"AAXI3c1i6xxx0001\",\"devId\":\"bf1111111111111111aa01\",\"productKey\":\"awgmk9pixxx00001\",\"status\":[{\"code\":\"switch_1\",\"value\":true,\"t\":1790000000123,\"1\":\"true\"},{\"code\":\"cur_power\",\"value\":1234,\"t\":1790000000123,\"19\":\"1234\"}]}",
+   "data": "EBAQEBAQEBAQEBAQmZ/cPQs3f3/DV0dhShd7h/5/FODXNkJvs2PliRohX8vWTypaRD9YRl1K83OUmeDknpcSuthhIcwBeEgEUkotlDGSaiTDKIT6abCUZp00MDSEy5jpvu7lSaP6pySg7Qi6fiaq6cY9+ux94SO7L0tEm0YgW8Sz7SB+B37BIGqotw8WEYpIj8PRnvjgxi5zG8k6gcj5r5gKg3N9AdlfK1IU9wQsB2VHKMQRo/mMBrQdzukMsGRVJWqZwFlCrYGK/6ExsexGI4vg7SQb0ngpJ0vYF0nxy1LQJpZ8SpV8lucTgQluw7WrlHF6cL2zNOPRSThbv+NUkPK3CA=="
+  },
+  "online20": {
+   "plaintext": "{\"devId\":\"bf1111111111111111aa01\",\"productKey\":\"awgmk9pixxx00001\",\"bizCode\":\"online\",\"bizData\":{\"time\":1790000000},\"ts\":1790000000456}",
+   "data": "ERERERERERERERER2ROXTJSpaD308SO9+bFX+xSpJladnqNx8CdqpolnF1oV683byUOlUThL3Ep0m4XV1ex3055m8vHmeeJHRawO7T1vJEViVLd4uH67wx7gsZgHBsR97YvbezAteD5XzQMU/2jk0yfs41Ij0E05rvp9M7JqUaJUVRfyWZMDqtdM/CzLQL+Uh/SJZxaP8isEhGZPLlxEsDe6"
+  }
+ }
+}

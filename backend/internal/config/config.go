@@ -23,9 +23,9 @@ type Config struct {
 	// several live pages open, share this budget, so deployments may raise it.
 	APIRateLimit int
 	// Storage and rollout controls (see docs/production.md).
-	SampleRetentionDays  int  // decoded samples older than this are deleted by the worker (default 90)
+	SampleRetentionDays  int  // decoded samples are kept this long, dropped by weekly partition: up to 7 days more (default 90)
 	SampleMinIntervalSec int  // store at most one environment sample per stream per interval (0 = every uplink)
-	BLEHistoryHours      int  // raw BLE advertisement archive kept for Studio decoders (default 24)
+	BLEHistoryHours      int  // raw BLE advertisement archive for Studio decoders, dropped by daily partition: up to 24 h more (default 24)
 	DiscoveryLimit       int  // streams per gateway for tags that are NOT registered devices (default 100)
 	AlertsShadow         bool // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
 	AutomationCommands   bool // automations may command devices (action.command); off by default, see docs/platform/automation.md

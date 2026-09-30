@@ -79,7 +79,7 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
   ) latest
   LEFT JOIN core.sensor_streams s ON s.gateway_id=latest.gateway_id AND s.external_id=latest.external_id
   LEFT JOIN LATERAL (SELECT reading FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id
-    ORDER BY received_at DESC,event_key DESC LIMIT 1) smp ON true
+    ORDER BY received_at DESC,event_key LIMIT 1) smp ON true
   ORDER BY latest.received_at DESC,latest.external_id LIMIT 500`, gateway, since).Scan(&out).Error
 	})
 	return out, e

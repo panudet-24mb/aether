@@ -63,4 +63,5 @@ psql --dbname "$TARGET" --set=ON_ERROR_STOP=1 -c "GRANT CREATE ON DATABASE \"$TA
 pg_restore --dbname "$TARGET" --exit-on-error "$DUMP"
 
 echo "restored $DUMP into $TARGET"
-q "$TARGET" "SELECT 'tables=' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='r' AND n.nspname IN ('core','identity')"
+# Partitioned tables count once (their partitions are not separate tables).
+q "$TARGET" "SELECT 'tables=' || count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND NOT c.relispartition AND n.nspname IN ('core','identity')"

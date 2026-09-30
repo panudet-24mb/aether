@@ -52,6 +52,8 @@
 
 เผื่อเพิ่มอีก **2 เท่า** สำหรับ WAL, autovacuum bloat, ไฟล์ backup 14+8 ชุด และ Docker image
 
+**retention เป็นหน่วย partition** (migration `00037`): `core.sensor_samples` แบ่งรายสัปดาห์ (เริ่มวันจันทร์ 00:00 UTC) และ `core.ble_history` แบ่งรายวัน (00:00 UTC) ของที่หมดอายุถูกทิ้งทีละทั้งก้อนด้วย `DROP TABLE` จึงอยู่นานกว่าค่าที่ตั้งได้ถึงหนึ่งช่วง: sample อยู่ `SAMPLE_RETENTION_DAYS` ถึง `SAMPLE_RETENTION_DAYS + 7` วัน, BLE history อยู่ `BLE_HISTORY_HOURS` ถึง `BLE_HISTORY_HOURS + 24` ชั่วโมง เผื่อดิสก์เพิ่มอีกหนึ่งสัปดาห์ของ sample ในตารางข้างบน
+
 คลัง PITR (`--pitr-dir`) ต้องการที่เพิ่ม ≈ **2 × full backup ที่บีบอัดแล้ว + WAL 1–2 สัปดาห์** (zstd บีบ WAL ได้มาก ปกติ
 เล็กกว่าขนาดฐานข้อมูล) ดูตัวเลขจริงได้จาก `infra/prod/pitr-info.sh` หลังเปิดใช้ 1 สัปดาห์ ถ้ามีดิสก์แยก ให้วางคลังไว้คนละดิสก์กับ Docker
 
@@ -452,6 +454,57 @@ curl -s https://aether.hospital.local/health/ready
 
 ช่วงที่ระบบสะดุดคือข้อ 6.5 ประมาณ 10–30 วินาที gateway จะ reconnect เอง (QoS 1 + persistent session ทำให้ packet ที่ค้างถูกส่งซ้ำ)
 
+### Migration `00036`/`00037`: แบ่ง partition ประวัติ sensor
+
+อัปเกรดที่มีสองไฟล์นี้ทำแบบออนไลน์ ไม่ต้องหยุดระบบ แต่เป็นการเปลี่ยนโครงสร้างตารางใหญ่ที่สุดของระบบ ให้ทำตามนี้:
+
+- **`00036`** (ไม่อยู่ใน transaction): สร้าง primary key ใหม่ที่มี `received_at` แบบ `CONCURRENTLY` (ingest เขียนต่อได้ ใช้เวลาเป็นนาทีบนตารางใหญ่) สลับ key ด้วย lock ระดับมิลลิวินาที แล้วใส่ `CHECK (received_at < X)` ที่ validate ขณะ ingest ยังเขียนอยู่ · X = วันจันทร์ 00:00 UTC ที่อยู่ข้างหน้า 7–14 วัน (sample) และเที่ยงคืน UTC อีก 7 วัน (BLE) · แต่ละตารางทำใน transaction ของตัวเอง ตามลำดับที่ ingest เขียน (ble_history ก่อน sensor_samples) จึงไม่ถือ lock สองตารางพร้อมกัน
+- **`00037`** (transaction เดียว): เปลี่ยนชื่อตารางเดิมเป็น `<ตาราง>_legacy` แล้วแนบเป็น partition `FROM (MINVALUE) TO (X)` โดยไม่ copy ข้อมูล (index, primary key, foreign key เดิมถูกใช้ต่อ ไม่ build ใหม่) สร้าง partition ล่วงหน้าและ partition `DEFAULT` · lock `gateways`, `ble_history`, `sensor_streams`, `device_templates`, `sensor_samples` แบบ ACCESS EXCLUSIVE ตามลำดับเดียวกับ ingest ถือไว้ไม่ถึงวินาที (API และ ingest ที่แตะตารางเหล่านี้จะรอช่วงนั้น) · ถ้า lock ใดไม่ว่าเกิน 100 ms จะคืน lock ทั้งหมดแล้วลองใหม่ (log เป็น NOTICE `00037: tables busy, retrying` · รวมราว 100 วินาทีก่อนล้ม) transaction ที่ต่อคิวอยู่จึงรอไม่เกินราวครึ่งวินาทีต่อรอบ ต่ำกว่า `deadlock_timeout` (1 วินาที) deadlock detector จึงไม่ตัด ingest หรือ API ทิ้ง · `00036` ก็รอ lock ครั้งละไม่เกิน 300 ms แล้วลองใหม่เช่นกัน
+
+**ผลข้างเคียง: การกันเก็บซ้ำของ Minew** เดิม packet ที่ payload เหมือนเดิมทุกไบต์ถูกเก็บครั้งเดียวตลอดไป (key ไม่มีเวลา) ตอนนี้ key มี `received_at` จึงกันซ้ำด้วยการมองย้อนหลัง 24 ชั่วโมง: redelivery ของ QoS 1 ยังถูกเก็บครั้งเดียว แต่ tag ที่ส่ง payload เดิมเป๊ะหลังผ่านไปเกินหนึ่งวันจะได้ sample ใหม่ · การตรวจซ้ำ (และการ thinning) มองเฉพาะช่วง `(ตอนนี้ − หน้าต่าง, ตอนนี้]` เพื่อให้อ่านแค่ partition ในช่วงนั้น แถวที่ถูกเก็บตอนนาฬิกาเซิร์ฟเวอร์เดินเร็วเกิน (อยู่ในอนาคต) จึงไม่ถูกนับว่าซ้ำ — ยอมรับได้
+
+`migrate` รันสองไฟล์ต่อกันในครั้งเดียวเสมอ **ถ้า `00036` ผ่านแต่ `00037` ล้ม** (goose บันทึก `00036` ไว้แล้ว) ให้แก้สาเหตุแล้วรัน `migrate` อีกรอบ ซึ่งจะรันเฉพาะ `00037` · มีเวลาอย่างน้อย 7 วันก่อนถึง X ดูค่า X ได้จาก:
+
+```sh
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres psql -U postgres -d aether \
+  -c "SELECT conrelid::regclass, obj_description(oid,'pg_constraint') AS x FROM pg_constraint WHERE conname LIKE '%_cutover'"
+```
+
+เมื่อถึงเวลา X แถวใหม่จะชน CHECK และ ingest จะหยุด (collector ลองใหม่ไม่รู้จบ) **ถ้าใกล้ X แล้วยังรัน `00037` ไม่ได้** ให้ปลดก่อน (ทันที ไม่ scan):
+
+```sh
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres psql -U postgres -d aether \
+  -c "ALTER TABLE core.sensor_samples DROP CONSTRAINT IF EXISTS sensor_samples_cutover" \
+  -c "ALTER TABLE core.ble_history DROP CONSTRAINT IF EXISTS ble_history_cutover"
+```
+
+`00037` ต้องมี CHECK นี้ ก่อนรัน `migrate` รอบถัดไปให้ใส่กลับด้วย X ใหม่ (วันจันทร์ 00:00 UTC ที่อยู่ข้างหน้าอย่างน้อย 7 วัน สำหรับ BLE ใช้เที่ยงคืน UTC ที่อยู่ข้างหน้า 7 วันได้) · `VALIDATE` scan ตารางโดย ingest ยังเขียนได้:
+
+```sql
+ALTER TABLE core.sensor_samples ADD CONSTRAINT sensor_samples_cutover CHECK (received_at < '2026-10-19T00:00:00Z') NOT VALID;
+COMMENT ON CONSTRAINT sensor_samples_cutover ON core.sensor_samples IS '2026-10-19T00:00:00Z';
+ALTER TABLE core.sensor_samples VALIDATE CONSTRAINT sensor_samples_cutover;
+-- ทำแบบเดียวกันกับ core.ble_history / ble_history_cutover
+```
+
+**ซ้อมก่อนบนสำเนา** (ไม่แตะฐานจริง):
+
+```sh
+sudo sh infra/prod/backup-now.sh
+sudo sh infra/prod/restore.sh aether-YYYYmmdd-HHMMSS.dump --database aether_rehearsal
+# รัน migration กับ aether_rehearsal (image ใหม่ที่ build แล้ว) · goose พิมพ์เวลาของแต่ละไฟล์
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml run --rm --entrypoint sh migrate \
+  -c 'MIGRATION_DATABASE_URL="$(echo "$MIGRATION_DATABASE_URL" | sed "s#/aether?#/aether_rehearsal?#")" exec /app/migrate'
+# ต้องเห็น: 00036 ใช้เวลาตามขนาดตาราง (build index + validate) แต่ 00037 ต้องจบในไม่กี่วินาที
+# (ถ้านานเป็นนาที แปลว่ามีการ scan หรือ build index ใหม่ ห้ามขึ้นจริงจนกว่าจะรู้สาเหตุ) และจำนวนแถวเท่าเดิม
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres psql -U postgres -d aether_rehearsal \
+  -c "SELECT parent, covered_until, default_rows FROM core.partition_health()" \
+  -c "SELECT count(*) FROM core.sensor_samples"
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres psql -U postgres -c "DROP DATABASE aether_rehearsal"
+```
+
+หลังขึ้นจริง API ดูแล partition เอง (ตอนเริ่มและทุกชั่วโมง): สร้างช่วงล่วงหน้า (sample 28 วัน, BLE 14 วัน) ทิ้งช่วงที่หมดอายุ (ไม่เกิน 2 ก้อนต่อรอบ · log ระดับ Warn ทุกครั้งที่ทิ้ง · ช่วงที่ว่างทิ้งได้เสมอ ช่วงที่มีข้อมูลทิ้งเมื่อ "ข้อมูลล่าสุดที่เก็บไว้" ยืนยันว่าหมดอายุจริง ไม่ใช่แค่นาฬิกาบอก กันกรณีนาฬิกาเครื่องกระโดดไปข้างหน้า · ถ้าไม่ผ่านจะเป็น `drop_held` เฉพาะตารางนั้น) และลบแถวหมดอายุใน `_legacy`/`_default` เป็นชุด · ถ้า constraint `*_cutover` ของ `00036` ยังค้าง (แปลว่า `00037` ยังไม่รัน) API จะ log `PARTITION ALERT` ตอนเริ่มและทุกชั่วโมง · `_legacy` ถูกทิ้งทั้งก้อนเมื่อ X เก่ากว่า retention (sample ราว 90 วันหลังอัปเกรด) · ผิดปกติเมื่อไรจะมี log `PARTITION ALERT` (§10)
+
 ### การย้อนกลับ — พูดตรง ๆ
 
 **ไม่มีระบบ rollback อัตโนมัติ** migration ทุกไฟล์มีส่วน `-- +goose Down` แต่ `cmd/migrate` เรียกเฉพาะ `goose.Up` เท่านั้น ไม่มีคำสั่งสำหรับถอยลง
@@ -716,6 +769,7 @@ sudo grep -h '"status":5' <log-dir>/access.log | tail -20
 | ไฟล์ backup ล่าสุด | เก่ากว่า 36 ชั่วโมง (`pitr` แจ้งเองเมื่อ dump เก่ากว่า 30 ชม. หรือ backup ของ pgBackRest เก่ากว่า 36 ชม.) |
 | `pitr` / `backup` | `unhealthy` = มีปัญหาการสำรอง ดู `logs pitr` บรรทัด `PITR ALERT` |
 | ขนาด `core.sensor_samples` | โตเร็วกว่าที่ประมาณไว้ในข้อ 1 เกิน 30% → ลด interval หรือ retention |
+| `logs api` บรรทัด `PARTITION ALERT` | มีแถวตกใน partition `DEFAULT`, partition ล่วงหน้าเหลือไม่ถึง 7 วัน (งานดูแล partition ไม่ได้รันหรือล้ม ดู `partition maintenance failed`) หรือ constraint `*_cutover` ค้าง (`00037` ยังไม่รัน ดู §6) · `drop_held` ระดับ Warn = partition หมดอายุตามนาฬิกาแต่ข้อมูลล่าสุดยังไม่ยืนยัน (นาฬิกาเครื่องเดินเร็วเกิน? ตรวจ `timedatectl`) |
 | HTTP 429 ใน access log | ถ้าเยอะจากผู้ใช้จริง ให้เพิ่ม `API_RATE_LIMIT` |
 | จำนวน gateway ที่ออนไลน์ | ลดลงโดยไม่มีเหตุผล = ปัญหาเครือข่าย หรือใบรับรองหมดอายุ |
 | เวลาเซิร์ฟเวอร์ | `timedatectl` ต้อง synchronized ตลอด |
@@ -723,10 +777,12 @@ sudo grep -h '"status":5' <log-dir>/access.log | tail -20
 ```sh
 # ขนาดตารางที่โตเร็วที่สุด
 sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres \
-  psql -U postgres -d aether -c "SELECT relname, pg_size_pretty(pg_total_relation_size(c.oid)) size
-    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname IN ('core','identity') AND c.relkind='r'
-    ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 10;"
+  psql -U postgres -d aether -c "SELECT c.relname, pg_size_pretty(sum(pg_total_relation_size(t.relid))) size
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace, pg_partition_tree(c.oid) t
+    WHERE n.nspname IN ('core','identity') AND c.relkind IN ('r','p') AND NOT c.relispartition AND t.isleaf
+    GROUP BY c.relname ORDER BY sum(pg_total_relation_size(t.relid)) DESC LIMIT 10;"
+# ตารางที่แบ่ง partition (sensor_samples, ble_history) รวมทุก partition แล้ว · ดูราย partition:
+#   SELECT * FROM core.partition_health();   และ   \d+ core.sensor_samples
 ```
 
 ---
@@ -769,7 +825,7 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u post
 1. **เซิร์ฟเวอร์เดียว ไม่มี HA** เครื่องดับ = ระบบดับ ไม่มี failover ไม่มี replica
 2. **PITR อยู่บนเครื่องเดียวกัน** จนกว่าจะเปิด `--offsite` (ข้อ 7.1) ดิสก์พัง = คลัง PITR และ dump หายพร้อมกัน
 3. **Rate limit เป็นแบบ per-process ในหน่วยความจำ** ถ้าเพิ่ม replica ของ api ในอนาคต โควตาจะคูณตามจำนวน replica ต้องเปลี่ยนไปใช้ rate limiter ที่แชร์กัน
-4. **`core.sensor_samples` ลบข้อมูลเก่าด้วย batched DELETE ไม่ใช่ partition** ที่ปริมาณสูงมาก ๆ การลบจะกินทรัพยากรและทำให้ตาราง bloat (ตั้ง autovacuum ไว้ก้าวร้าวแล้ว แต่ไม่ใช่ยาครอบจักรวาล) ถ้าเกินหลักพัน tag ควรย้ายไป partition รายเดือนหรือ TimescaleDB
+4. **`core.sensor_samples` และ `core.ble_history` แบ่ง partition ตามเวลาแล้ว** (migration `00037`) ข้อมูลหมดอายุทิ้งทั้งก้อน ไม่ bloat · query "ค่าล่าสุด" ที่ไม่มีช่วงเวลาจะอ่าน index ของทุก partition (ราว 15–20 ก้อนที่ retention 90 วัน) ยังเร็ว แต่ถ้าตั้ง `SAMPLE_RETENTION_DAYS` เป็นหลายปี จำนวน partition จะเป็นหลักร้อยและ planning ช้าลง ถ้าเกินหลักพัน tag ให้พิจารณา TimescaleDB
 5. **หน้าเว็บรันบน `vinext` 1.0.0-beta.5** ซึ่งเป็น beta ยังไม่ใช่ runtime ที่มี track record ยาว ๆ ให้ยึดตามเวอร์ชันที่ pin ไว้ใน `package.json` อย่าอัปเองตามใจ
 6. **Frame ของ Minew ยังไม่ได้ยืนยันครบ** packet ถูกเก็บดิบ (`decoded:false`) การเห็นค่าบน dashboard ขึ้นกับ decoder ใน Studio ซึ่งยังไม่ผ่านการตรวจกับฮาร์ดแวร์ทุกรุ่น
 7. **collector ต้องมี binding อย่างน้อย 1 รายการ** ตามรูปแบบไฟล์ปัจจุบัน `setup.py` จึงใส่ binding ไปที่ topic สงวน `/aether/reserved/<uuid>` ที่ไม่มีบัญชีใด publish ได้ gateway จริงทั้งหมดวิ่งผ่าน subscription `/aether/gateways/+/status` ซึ่งเป็นคนละเส้นทาง · หมายเหตุ 2026-09-20: backend รับรายการ binding ว่างได้แล้ว แต่ชุดติดตั้งยังคง binding สงวนนี้ไว้ เพราะเป็นรูปแบบที่ผ่านการทดสอบติดตั้งจริงทั้งชุด

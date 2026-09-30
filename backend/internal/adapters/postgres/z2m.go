@@ -241,6 +241,13 @@ func (r *Repository) ingestDeviceState(tx *gorm.DB, tenant, gateway string, d zi
 		}
 	}
 	view := minew.View{Sensors: []minew.Sensor{{ID: d.IEEE, Name: d.FriendlyName, Kind: reading.Kind, Model: d.Model, Latest: reading}}}
+	// Lock order: sensor_streams before sensor_samples, as on the Minew path (saveSamples writes the stream first).
+	// The thinning read below would otherwise lock sensor_samples first, and partition maintenance creating a
+	// sample range (sensor_streams, then the DEFAULT partition) could deadlock with it (migration 00037). Only the
+	// table lock; no row changes.
+	if e := tx.Exec(`LOCK TABLE core.sensor_streams IN ROW EXCLUSIVE MODE`).Error; e != nil {
+		return e
+	}
 	thin, e := z2mThinned(tx, tenant, gateway, d.IEEE, reading, settable, len(confirmed) > 0, now, r.opts)
 	if e != nil {
 		return e
@@ -453,7 +460,10 @@ func z2mThinned(tx *gorm.DB, tenant, gateway, ieee string, r minew.Reading, sett
 		Reading    json.RawMessage
 		ReceivedAt time.Time
 	}
-	if e := tx.Raw(`SELECT reading,received_at FROM core.sensor_samples WHERE tenant_id=? AND gateway_id=? AND external_id=? ORDER BY received_at DESC LIMIT 1`, tenant, gateway, ieee).Scan(&last).Error; e != nil {
+	// Only a sample inside the interval can thin this one; bounding both sides keeps the read on the partitions of
+	// the interval (not the ranges ahead or DEFAULT). A sample stored while the server clock ran ahead is ignored.
+	if e := tx.Raw(`SELECT reading,received_at FROM core.sensor_samples WHERE tenant_id=? AND gateway_id=? AND external_id=? AND received_at>? AND received_at<=? ORDER BY received_at DESC LIMIT 1`,
+		tenant, gateway, ieee, now.Add(-time.Duration(opts.SampleMinIntervalSec)*time.Second), now).Scan(&last).Error; e != nil {
 		return false, e
 	}
 	if len(last) == 0 || now.Sub(last[0].ReceivedAt) >= time.Duration(opts.SampleMinIntervalSec)*time.Second {

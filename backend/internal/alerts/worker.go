@@ -17,7 +17,6 @@ type Store interface {
 	ClaimNotifications(context.Context, string, int, time.Time) ([]domain.NotificationJob, error)
 	FinishNotification(context.Context, string, string, string, string) error
 	PruneAlertData(context.Context, string) error
-	PruneHistory(context.Context, string) error
 }
 
 // Worker runs offline detection and notification delivery for every active tenant.
@@ -65,9 +64,6 @@ func (w *Worker) Tick(ctx context.Context, now time.Time) {
 		if w.ticks%40 == 1 { // roughly every ten minutes at the default interval
 			if e := w.Store.PruneAlertData(ctx, tenant); e != nil {
 				slog.Warn("alert worker: prune failed", "tenant", tenant)
-			}
-			if e := w.Store.PruneHistory(ctx, tenant); e != nil {
-				slog.Warn("alert worker: history retention failed", "tenant", tenant, "error", e.Error())
 			}
 		}
 		if n, e := w.Store.ScanOffline(ctx, tenant, now); e != nil {

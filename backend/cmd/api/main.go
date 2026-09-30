@@ -67,6 +67,8 @@ func main() {
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
 	go hub.Listen(workerCtx, cfg.DatabaseURL, postgres.SignalChannel)
+	// Sample and BLE history retention: partitions ahead, expired ones dropped (migration 00037).
+	go repo.RunPartitionMaintenance(workerCtx, time.Hour)
 	go (&alerts.Worker{Store: repo, Sender: httpapi.NewSender(cfg), Secrets: service.Secrets, LegacySecrets: service.LegacySecrets, Interval: 15 * time.Second}).Run(workerCtx)
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)

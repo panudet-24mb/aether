@@ -81,7 +81,8 @@ func environmentOnly(r minew.Reading) bool {
 
 // Called inside the packet transaction: raw storage, discovery and samples commit together. key is the
 // sample event key: a Minew uplink passes the digest of its payload, so a redelivered packet (QoS 1) is stored
-// once; a Zigbee2MQTT state message must not, because a switch legitimately repeats ON, OFF, ON.
+// once within RedeliveryWindow (24 h; before migration 00037, forever: an identical payload a day later is now a
+// new sample); a Zigbee2MQTT state message must not, because a switch legitimately repeats ON, OFF, ON.
 func saveSamples(tx *gorm.DB, tenant, gateway string, view minew.View, key string, at time.Time, opts Options) error {
 	for _, sensor := range view.Sensors {
 		// Bounded discovery. A registered device always gets its stream; strangers (visitor beacons, other
@@ -102,9 +103,10 @@ func saveSamples(tx *gorm.DB, tenant, gateway string, view minew.View, key strin
 		// motion/iBeacon every second (the real S1 does) would otherwise never get a temperature stored.
 		if opts.SampleMinIntervalSec > 0 && environmentOnly(sensor.Latest) {
 			var recent int64
-			if e := tx.Raw(`SELECT count(*) FROM (SELECT 1 FROM core.sensor_samples WHERE tenant_id=? AND gateway_id=? AND external_id=? AND received_at>?
+			// Bounded on both sides, so only the partitions of the interval are read (not the ranges ahead or DEFAULT).
+			if e := tx.Raw(`SELECT count(*) FROM (SELECT 1 FROM core.sensor_samples WHERE tenant_id=? AND gateway_id=? AND external_id=? AND received_at>? AND received_at<=?
     AND (reading->>'kind' IS NULL OR reading->>'kind'='environment' OR jsonb_exists_any(coalesce(reading->'frames','[]'::jsonb),?::text[])) LIMIT 1) q`,
-				tenant, gateway, sensor.ID, at.Add(-time.Duration(opts.SampleMinIntervalSec)*time.Second), "{"+strings.Join(environmentFrames, ",")+"}").Scan(&recent).Error; e != nil {
+				tenant, gateway, sensor.ID, at.Add(-time.Duration(opts.SampleMinIntervalSec)*time.Second), at, "{"+strings.Join(environmentFrames, ",")+"}").Scan(&recent).Error; e != nil {
 				return e
 			}
 			if recent > 0 {
@@ -121,8 +123,15 @@ func saveSamples(tx *gorm.DB, tenant, gateway string, view minew.View, key strin
 		} else if decoder == "" {
 			decoder = minew.FrameTH
 		}
+		// A redelivered packet (same key) within RedeliveryWindow is stored once: the key includes received_at since
+		// migration 00037, so ON CONFLICT alone no longer catches it. The gateway row lock serialises deliveries.
+		// Bounded on both sides so the ranges ahead and DEFAULT are pruned; a row stored while the server clock ran
+		// ahead no longer deduplicates, which is accepted.
 		result := tx.Exec(`INSERT INTO core.sensor_samples(tenant_id,gateway_id,external_id,event_key,received_at,template_id,decoder_id,reading)
-    SELECT tenant_id,gateway_id,external_id,?,?,template_id,?,?::jsonb FROM core.sensor_streams WHERE gateway_id=? AND external_id=? ON CONFLICT DO NOTHING`, key, at, decoder, string(data), gateway, sensor.ID)
+    SELECT s.tenant_id,s.gateway_id,s.external_id,?,?,s.template_id,?,?::jsonb FROM core.sensor_streams s WHERE s.gateway_id=? AND s.external_id=?
+      AND NOT EXISTS(SELECT 1 FROM core.sensor_samples x WHERE x.tenant_id=s.tenant_id AND x.gateway_id=s.gateway_id AND x.external_id=s.external_id
+        AND x.event_key=? AND x.received_at>? AND x.received_at<=?)
+    ON CONFLICT DO NOTHING`, key, at, decoder, string(data), gateway, sensor.ID, key, at.Add(-RedeliveryWindow), at)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -152,11 +161,13 @@ func (r *Repository) StreamHistory(ctx context.Context, p domain.Principal, gate
 			Liveness         string
 			Offline          *bool
 		}
+		// Ties on received_at break by event_key ascending, the order of the history index, so the partitions of
+		// core.sensor_samples merge in index order without a sort.
 		e := tx.Raw(`SELECT s.external_id,s.name,s.template_id,t.definition,s.liveness,
     (SELECT st.offline FROM core.stream_state st WHERE st.tenant_id=s.tenant_id AND st.gateway_id=s.gateway_id AND st.external_id=s.external_id) AS offline,
-    (SELECT reading FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id ORDER BY received_at DESC,event_key DESC LIMIT 1) AS latest,
+    (SELECT reading FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id ORDER BY received_at DESC,event_key LIMIT 1) AS latest,
     (SELECT coalesce(jsonb_agg(q.reading ORDER BY q.received_at),'[]'::jsonb) FROM
-       (SELECT reading,received_at FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id AND received_at>=? ORDER BY received_at DESC,event_key DESC LIMIT ?) q) AS history
+       (SELECT reading,received_at FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id AND received_at>=? ORDER BY received_at DESC,event_key LIMIT ?) q) AS history
     FROM core.sensor_streams s LEFT JOIN core.device_templates t ON t.tenant_id=s.tenant_id AND t.id=s.template_id WHERE s.gateway_id=?
     ORDER BY EXISTS(SELECT 1 FROM core.devices d WHERE lower(d.external_id)=s.external_id AND d.removed_at IS NULL) DESC,s.last_seen DESC,s.external_id LIMIT 100`, since, limit, gateway).Scan(&rows).Error
 		if e != nil {

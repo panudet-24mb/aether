@@ -48,52 +48,25 @@ func saveBLEHistory(tx *gorm.DB, tenant, gateway string, payload json.RawMessage
 		if row.Source == "simulated" {
 			source = "simulated"
 		}
-		if e := tx.Exec(`INSERT INTO core.ble_history(tenant_id,gateway_id,external_id,event_key,received_at,raw,source) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, tenant, gateway, mac, event, at, strings.ToLower(row.Raw), source).Error; e != nil {
+		// The key holds received_at (partitioned by it, migration 00037), so a redelivered packet, stored again
+		// under a new receive time, is recognised by its event key within the redelivery window instead. The
+		// caller holds the gateway row, so two deliveries of one packet cannot both pass this check. Both bounds
+		// let the planner skip every partition outside the window (the ranges ahead and DEFAULT); a row stored
+		// while the server clock ran ahead is outside them and no longer deduplicates, which is accepted.
+		if e := tx.Exec(`INSERT INTO core.ble_history(tenant_id,gateway_id,external_id,event_key,received_at,raw,source) SELECT ?,?,?,?,?,?,?
+    WHERE NOT EXISTS(SELECT 1 FROM core.ble_history WHERE tenant_id=? AND gateway_id=? AND external_id=? AND event_key=? AND received_at>? AND received_at<=?) ON CONFLICT DO NOTHING`,
+			tenant, gateway, mac, event, at, strings.ToLower(row.Raw), source, tenant, gateway, mac, event, at.Add(-RedeliveryWindow), at).Error; e != nil {
 			return byIdentity, e
 		}
 	}
-	// Pruning happens in PruneHistory (worker), never inside the ingest transaction.
+	// Retention happens in MaintainPartitions (partitions.go), never inside the ingest transaction.
 	return byIdentity, nil
 }
 
-// PruneHistory applies the retention policy outside the ingest path: raw BLE advertisements by hours, decoded
-// samples by days. Deletes are batched so one run never holds a long lock or bloats a single transaction.
-func (r *Repository) PruneHistory(ctx context.Context, tenant string) error {
-	hours, days := r.opts.BLEHistoryHours, r.opts.SampleRetentionDays
-	if hours <= 0 {
-		hours = 24
-	}
-	if days <= 0 {
-		days = 90
-	}
-	for _, q := range []struct {
-		sql    string
-		cutoff time.Time
-	}{
-		{`DELETE FROM core.ble_history WHERE ctid IN (SELECT ctid FROM core.ble_history WHERE received_at<? LIMIT 20000)`, time.Now().Add(-time.Duration(hours) * time.Hour)},
-		{`DELETE FROM core.sensor_samples WHERE ctid IN (SELECT ctid FROM core.sensor_samples WHERE received_at<? LIMIT 20000)`, time.Now().Add(-time.Duration(days) * 24 * time.Hour)},
-	} {
-		for batch := 0; batch < 25; batch++ {
-			var affected int64
-			e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
-				res := tx.Exec(q.sql, q.cutoff)
-				affected = res.RowsAffected
-				return res.Error
-			})
-			if e != nil {
-				return e
-			}
-			if affected < 20000 {
-				break
-			}
-		}
-	}
-	return nil
-}
 func (r *Repository) BLEHistory(ctx context.Context, p domain.Principal, gateway, external string, since time.Time) ([]studio.Observation, error) {
 	out := []studio.Observation{}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Raw(`SELECT raw,source,received_at FROM core.ble_history WHERE gateway_id=? AND external_id=? AND received_at>=? ORDER BY received_at DESC,event_key DESC LIMIT 200`, gateway, strings.ToLower(external), since).Scan(&out).Error
+		return tx.Raw(`SELECT raw,source,received_at FROM core.ble_history WHERE gateway_id=? AND external_id=? AND received_at>=? ORDER BY received_at DESC,event_key LIMIT 200`, gateway, strings.ToLower(external), since).Scan(&out).Error
 	})
 	return out, e
 }

@@ -4,6 +4,7 @@ import (
 	"aether/backend/internal/domain"
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -31,7 +32,17 @@ func (s *fakeStore) ActiveTenants(context.Context) ([]string, error) { return []
 func (s *fakeStore) ProcessAutomationRequests(context.Context, string, time.Time) (int, error) {
 	return 0, nil
 }
-func (s *fakeStore) PendingCommandGateways(_ context.Context, _ string, now time.Time) ([]string, error) {
+
+// carried mirrors the transport filter; a command without a transport is a Zigbee2MQTT one.
+func carried(c domain.Command, transports []string) bool {
+	t := c.Transport
+	if t == "" {
+		t = "z2m"
+	}
+	return slices.Contains(transports, t)
+}
+
+func (s *fakeStore) PendingCommandGateways(_ context.Context, _ string, transports []string, now time.Time) ([]string, error) {
 	s.init()
 	seen := map[string]bool{}
 	out := []string{}
@@ -43,6 +54,9 @@ func (s *fakeStore) PendingCommandGateways(_ context.Context, _ string, now time
 			s.status[c.ID] = "expired"
 			continue
 		}
+		if !carried(c, transports) {
+			continue
+		}
 		if !seen[c.GatewayID] {
 			seen[c.GatewayID] = true
 			out = append(out, c.GatewayID)
@@ -51,13 +65,13 @@ func (s *fakeStore) PendingCommandGateways(_ context.Context, _ string, now time
 	sort.Strings(out)
 	return out, nil
 }
-func (s *fakeStore) ClaimCommands(_ context.Context, _, gateway string, now time.Time, limit int) ([]domain.Command, error) {
+func (s *fakeStore) ClaimCommands(_ context.Context, _, gateway string, transports []string, now time.Time, limit int) ([]domain.Command, error) {
 	out := []domain.Command{}
 	for _, c := range s.pending {
 		if len(out) == limit {
 			break
 		}
-		if c.GatewayID == gateway && s.status[c.ID] == "pending" && c.ExpiresAt.After(now) {
+		if c.GatewayID == gateway && s.status[c.ID] == "pending" && c.ExpiresAt.After(now) && carried(c, transports) {
 			s.status[c.ID] = "sent"
 			out = append(out, c)
 		}
@@ -183,7 +197,8 @@ func TestDispatcherPublishesEdgeWire(t *testing.T) {
 	unknown.ID, unknown.Transport = "unknown", "carrier-pigeon"
 	store := &fakeStore{pending: []domain.Command{good, badWire, badTarget, unknown}}
 	pub := &fakePublisher{}
-	d := &Dispatcher{Store: store, Publisher: pub, Now: func() time.Time { return now }}
+	// The database refuses unknown transports; claiming one anyway exercises the publisher's own refusal.
+	d := &Dispatcher{Store: store, Publisher: pub, Now: func() time.Time { return now }, Transports: []string{"z2m", "edge", "carrier-pigeon"}}
 	if n, e := d.RunOnce(context.Background()); e != nil || n != 1 {
 		t.Fatalf("run: %d %v", n, e)
 	}
@@ -192,5 +207,51 @@ func TestDispatcherPublishesEdgeWire(t *testing.T) {
 	}
 	if store.failed["bad-wire"] != "invalid command payload" || store.failed["bad-target"] != "invalid command target" || store.failed["unknown"] != "unknown command transport" {
 		t.Fatalf("failed: %v", store.failed)
+	}
+}
+
+// A cloud command is never published to the broker by mqtt-commander, and a Deliver dispatcher claims only its
+// own transport, at its own pace, without the housekeeping sweeps, and records a failed delivery's reason.
+func TestDispatcherTransportsAndDeliver(t *testing.T) {
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	cloud := func(id string) domain.Command {
+		c := cmd(id, gwA, now.Add(10*time.Second))
+		c.Transport, c.IEEE, c.Wire = "cloud", "bf00000000000000sw01", []byte(`{"switch_1":true}`)
+		return c
+	}
+	pending := []domain.Command{cmd("z", gwA, now.Add(10*time.Second))}
+	for i := 0; i < 6; i++ {
+		pending = append(pending, cloud("c"+string(rune('0'+i))))
+	}
+	store := &fakeStore{pending: pending}
+	pub := &fakePublisher{}
+	mqtt := &Dispatcher{Store: store, Publisher: pub, Now: func() time.Time { return now }}
+	if n, e := mqtt.RunOnce(context.Background()); e != nil || n != 1 || len(pub.sent) != 1 || store.status["c0"] != "pending" {
+		t.Fatalf("mqtt: %d %v %v %v", n, e, pub.sent, store.status)
+	}
+	delivered := []string{}
+	d := &Dispatcher{Store: store, Now: func() time.Time { return now }, Transports: []string{"cloud"}, Rate: 2, Burst: 4, NoHousekeeping: true,
+		Deliver: func(_ context.Context, tenant string, c domain.Command) error {
+			if c.ID == "c1" {
+				return errors.New("device_offline")
+			}
+			delivered = append(delivered, tenant+"/"+c.ID)
+			return nil
+		}}
+	timeouts := store.timeouts
+	n, e := d.RunOnce(context.Background())
+	if e != nil || n != 3 || len(delivered) != 3 || store.failed["c1"] != "device_offline" || store.status["c4"] != "pending" || store.timeouts != timeouts {
+		t.Fatalf("cloud: %d %v %v %v timeouts=%d", n, e, delivered, store.status, store.timeouts)
+	}
+	if _, ok := store.published["c0"]; !ok {
+		t.Fatal("delivered command not marked published")
+	}
+	if _, ok := store.published["c1"]; ok {
+		t.Fatal("failed delivery marked published")
+	}
+	// One second later the bucket holds two more (Rate 2), not the MQTT default of five.
+	now = now.Add(time.Second)
+	if n, _ := d.RunOnce(context.Background()); n != 2 || len(pub.sent) != 1 {
+		t.Fatalf("second sweep: %d sent=%v", n, pub.sent)
 	}
 }

@@ -8,12 +8,16 @@ import (
 
 func (r *Repository) EnrollMQTT(ctx context.Context, p domain.Principal, id, hash string, rotate bool) error {
 	return classify(r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		var n int64
-		if e := tx.Raw(`SELECT count(*) FROM (SELECT id FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE) g`, id).Scan(&n).Error; e != nil {
+		var models []string
+		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, id).Scan(&models).Error; e != nil {
 			return e
 		}
-		if n != 1 {
+		if len(models) != 1 {
 			return domain.ErrNotFound
+		}
+		// A Tuya Cloud gateway has nothing on site that could use a broker account.
+		if models[0] == domain.TuyaCloudGatewayModel {
+			return domain.Because(domain.ErrInvalid, "cloud_gateway_has_no_mqtt")
 		}
 		if rotate {
 			q := tx.Exec(`UPDATE core.mqtt_accounts SET password_hash=?,revision=revision+1 WHERE gateway_id=?`, hash, id)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"aether/backend/internal/adapters/edge"
+	"aether/backend/internal/adapters/tuyacloud"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -34,9 +35,15 @@ type Service struct {
 	LegacyTuyaKeys []byte
 	// TuyaCloud builds the Tuya OpenAPI client of an import (tests substitute a fake cloud).
 	TuyaCloud func(region, accessID, accessSecret string) (TuyaCloud, error)
-	dummyHash string
-	hashing   chan struct{}
-	tuyaJobs  *tuyaJobs
+	// TuyaCloudEnabled is TUYA_CLOUD: without it the tuya-cloud gateway model and profile do not exist here.
+	TuyaCloudEnabled bool
+	// TuyaCloudPublicKey is the tuya-cloud worker's public key (TUYA_CLOUD_PUBLIC_KEY); the API seals to it only.
+	TuyaCloudPublicKey *[32]byte
+	// CloudClient builds the OpenAPI client that proves a link's credentials (tests substitute a fake cloud).
+	CloudClient func(region, accessID, accessSecret string) (*tuyacloud.Client, error)
+	dummyHash   string
+	hashing     chan struct{}
+	tuyaJobs    *tuyaJobs
 }
 type AuthResult struct {
 	AccessToken    string    `json:"access_token"`
@@ -195,7 +202,7 @@ func (s *Service) createGateway(ctx context.Context, p domain.Principal, name, m
 		return domain.Gateway{}, "", domain.ErrForbidden
 	}
 	name = strings.TrimSpace(name)
-	if !validName(name) || domain.GatewayModelByID(model) == nil {
+	if !validName(name) || domain.GatewayModelByID(model) == nil || (model == domain.TuyaCloudGatewayModel && !s.TuyaCloudEnabled) {
 		return domain.Gateway{}, "", domain.ErrInvalid
 	}
 	g := domain.Gateway{ID: uuid.NewString(), TenantID: p.TenantID, Name: name, Model: model, CreatedAt: time.Now().UTC(), ProjectID: project}
@@ -203,6 +210,11 @@ func (s *Service) createGateway(ctx context.Context, p domain.Principal, name, m
 	e := s.Repo.CreateGateway(ctx, p, g, security.Digest(token))
 	if e != nil {
 		return domain.Gateway{}, "", e
+	}
+	if model == domain.TuyaCloudGatewayModel {
+		// Nothing on site posts for a cloud gateway: its ingest token is stored (hashed) but never handed out, so no
+		// one holds it.
+		return g, "", nil
 	}
 	return g, token, nil
 }
@@ -219,7 +231,8 @@ func (s *Service) CreateDevice(ctx context.Context, p domain.Principal, gateway,
 	if !p.CanManageDevices() {
 		return domain.Device{}, domain.ErrForbidden
 	}
-	if !security.ValidID(gateway) || !validName(strings.TrimSpace(name)) || !validName(external) || domain.DeviceProfileByID(profile) == nil {
+	if !security.ValidID(gateway) || !validName(strings.TrimSpace(name)) || !validName(external) || domain.DeviceProfileByID(profile) == nil ||
+		(profile == domain.TuyaCloudProfile && !s.TuyaCloudEnabled) {
 		return domain.Device{}, domain.ErrInvalid
 	}
 	d := domain.Device{ID: uuid.NewString(), TenantID: p.TenantID, GatewayID: gateway, Name: strings.TrimSpace(name), ExternalID: external, ProfileID: profile, CreatedAt: time.Now().UTC()}

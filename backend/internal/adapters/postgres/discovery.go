@@ -53,6 +53,17 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
     AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=l.tenant_id AND lower(d.external_id)=l.device_id AND d.removed_at IS NULL)
 ) found ORDER BY source,description,external_id LIMIT 500`, gateway, gateway).Scan(&out).Error
 		}
+		// A Tuya Cloud gateway lists the devices its last sync found that are not registered yet (source
+		// "tuya_cloud"); no key is involved, and a device registered through an Edge is excluded like any other.
+		if len(model) == 1 && model[0] == domain.TuyaCloudGatewayModel {
+			return tx.Raw(`SELECT t.gateway_id,t.tuya_id AS external_id,coalesce(s.last_seen,t.updated_at) AS last_seen,'tuya_cloud' AS source,
+    coalesce(s.name,'') AS stream_name,t.tuya_category AS model,'Tuya' AS vendor,t.name AS description,t.category AS kind,'ok' AS key_status
+  FROM core.tuya_devices t JOIN core.gateways g ON g.tenant_id=t.tenant_id AND g.id=t.gateway_id AND g.revoked_at IS NULL
+  LEFT JOIN core.sensor_streams s ON s.gateway_id=t.gateway_id AND s.external_id=t.tuya_id
+  WHERE t.gateway_id=? AND t.removed_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL)
+  ORDER BY t.name,t.tuya_id LIMIT 500`, gateway).Scan(&out).Error
+		}
 		return tx.Raw(`SELECT latest.gateway_id,latest.external_id,latest.received_at AS last_seen,latest.source,
     coalesce(s.name,'') AS stream_name,
     coalesce(smp.reading->>'model','') AS model,

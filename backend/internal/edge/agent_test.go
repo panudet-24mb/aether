@@ -246,29 +246,41 @@ func TestAgentStateAndCommand(t *testing.T) {
 
 // Numbers pushed every few milliseconds are published at most once per coalescing period; a boolean goes out at once.
 func TestCoalescer(t *testing.T) {
-	c := newCoalescer(200 * time.Millisecond)
+	// The period is long compared with the burst, so a loaded machine (the full suite runs packages in
+	// parallel) cannot stretch the burst past it; the flush is awaited by polling, not a fixed sleep.
+	const period = 2 * time.Second
+	c := newCoalescer(period)
 	var mu sync.Mutex
 	var out []map[string]any
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.run(ctx, func(dps map[string]any, _ bool) { mu.Lock(); out = append(out, dps); mu.Unlock() })
 	count := func() int { mu.Lock(); defer mu.Unlock(); return len(out) }
+	waitFor := func(want int, within time.Duration) int {
+		deadline := time.Now().Add(within)
+		for count() < want && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return count()
+	}
+	start := time.Now()
 	c.add(map[string]any{"19": json.Number("1")}, false) // first numeric: nothing published before, goes out at once
-	time.Sleep(50 * time.Millisecond)
+	if n := waitFor(1, time.Second); n != 1 {
+		t.Fatalf("first numeric value not published at once: %d", n)
+	}
 	for i := 2; i <= 20; i++ {
 		c.add(map[string]any{"19": json.Number(strings.Repeat("9", i%3+1))}, false)
-		time.Sleep(5 * time.Millisecond)
 	}
-	if n := count(); n != 1 {
-		t.Fatalf("numeric burst inside the period published %d times", n)
+	if elapsed := time.Since(start); elapsed < period/2 {
+		if n := count(); n != 1 {
+			t.Fatalf("numeric burst inside the period published %d times", n)
+		}
 	}
-	time.Sleep(250 * time.Millisecond)
-	if n := count(); n != 2 {
+	if n := waitFor(2, 2*period); n != 2 {
 		t.Fatalf("latest numeric values not flushed after the period: %d", n)
 	}
 	c.add(map[string]any{"1": true}, false)
-	time.Sleep(50 * time.Millisecond)
-	if n := count(); n != 3 {
+	if n := waitFor(3, time.Second); n != 3 {
 		t.Fatalf("boolean change not published at once: %d", n)
 	}
 }

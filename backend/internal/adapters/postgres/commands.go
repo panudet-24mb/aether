@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"time"
 
 	"gorm.io/gorm"
@@ -142,12 +143,17 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 		return domain.Command{}, false, e
 	}
 	var wire any
-	if z.Transport == "edge" {
+	if z.Transport == "edge" || z.Transport == "cloud" {
 		dpMap := map[string]tuya.Ref{}
 		if e := json.Unmarshal(z.DPMap, &dpMap); e != nil {
 			return domain.Command{}, false, e
 		}
-		w, e := tuya.Wire(dpMap, req.Property, value)
+		// The LAN protocol addresses data points by id, Tuya Cloud by code.
+		encode := tuya.Wire
+		if z.Transport == "cloud" {
+			encode = tuya.CloudWire
+		}
+		w, e := encode(dpMap, req.Property, value)
 		if e != nil {
 			return domain.Command{}, false, e
 		}
@@ -157,7 +163,9 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 	if e := tx.Raw(`SELECT offline FROM core.stream_state WHERE gateway_id=? AND external_id=?`, d.GatewayID, d.ExternalID).Scan(&offline).Error; e != nil {
 		return domain.Command{}, false, e
 	}
-	if (z.Available != nil && !*z.Available) || z.Bridge == "offline" || (len(offline) == 1 && offline[0]) {
+	// The agent state is a bridge's, an Edge's or a Tuya Cloud link's; "offline" is the only down state of the
+	// first two.
+	if (z.Available != nil && !*z.Available) || domain.CloudLinkDown(z.Bridge) || (len(offline) == 1 && offline[0]) {
 		return domain.Command{}, false, domain.Because(domain.ErrConflict, "offline")
 	}
 	var inFlight int64
@@ -200,12 +208,12 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 	return rows[0].command(), true, nil
 }
 
-// commandGatewayModels are the gateway models that carry commands.
-var commandGatewayModels = []string{domain.Z2MGatewayModel, domain.EdgeGatewayModel}
+// commandGatewayModels are the gateway models that carry commands: Zigbee2MQTT, Aether Edge and Tuya Cloud.
+var commandGatewayModels = []string{domain.Z2MGatewayModel, domain.EdgeGatewayModel, domain.TuyaCloudGatewayModel}
 
-// commandGateway reports the gateway models that carry commands: Zigbee2MQTT and Aether Edge.
+// commandGateway reports whether a gateway model carries commands.
 func commandGateway(model string) bool {
-	return model == domain.Z2MGatewayModel || model == domain.EdgeGatewayModel
+	return slices.Contains(commandGatewayModels, model)
 }
 
 func sameValue(a, b json.RawMessage) bool {
@@ -245,8 +253,10 @@ func (r *Repository) GetCommand(ctx context.Context, p domain.Principal, id stri
 
 // PendingCommandGateways is the first half of a commander sweep for one tenant, in system scope: pending
 // commands past their expiry become `expired` (never published), and the gateways that still have pending
-// commands are returned, so the commander can claim per gateway only what that gateway's pace allows.
-func (r *Repository) PendingCommandGateways(ctx context.Context, tenant string, now time.Time) ([]string, error) {
+// commands are returned, so the commander can claim per gateway only what that gateway's pace allows. Only the
+// gateways with pending commands of the given transports are returned (mqtt-commander carries z2m and edge, the
+// tuya-cloud worker cloud); expiry applies to every transport, so a command no process carries still settles.
+func (r *Repository) PendingCommandGateways(ctx context.Context, tenant string, transports []string, now time.Time) ([]string, error) {
 	var gateways []string
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
 		var expired []string
@@ -257,7 +267,7 @@ func (r *Repository) PendingCommandGateways(ctx context.Context, tenant string, 
 		if e := signalGateways(tx, tenant, expired); e != nil {
 			return e
 		}
-		return tx.Raw(`SELECT DISTINCT gateway_id FROM core.device_commands WHERE status='pending' AND expires_at>? LIMIT 1000`, now).Scan(&gateways).Error
+		return tx.Raw(`SELECT DISTINCT gateway_id FROM core.device_commands WHERE status='pending' AND expires_at>? AND transport IN ? LIMIT 1000`, now, transports).Scan(&gateways).Error
 	})
 	return gateways, e
 }
@@ -265,17 +275,17 @@ func (r *Repository) PendingCommandGateways(ctx context.Context, tenant string, 
 // ClaimCommands moves up to `limit` pending, unexpired commands of one gateway to `sent` and returns them. The
 // transaction commits BEFORE the caller publishes, so a crash can lose a publish but never repeat one. sent_at is
 // provisional here; MarkCommandsPublished sets it to the moment of publishing.
-func (r *Repository) ClaimCommands(ctx context.Context, tenant, gateway string, now time.Time, limit int) ([]domain.Command, error) {
+func (r *Repository) ClaimCommands(ctx context.Context, tenant, gateway string, transports []string, now time.Time, limit int) ([]domain.Command, error) {
 	var rows []commandRow
-	if limit <= 0 {
+	if limit <= 0 || len(transports) == 0 {
 		return nil, nil
 	}
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
 		// ARRAY(...) evaluates the locking sub-select exactly once; as a joined sub-query the planner may run it
 		// again and claim more than `limit`.
 		if e := tx.Raw(`UPDATE core.device_commands SET status='sent',sent_at=?
-    WHERE tenant_id=core.tenant_id() AND id=ANY(ARRAY(SELECT id FROM core.device_commands WHERE gateway_id=? AND status='pending' AND expires_at>?
-      ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED)) RETURNING `+commandColumns, now, gateway, now, limit).Scan(&rows).Error; e != nil {
+    WHERE tenant_id=core.tenant_id() AND id=ANY(ARRAY(SELECT id FROM core.device_commands WHERE gateway_id=? AND status='pending' AND expires_at>? AND transport IN ?
+      ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED)) RETURNING `+commandColumns, now, gateway, now, transports, limit).Scan(&rows).Error; e != nil {
 			return e
 		}
 		if len(rows) == 0 {
@@ -388,7 +398,7 @@ func signalGateways(tx *gorm.DB, tenant string, gateways []string) error {
 }
 
 // DeviceControls reads what a registered device can be set to (a Zigbee2MQTT device, or a Tuya device through
-// Aether Edge), within the member's project scope.
+// Aether Edge or Tuya Cloud), within the member's project scope.
 func (r *Repository) DeviceControls(ctx context.Context, p domain.Principal, deviceID string) (domain.DeviceControls, error) {
 	var rows []struct {
 		GatewayID, ExternalID string
@@ -412,6 +422,6 @@ func (r *Repository) DeviceControls(ctx context.Context, p domain.Principal, dev
 		return domain.DeviceControls{}, domain.ErrNotFound
 	}
 	row := rows[0]
-	online := (row.Available == nil || *row.Available) && row.Bridge != "offline" && (row.Offline == nil || !*row.Offline) && row.KeyStatus == "ok"
+	online := (row.Available == nil || *row.Available) && !domain.CloudLinkDown(row.Bridge) && (row.Offline == nil || !*row.Offline) && row.KeyStatus == "ok"
 	return domain.DeviceControls{DeviceID: deviceID, GatewayID: row.GatewayID, IEEE: row.ExternalID, Exposes: row.Exposes, State: row.State, Online: online}, nil
 }

@@ -477,6 +477,18 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 			return e
 		}
 		count += silent
+		// Tuya Cloud links: a worker that stopped writing health at all (silence), and a link the worker reports
+		// down for longer than CloudLinkGrace.
+		silent, e = r.scanSilentAgents(tx, tenant, cloudAgent, "cloud_silent", now)
+		if e != nil {
+			return e
+		}
+		count += silent
+		silent, e = r.scanCloudLinksDown(tx, tenant, now)
+		if e != nil {
+			return e
+		}
+		count += silent
 		all, e := loadRules(tx, true)
 		if e != nil {
 			return e

@@ -345,6 +345,23 @@ docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mqtt-in
 
 local key ของ Tuya ถูกเข้ารหัสด้วยกุญแจที่ derive จาก `CHANNEL_SEAL_KEY` (หรือ JWT key ถ้าไม่ได้ตั้ง) **สำรอง `.env.prod` ไว้แยกจาก backup ฐานข้อมูล** เหมือนกรณี secret ของช่องทางแจ้งเตือน ถ้ากุญแจหาย ต้องนำเข้าจาก Tuya ใหม่
 
+### 4.11 Tuya Cloud (migration `00034`) — ตรวจก่อน migrate
+
+migration `00034` สร้าง unique index `devices_tuya_one_mode`: อุปกรณ์ Tuya หนึ่งตัวลงทะเบียนได้ทางเดียวต่อ workspace (ผ่าน Edge หรือผ่าน Cloud) ถ้าข้อมูลเดิมมีซ้ำ migration จะล้มทั้งก้อน **รันคำสั่งนี้ก่อน deploy ต้องได้ 0 แถว** ถ้ามีแถว ให้ลบการลงทะเบียนที่ซ้ำออกทางหน้าเว็บก่อน:
+
+```sh
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u postgres postgres \
+  psql -U postgres -d aether -c "SELECT tenant_id, lower(external_id) AS tuya_id, count(*)
+    FROM core.devices WHERE removed_at IS NULL AND profile_id IN ('tuya-wifi-device@1','tuya-cloud-device@1')
+    GROUP BY 1,2 HAVING count(*)>1"
+```
+
+- `setup.py` สร้างคู่กุญแจ `TUYA_CLOUD_PUBLIC_KEY` / `TUYA_CLOUD_PRIVATE_KEY` ครั้งเดียวแล้วเก็บไว้ (รันซ้ำได้) และเขียน `TUYA_CLOUD=false`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT=2`
+  - API ได้ **เฉพาะ public key** (ใช้ซีลรหัสโปรเจกต์ Tuya) · worker `tuya-cloud` ได้ **เฉพาะ private key** — ห้ามส่ง private key ให้ container อื่น
+  - private key หาย = โปรเจกต์ที่ลิงก์ไว้ทั้งหมดต้องลิงก์ใหม่ สำรอง `.env.prod` แยกจาก backup ฐานข้อมูล
+- การต่อ compose service และเปิด `TUYA_CLOUD=true` อยู่ใน phase G5 · ก่อนหน้านั้นโหมดนี้ปิดอยู่และไม่แสดงในเว็บ
+- `migrate down` ข้าม `00034` ไม่ได้ถ้ายังมี gateway `tuya-cloud` ที่ยังไม่ revoke (ตั้งใจให้ล้มพร้อมข้อความ) · รายละเอียดที่ [tuya-cloud.md](platform/tuya-cloud.md)
+
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 
 `setup.py` ตั้ง `ALERTS_SHADOW=true` ให้ตั้งแต่ต้น หมายความว่า: **บันทึก event ทุกอย่างลงฐานข้อมูลตามปกติ แต่ไม่เปิด alert ไม่ส่ง LINE/webhook/อีเมล และไม่รัน automation** (รวมถึงผังที่สั่งอุปกรณ์ ดูข้อ 4.9)

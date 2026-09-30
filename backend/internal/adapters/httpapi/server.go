@@ -75,6 +75,8 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 			code, message = 409, "conflict"
 		case errors.Is(e, domain.ErrRateLimited):
 			code, message = 429, "rate_limited"
+		case errors.Is(e, domain.ErrUnavailable):
+			code, message = 503, "unavailable"
 		default:
 			var f *fiber.Error
 			if errors.As(e, &f) {
@@ -86,7 +88,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 		}
 		// A reason narrows a client error the caller can act on (e.g. a command refused because the device is "offline").
 		var reason domain.ReasonError
-		if code < 500 && errors.As(e, &reason) {
+		if (code < 500 || code == 503) && errors.As(e, &reason) {
 			message = reason.Reason
 		}
 		return c.Status(code).JSON(fiber.Map{"error": message, "request_id": c.GetRespHeader("X-Request-ID")})
@@ -221,7 +223,8 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	edgePublicRoutes(api, service, cfg)
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{"gateway_models": domain.GatewayModels, "device_profiles": domain.DeviceProfiles, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
+		// Tuya Cloud mode is listed only when this deployment enabled it (TUYA_CLOUD).
+		return c.JSON(fiber.Map{"gateway_models": service.GatewayModels(), "device_profiles": service.DeviceProfiles(), "tuya_cloud": service.TuyaCloudEnabled, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
 	})
 	// The Zigbee2MQTT device catalog (zigbee-herdsman-converters, MIT): "is this model supported, and what will
 	// Aether show it as?" before anything is bought or paired. Read-only and the same for every workspace.

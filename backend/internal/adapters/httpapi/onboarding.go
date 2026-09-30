@@ -78,12 +78,15 @@ func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 			if !security.ValidID(id) {
 				return domain.ErrInvalid
 			}
-			out, e := settings()
+			// Looked up by id (not through the capped gateway list) and before a password is issued.
+			model, e := s.Repo.GatewayModel(c.Context(), p, id)
 			if e != nil {
 				return e
 			}
-			// Looked up by id (not through the capped gateway list) and before a password is issued.
-			model, e := s.Repo.GatewayModel(c.Context(), p, id)
+			if model == domain.TuyaCloudGatewayModel {
+				return domain.Because(domain.ErrInvalid, "cloud_gateway_has_no_mqtt")
+			}
+			out, e := settings()
 			if e != nil {
 				return e
 			}

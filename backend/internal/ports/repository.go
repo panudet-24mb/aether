@@ -103,6 +103,10 @@ type Repository interface {
 	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
 	CaptureEdge(context.Context, string, string, edge.Message, []byte) (string, error)
 	SaveTuyaDevices(context.Context, domain.Principal, string, []tuya.Import) (int, error)
+	SaveTuyaCloudLink(context.Context, domain.Principal, domain.TuyaCloudLinkRequest) error
+	UnlinkTuyaCloud(context.Context, domain.Principal, string) error
+	RequestCloudSync(context.Context, domain.Principal, string) error
+	TuyaCloudLinkStatus(context.Context, domain.Principal, string) (domain.TuyaCloudLink, error)
 	TuyaDevices(context.Context, domain.Principal, string) ([]domain.TuyaDevice, error)
 	EdgeStatus(context.Context, domain.Principal, string) (domain.EdgeStatus, error)
 	ForgetTuyaKey(context.Context, domain.Principal, string, string) error

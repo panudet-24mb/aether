@@ -90,6 +90,35 @@ def sync_password_line(path: pathlib.Path, user: str, password: str) -> str:
     path.chmod(0o400)
     return status
 
+def x25519_public(private_b64: str) -> str:
+    """The X25519 public key (RFC 7748) of a base64 private key, in base64: pure Python, no dependency."""
+    k = bytearray(base64.b64decode(private_b64))
+    if len(k) != 32:
+        raise ValueError("TUYA_CLOUD_PRIVATE_KEY must be 32 bytes")
+    k[0] &= 248
+    k[31] &= 127
+    k[31] |= 64
+    scalar = int.from_bytes(k, "little")
+    p, a24 = 2**255 - 19, 121665
+    x1, x2, z2, x3, z3, swap = 9, 1, 0, 9, 1, 0
+    for t in reversed(range(255)):
+        bit = (scalar >> t) & 1
+        swap ^= bit
+        if swap:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = bit
+        a, b = (x2 + z2) % p, (x2 - z2) % p
+        aa, bb = a * a % p, b * b % p
+        e = (aa - bb) % p
+        c, d = (x3 + z3) % p, (x3 - z3) % p
+        da, cb = d * a % p, c * b % p
+        x3, z3 = (da + cb) ** 2 % p, x1 * (da - cb) ** 2 % p
+        x2, z2 = aa * bb % p, e * (aa + a24 * e) % p
+    if swap:
+        x2, z2 = x3, z3
+    return base64.b64encode((x2 * pow(z2, p - 2, p) % p).to_bytes(32, "little")).decode()
+
+
 def own(path: pathlib.Path, uid: int):
     """Give a file to the container uid that must read it. Only possible as root, which is how the
     production server runs setup. Docker Desktop on macOS remaps bind-mount ownership by itself."""
@@ -257,6 +286,11 @@ def main() -> int:
     # Sealed notification-channel secrets (LINE tokens, webhook headers) are unrecoverable without
     # this key. It is deliberately separate from JWT_SIGNING_KEY so the JWT key can be rotated.
     seal_key = secret("CHANNEL_SEAL_KEY", b64key(32))
+    # Tuya Cloud project credentials are sealed by the API to the public key and opened only by the tuya-cloud
+    # worker with the private key: the private key goes to that one container and nowhere else (compose, phase G5).
+    # Generated once and kept; the public key is always derived from it.
+    tuya_cloud_private = secret("TUYA_CLOUD_PRIVATE_KEY", b64key(32))
+    tuya_cloud_public = x25519_public(tuya_cloud_private)
 
     # ---------------------------------------------------------------- PostgreSQL TLS
     pg = sec / "postgres"
@@ -463,6 +497,9 @@ connection_messages true
         "ALERTS_SHADOW": a.shadow,
         # Kept across re-runs unless given: switching device commands on or off must always be a deliberate act.
         "AUTOMATION_COMMANDS": a.automation_commands or old.get("AUTOMATION_COMMANDS", "false"),
+        # Tuya Cloud mode stays off until switched on deliberately (docs/platform/tuya-cloud.md).
+        "TUYA_CLOUD": old.get("TUYA_CLOUD", "false"),
+        "TUYA_CLOUD_MAX_LINKS_PER_TENANT": old.get("TUYA_CLOUD_MAX_LINKS_PER_TENANT", "2"),
         "WEBHOOK_ALLOWED_HOSTS": old.get("WEBHOOK_ALLOWED_HOSTS", ""),
         "SMTP_HOST": old.get("SMTP_HOST", ""),
         "SMTP_PORT": old.get("SMTP_PORT", ""),
@@ -488,6 +525,8 @@ connection_messages true
         "MQTT_PROVISION_DB_PASSWORD": prov_db_password,
         "JWT_SIGNING_KEY": jwt_key,
         "CHANNEL_SEAL_KEY": seal_key,
+        "TUYA_CLOUD_PUBLIC_KEY": tuya_cloud_public,
+        "TUYA_CLOUD_PRIVATE_KEY": tuya_cloud_private,
         "MQTT_INGEST_PASSWORD": ingest_password,
         "MQTT_COMMANDER_PASSWORD": commander_password,
         "MQTT_RESERVED_GATEWAY_ID": reserved_gateway,

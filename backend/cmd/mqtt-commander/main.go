@@ -78,7 +78,7 @@ func main() {
 
 	wake := make(chan struct{}, 1)
 	go listen(ctx, dsn, wake)
-	d := &commander.Dispatcher{Store: repo, Publisher: broker{client}, Now: time.Now}
+	d := &commander.Dispatcher{Store: repo, Publisher: broker{client}, Now: time.Now, Transports: commander.MQTTTransports}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	slog.Info("MQTT commander ready")

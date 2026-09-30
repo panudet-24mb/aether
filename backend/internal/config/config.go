@@ -1,6 +1,7 @@
 package config
 
 import (
+	"aether/backend/internal/security"
 	"encoding/base64"
 	"errors"
 	"net/mail"
@@ -22,15 +23,21 @@ type Config struct {
 	// several live pages open, share this budget, so deployments may raise it.
 	APIRateLimit int
 	// Storage and rollout controls (see docs/production.md).
-	SampleRetentionDays  int      // decoded samples older than this are deleted by the worker (default 90)
-	SampleMinIntervalSec int      // store at most one environment sample per stream per interval (0 = every uplink)
-	BLEHistoryHours      int      // raw BLE advertisement archive kept for Studio decoders (default 24)
-	DiscoveryLimit       int      // streams per gateway for tags that are NOT registered devices (default 100)
-	AlertsShadow         bool     // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
-	AutomationCommands   bool     // automations may command devices (action.command); off by default, see docs/platform/automation.md
-	SealKey              []byte   // optional CHANNEL_SEAL_KEY; falls back to a key derived from JWT_SIGNING_KEY
-	TrustedProxies       []string // CIDRs/IPs of the reverse proxy; only then is X-Forwarded-For believed
-	WebhookAllowedHosts  []string // host:port targets exempt from the private-address block (on-prem relays)
+	SampleRetentionDays  int  // decoded samples older than this are deleted by the worker (default 90)
+	SampleMinIntervalSec int  // store at most one environment sample per stream per interval (0 = every uplink)
+	BLEHistoryHours      int  // raw BLE advertisement archive kept for Studio decoders (default 24)
+	DiscoveryLimit       int  // streams per gateway for tags that are NOT registered devices (default 100)
+	AlertsShadow         bool // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
+	AutomationCommands   bool // automations may command devices (action.command); off by default, see docs/platform/automation.md
+	TuyaCloud            bool // Tuya Cloud mode (TUYA_CLOUD): the tuya-cloud gateway model and profile exist; off by default
+	// TuyaCloudPublicKey is the tuya-cloud worker's X25519 public key (TUYA_CLOUD_PUBLIC_KEY): the API seals project
+	// credentials to it and can never open them. Nil means linking is unavailable (tuya_cloud_unconfigured).
+	TuyaCloudPublicKey *[32]byte
+	// TuyaCloudLinksPerTenant caps the Tuya Cloud projects one workspace may link (TUYA_CLOUD_MAX_LINKS_PER_TENANT, default 2).
+	TuyaCloudLinksPerTenant int
+	SealKey                 []byte   // optional CHANNEL_SEAL_KEY; falls back to a key derived from JWT_SIGNING_KEY
+	TrustedProxies          []string // CIDRs/IPs of the reverse proxy; only then is X-Forwarded-For believed
+	WebhookAllowedHosts     []string // host:port targets exempt from the private-address block (on-prem relays)
 }
 
 func Load() (Config, error) {
@@ -108,6 +115,21 @@ func Load() (Config, error) {
 		c.AutomationCommands = true
 	default:
 		return c, errors.New("AUTOMATION_COMMANDS must be true or false")
+	}
+	switch os.Getenv("TUYA_CLOUD") {
+	case "", "false":
+	case "true":
+		c.TuyaCloud = true
+	default:
+		return c, errors.New("TUYA_CLOUD must be true or false")
+	}
+	if raw := os.Getenv("TUYA_CLOUD_PUBLIC_KEY"); raw != "" {
+		if c.TuyaCloudPublicKey, e = security.ParseTuyaCloudKey(raw); e != nil {
+			return c, errors.New("TUYA_CLOUD_PUBLIC_KEY must be 32 base64-encoded bytes")
+		}
+	}
+	if c.TuyaCloudLinksPerTenant, e = intEnv("TUYA_CLOUD_MAX_LINKS_PER_TENANT", 2, 1, 100); e != nil {
+		return c, e
 	}
 	if raw := os.Getenv("CHANNEL_SEAL_KEY"); raw != "" {
 		if c.SealKey, e = base64.StdEncoding.DecodeString(raw); e != nil || len(c.SealKey) < 32 {

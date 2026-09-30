@@ -350,11 +350,19 @@ type agentKind struct {
 	devices string // the device table, with available per device
 	key     string // the device table's id column (the stream's external_id)
 	silent  time.Duration
+	// down are the agent states any message of the agent ends (it is evidently back): only "offline" for a site
+	// agent; a Tuya Cloud link has more ways to be down. idle states are neither up nor down and are left alone by
+	// the silence scan (a link the user unlinked).
+	down []string
+	idle []string
 }
 
 var (
-	z2mAgent  = agentKind{table: "core.z2m_bridges", model: domain.Z2MGatewayModel, devices: "core.z2m_devices", key: "ieee", silent: Z2MSilentAfter}
-	edgeAgent = agentKind{table: "core.edge_agents", model: domain.EdgeGatewayModel, devices: "core.tuya_devices", key: "tuya_id", silent: EdgeSilentAfter}
+	z2mAgent   = agentKind{table: "core.z2m_bridges", model: domain.Z2MGatewayModel, devices: "core.z2m_devices", key: "ieee", silent: Z2MSilentAfter, down: []string{"offline"}}
+	edgeAgent  = agentKind{table: "core.edge_agents", model: domain.EdgeGatewayModel, devices: "core.tuya_devices", key: "tuya_id", silent: EdgeSilentAfter, down: []string{"offline"}}
+	cloudAgent = agentKind{table: "core.tuya_cloud_links", model: domain.TuyaCloudGatewayModel, devices: "core.tuya_devices", key: "tuya_id", silent: CloudSilentAfter,
+		down: []string{domain.CloudLinkOffline, domain.CloudLinkAuthFailed, domain.CloudLinkNotSubscribed, domain.CloudLinkQuota, domain.CloudLinkLinking},
+		idle: []string{domain.CloudLinkDisabled}}
 )
 
 // bridgeOffline records that the bridge itself is gone (its last will, or silence) and takes every device it
@@ -388,7 +396,7 @@ func (r *Repository) bridgeOnline(tx *gorm.DB, tenant, gateway string, now time.
 }
 
 func (r *Repository) agentOnline(tx *gorm.DB, tenant, gateway string, k agentKind, source string, now time.Time) error {
-	res := tx.Exec(`UPDATE `+k.table+` SET state='online',state_at=?,updated_at=? WHERE gateway_id=? AND state='offline'`, now, now, gateway)
+	res := tx.Exec(`UPDATE `+k.table+` SET state='online',state_at=?,updated_at=? WHERE gateway_id=? AND state IN ?`, now, now, gateway, k.down)
 	if res.Error != nil || res.RowsAffected == 0 {
 		return res.Error
 	}
@@ -418,10 +426,10 @@ func (r *Repository) scanSilentAgents(tx *gorm.DB, tenant string, k agentKind, s
 	var gateways []string
 	if e := tx.Raw(`SELECT g.id FROM core.gateways g
     WHERE g.model=? AND g.revoked_at IS NULL
-      AND NOT EXISTS(SELECT 1 FROM `+k.table+` b WHERE b.gateway_id=g.id AND b.state='offline')
+      AND NOT EXISTS(SELECT 1 FROM `+k.table+` b WHERE b.gateway_id=g.id AND b.state IN ?)
       AND EXISTS(SELECT 1 FROM core.sensor_streams s WHERE s.gateway_id=g.id AND s.liveness='reported')
       AND (SELECT max(p.received_at) FROM core.gateway_packets p WHERE p.gateway_id=g.id) BETWEEN ? AND ?
-    ORDER BY g.id LIMIT 100`, k.model, now.Add(-7*24*time.Hour), now.Add(-k.silent)).Scan(&gateways).Error; e != nil {
+    ORDER BY g.id LIMIT 100`, k.model, append(append([]string{}, k.down...), k.idle...), now.Add(-7*24*time.Hour), now.Add(-k.silent)).Scan(&gateways).Error; e != nil {
 		return 0, e
 	}
 	for _, g := range gateways {

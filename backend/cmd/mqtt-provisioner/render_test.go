@@ -45,3 +45,11 @@ func TestRenderCommanderIsWriteOnly(t *testing.T) {
 		t.Fatalf("commander grant:\n%s", block)
 	}
 }
+
+// A Tuya Cloud gateway never gets a broker password or ACL, even if an account row exists for it.
+func TestRenderSkipsCloudGateways(t *testing.T) {
+	p, a := render("", "", []account{{ID: "55555555-5555-4555-8555-555555555555", Hash: "$7$h5", Revision: 1, Model: "tuya-cloud"}})
+	if strings.Contains(p, "55555555") || strings.Contains(a, "55555555") {
+		t.Fatalf("cloud gateway provisioned:\n%s\n%s", p, a)
+	}
+}

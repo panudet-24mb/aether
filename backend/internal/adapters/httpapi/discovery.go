@@ -41,7 +41,9 @@ func minewDevice(d domain.DiscoveredDevice) bool {
 
 // tuyaSource reports a device listed by an Aether Edge: imported ("tuya") or only seen on its LAN ("tuya_lan").
 // Both are deliberate (an import, a device on the site's own network), never a passing phone.
-func tuyaSource(source string) bool { return source == "tuya" || source == "tuya_lan" }
+func tuyaSource(source string) bool {
+	return source == "tuya" || source == "tuya_lan" || source == "tuya_cloud"
+}
 
 func discoveryRoutes(r fiber.Router, s *app.Service) {
 	r.Get("/discovery", func(c fiber.Ctx) error {
@@ -70,11 +72,18 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 			}
 			kept := 0
 			for _, d := range devices {
+				if d.Source == "tuya_cloud" && !s.TuyaCloudEnabled {
+					continue // Tuya Cloud mode is off here (TUYA_CLOUD)
+				}
 				if tuyaSource(d.Source) {
 					// An imported Tuya device registers as the Tuya Wi-Fi profile when it can be reached locally; one
 					// only seen on the LAN has no key yet, and a battery sensor never answers locally: no profile.
 					if d.Source == "tuya" && d.LocalCapable != nil && *d.LocalCapable {
 						d.Profile = domain.DeviceProfileByID(domain.TuyaWiFiProfile)
+					}
+					// Through Tuya Cloud every listed device can be registered, battery sensors included.
+					if d.Source == "tuya_cloud" {
+						d.Profile = domain.DeviceProfileByID(domain.TuyaCloudProfile)
 					}
 					if kept < discoveryPerGateway {
 						kept++

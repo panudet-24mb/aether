@@ -35,6 +35,8 @@ type Options struct {
 	// AutomationCommands lets enabled flows send device commands (action.command). Off, a flow holding one can
 	// be saved as a draft but not enabled, and the runtime refuses to queue its commands.
 	AutomationCommands bool
+	// CloudLinksPerTenant caps the Tuya Cloud projects one workspace may link (0 means DefaultCloudLinksPerTenant).
+	CloudLinksPerTenant int
 }
 
 // Configure must be called before the repository is shared between goroutines.
@@ -375,6 +377,10 @@ func (r *Repository) RevokeGateway(ctx context.Context, p domain.Principal, id s
 		if res.RowsAffected != 1 {
 			return domain.ErrNotFound
 		}
+		// A Tuya Cloud gateway's project credentials go with it.
+		if e := wipeCloudLink(tx, p.TenantID, id); e != nil {
+			return e
+		}
 		if e := signal(tx, p.TenantID, "inventory", id); e != nil {
 			return e
 		}
@@ -477,13 +483,16 @@ func (r *Repository) CapturePacket(ctx context.Context, tenant, gateway string, 
 	id := uuid.NewString()
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
 		// Serialize capture/pruning per gateway; keep at most 100 diagnostic packets.
-		var n int64
-		res := tx.Raw(`SELECT count(*) FROM (SELECT id FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE) g`, gateway).Scan(&n)
-		if res.Error != nil {
-			return res.Error
+		var models []string
+		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, gateway).Scan(&models).Error; e != nil {
+			return e
 		}
-		if n != 1 {
+		if len(models) != 1 {
 			return domain.ErrUnauthorized
+		}
+		// A Tuya Cloud gateway has no site device that could post packets: only the tuya-cloud worker feeds it.
+		if models[0] == domain.TuyaCloudGatewayModel {
+			return domain.ErrForbidden
 		}
 		if e := tx.Exec(`INSERT INTO core.gateway_packets(id,tenant_id,gateway_id,payload) VALUES(?,?,?,?::jsonb)`, id, tenant, gateway, string(payload)).Error; e != nil {
 			return e

@@ -22,8 +22,8 @@ type Store interface {
 	ActiveTenants(context.Context) ([]string, error)
 	// ProcessAutomationRequests turns automation command requests (an outbox written by ingest) into commands.
 	ProcessAutomationRequests(ctx context.Context, tenant string, now time.Time) (int, error)
-	PendingCommandGateways(ctx context.Context, tenant string, now time.Time) ([]string, error)
-	ClaimCommands(ctx context.Context, tenant, gateway string, now time.Time, limit int) ([]domain.Command, error)
+	PendingCommandGateways(ctx context.Context, tenant string, transports []string, now time.Time) ([]string, error)
+	ClaimCommands(ctx context.Context, tenant, gateway string, transports []string, now time.Time, limit int) ([]domain.Command, error)
 	MarkCommandsPublished(ctx context.Context, tenant string, ids []string, at time.Time) error
 	MarkCommandFailed(ctx context.Context, tenant, id, reason string) error
 	TimeoutCommands(ctx context.Context, tenant string, now time.Time) (int, error)
@@ -43,12 +43,47 @@ const (
 	Burst = 10.0
 )
 
+// MQTTTransports are the transports mqtt-commander carries: Zigbee2MQTT and Aether Edge. Tuya Cloud commands
+// ("cloud") are the tuya-cloud worker's, which delivers them with its own Deliver.
+var MQTTTransports = []string{"z2m", "edge"}
+
+// Deliver hands one claimed command to its transport and reports why it failed. The error text is stored on the
+// command (bounded, never a secret).
+type Deliver func(ctx context.Context, tenant string, c domain.Command) error
+
 type Dispatcher struct {
 	Store     Store
 	Publisher Publisher
 	Now       func() time.Time
 
+	// Transports are the command transports this dispatcher claims; empty means MQTTTransports.
+	Transports []string
+	// Rate and Burst override the per-gateway pace (commands per second, bucket size); zero keeps the defaults.
+	Rate, Burst float64
+	// Deliver, when set, replaces the broker publish (the Publisher is then unused).
+	Deliver Deliver
+	// NoHousekeeping skips the per-tenant timeout and automation-request sweeps, which mqtt-commander already runs.
+	NoHousekeeping bool
+
 	buckets map[string]*bucket
+}
+
+func (d *Dispatcher) transports() []string {
+	if len(d.Transports) == 0 {
+		return MQTTTransports
+	}
+	return d.Transports
+}
+
+func (d *Dispatcher) pace() (float64, float64) {
+	rate, burst := Rate, Burst
+	if d.Rate > 0 {
+		rate = d.Rate
+	}
+	if d.Burst > 0 {
+		burst = d.Burst
+	}
+	return rate, burst
 }
 
 type bucket struct {
@@ -61,12 +96,13 @@ func (d *Dispatcher) allowance(gateway string, now time.Time) int {
 	if d.buckets == nil {
 		d.buckets = map[string]*bucket{}
 	}
+	rate, burst := d.pace()
 	b := d.buckets[gateway]
 	if b == nil {
-		b = &bucket{tokens: Burst, at: now}
+		b = &bucket{tokens: burst, at: now}
 		d.buckets[gateway] = b
 	}
-	b.tokens = math.Min(Burst, b.tokens+now.Sub(b.at).Seconds()*Rate)
+	b.tokens = math.Min(burst, b.tokens+now.Sub(b.at).Seconds()*rate)
 	b.at = now
 	return int(math.Floor(b.tokens))
 }
@@ -83,13 +119,15 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			return sent, ctx.Err()
 		}
-		if _, e := d.Store.TimeoutCommands(ctx, tenant, d.Now().UTC()); e != nil {
-			slog.Warn("command timeout sweep failed", "error", e.Error())
+		if !d.NoHousekeeping {
+			if _, e := d.Store.TimeoutCommands(ctx, tenant, d.Now().UTC()); e != nil {
+				slog.Warn("command timeout sweep failed", "error", e.Error())
+			}
+			if _, e := d.Store.ProcessAutomationRequests(ctx, tenant, d.Now().UTC()); e != nil {
+				slog.Warn("automation command requests not processed", "error", e.Error())
+			}
 		}
-		if _, e := d.Store.ProcessAutomationRequests(ctx, tenant, d.Now().UTC()); e != nil {
-			slog.Warn("automation command requests not processed", "error", e.Error())
-		}
-		gateways, e := d.Store.PendingCommandGateways(ctx, tenant, d.Now().UTC())
+		gateways, e := d.Store.PendingCommandGateways(ctx, tenant, d.transports(), d.Now().UTC())
 		if e != nil {
 			slog.Warn("command sweep failed", "error", e.Error())
 			continue
@@ -99,7 +137,7 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (int, error) {
 			if n == 0 {
 				continue
 			}
-			claimed, e := d.Store.ClaimCommands(ctx, tenant, gateway, d.Now().UTC(), n)
+			claimed, e := d.Store.ClaimCommands(ctx, tenant, gateway, d.transports(), d.Now().UTC(), n)
 			if e != nil {
 				slog.Warn("command claim failed", "error", e.Error())
 				continue
@@ -126,6 +164,14 @@ func (d *Dispatcher) publish(ctx context.Context, tenant string, c domain.Comman
 			slog.Warn("command could not be marked failed", "command", c.ID, "error", e.Error())
 		}
 		return false
+	}
+	if d.Deliver != nil {
+		if e := d.Deliver(ctx, tenant, c); e != nil {
+			slog.Warn("command delivery failed", "command", c.ID, "gateway", c.GatewayID, "reason", e.Error())
+			return fail(e.Error())
+		}
+		slog.Info("command delivered", "command", c.ID, "gateway", c.GatewayID, "property", c.Property)
+		return true
 	}
 	topic, payload, e := message(c)
 	if e != nil {

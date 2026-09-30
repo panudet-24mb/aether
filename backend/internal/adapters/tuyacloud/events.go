@@ -32,6 +32,10 @@ const (
 	ProtocolDeviceIoTCore = 1001
 )
 
+// FrameState names readings that came through Tuya Cloud, next to the generic state frame (edge.FrameState is the
+// LAN one).
+const FrameState = "tuya-cloud@1"
+
 // MaxValue bounds one reported value (JSON).
 const MaxValue = 1 << 10
 

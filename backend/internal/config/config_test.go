@@ -28,7 +28,7 @@ func TestDeploymentModesSameConfiguration(t *testing.T) {
 	}
 }
 func TestFailClosed(t *testing.T) {
-	for _, tc := range []struct{ key, value string }{{"JWT_SIGNING_KEY", "short"}, {"APP_ORIGIN", "http://aether.example"}, {"APP_ORIGIN", "https://aether.example/path"}, {"DATABASE_URL", "postgresql://aether_app:unused@db/aether?sslmode=disable"}, {"ALLOW_REGISTRATION", "true"}, {"DEPLOYMENT_MODE", "anything"}, {"APP_ENV", "prod"}, {"AUTOMATION_COMMANDS", "yes"}} {
+	for _, tc := range []struct{ key, value string }{{"JWT_SIGNING_KEY", "short"}, {"APP_ORIGIN", "http://aether.example"}, {"APP_ORIGIN", "https://aether.example/path"}, {"DATABASE_URL", "postgresql://aether_app:unused@db/aether?sslmode=disable"}, {"ALLOW_REGISTRATION", "true"}, {"DEPLOYMENT_MODE", "anything"}, {"APP_ENV", "prod"}, {"AUTOMATION_COMMANDS", "yes"}, {"TUYA_CLOUD", "yes"}, {"TUYA_CLOUD", "1"}, {"TUYA_CLOUD_PUBLIC_KEY", "c2hvcnQ="}, {"TUYA_CLOUD_MAX_LINKS_PER_TENANT", "0"}} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			base(t)
 			t.Setenv(tc.key, tc.value)
@@ -67,5 +67,19 @@ func TestAutomationCommandsOptIn(t *testing.T) {
 	t.Setenv("AUTOMATION_COMMANDS", "true")
 	if c, e := Load(); e != nil || !c.AutomationCommands {
 		t.Fatal("AUTOMATION_COMMANDS=true", e)
+	}
+}
+
+func TestTuyaCloudFlag(t *testing.T) {
+	base(t)
+	c, e := Load()
+	if e != nil || c.TuyaCloud || c.TuyaCloudPublicKey != nil || c.TuyaCloudLinksPerTenant != 2 {
+		t.Fatalf("defaults: %v %v %v %d", e, c.TuyaCloud, c.TuyaCloudPublicKey, c.TuyaCloudLinksPerTenant)
+	}
+	t.Setenv("TUYA_CLOUD", "true")
+	t.Setenv("TUYA_CLOUD_PUBLIC_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	t.Setenv("TUYA_CLOUD_MAX_LINKS_PER_TENANT", "5")
+	if c, e = Load(); e != nil || !c.TuyaCloud || c.TuyaCloudPublicKey == nil || c.TuyaCloudLinksPerTenant != 5 {
+		t.Fatalf("enabled: %v %+v", e, c)
 	}
 }

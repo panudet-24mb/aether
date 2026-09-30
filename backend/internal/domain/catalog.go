@@ -24,7 +24,7 @@ type DeviceProfile struct {
 	Brand       string   `json:"brand"`
 	Model       string   `json:"model"`
 	Label       string   `json:"label"`
-	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | any
+	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | tuya-cloud | any
 	Description string   `json:"description"`
 	Image       string   `json:"image,omitempty"`
 	Kinds       []string `json:"kinds"`   // reading kinds the device is expected to produce
@@ -67,6 +67,15 @@ const EdgeGatewayModel = "aether-edge"
 // Zigbee2MQTT devices use.
 const TuyaWiFiProfile = "tuya-wifi-device@1"
 
+// TuyaCloudGatewayModel is Tuya Cloud mode: nothing installed on site. The gateway stands for one linked Tuya IoT
+// Platform project; Aether's tuya-cloud worker consumes the project's Message Service and sets properties through
+// the OpenAPI (docs/platform/tuya-cloud.md).
+const TuyaCloudGatewayModel = "tuya-cloud"
+
+// TuyaCloudProfile is the profile of any Tuya device reached through Tuya Cloud: Wi-Fi devices, and Zigbee or BLE
+// devices behind a Tuya hub. Like TuyaWiFiProfile, what it can do comes from its data-point specification.
+const TuyaCloudProfile = "tuya-cloud-device@1"
+
 // ButtonProfileIDs lists the profiles whose tags may raise a button event.
 func ButtonProfileIDs() []string {
 	out := []string{}
@@ -92,6 +101,8 @@ var GatewayModels = []GatewayModel{
 	// Aether Edge on a site host (Raspberry Pi) next to the Tuya Wi-Fi devices: connects to each over TCP 6668 with its
 	// local key and forwards status and commands over MQTT/TLS. Not yet verified with real devices.
 	{ID: EdgeGatewayModel, Brand: "Aether", Model: "Edge", Label: "Aether Edge (Tuya Wi‑Fi)", Transport: "mqtt", Description: "โปรแกรม Aether Edge บนเครื่องในอาคาร (เช่น Raspberry Pi) คุยกับอุปกรณ์ Tuya Wi‑Fi ในวง LAN ด้วย local key โดยตรง ไม่ใช้ Tuya cloud ขณะทำงาน · ส่งสถานะและรับคำสั่งผ่าน MQTT over TLS · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
+	// Tuya Cloud mode: a linked Tuya IoT project, no site host. Depends on the internet and Tuya; not for SOS.
+	{ID: TuyaCloudGatewayModel, Brand: "Tuya", Model: "Cloud", Label: "Tuya Cloud (ไม่ต้องติดตั้ง)", Transport: "cloud", Description: "เชื่อมโปรเจกต์ Tuya IoT ของคุณ Aether รับสถานะและสั่งงานผ่าน Tuya Cloud · อุปกรณ์ Wi‑Fi และอุปกรณ์ Zigbee/BLE ที่อยู่หลัง hub Tuya · ต้องมีอินเทอร์เน็ตและขึ้นกับ Tuya · ห้ามใช้กับ SOS · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
 	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Image: "/devices/generic-http-gateway.png", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
 }
 
@@ -133,6 +144,9 @@ var DeviceProfiles = []DeviceProfile{
 	// cannot be reached locally; the import marks them.
 	{ID: TuyaWiFiProfile, Brand: "Tuya", Model: "Wi‑Fi device", Label: "อุปกรณ์ Tuya Wi‑Fi (local ผ่าน Aether Edge)", Radio: "tuya-wifi", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
 		Description: "อุปกรณ์ Tuya Wi‑Fi ที่เสียบไฟตลอด เช่น ปลั๊ก สวิตช์ หลอดไฟ มอเตอร์ม่าน · Aether Edge คุยกับอุปกรณ์ในวง LAN ด้วย local key · สั่งงานได้ตามจุดข้อมูลที่ตั้งค่าได้ · ยังไม่ยืนยันกับเครื่องจริง"},
+	// Any Tuya device of a linked Tuya Cloud project.
+	{ID: TuyaCloudProfile, Brand: "Tuya", Model: "Cloud device", Label: "อุปกรณ์ Tuya (ผ่าน Tuya Cloud)", Radio: "tuya-cloud", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
+		Description: "อุปกรณ์ Tuya ในโปรเจกต์ Tuya IoT ที่เชื่อมไว้ · สถานะมาจาก Message Service และสั่งงานผ่าน Tuya OpenAPI · ต้องมีอินเทอร์เน็ต · ยังไม่ยืนยันกับเครื่องจริง"},
 	{ID: "generic-ble-beacon@1", Image: "/devices/generic-ble-beacon.png", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
 		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
 	{ID: "generic-environment@1", Image: "/devices/generic-environment.png", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
@@ -199,6 +213,8 @@ func ProfileAllowedOn(profileID, gatewayModel string) bool {
 		return radio == "zigbee"
 	case EdgeGatewayModel:
 		return radio == "tuya-wifi"
+	case TuyaCloudGatewayModel:
+		return radio == "tuya-cloud"
 	}
-	return radio != "zigbee" && radio != "tuya-wifi"
+	return radio != "zigbee" && radio != "tuya-wifi" && radio != "tuya-cloud"
 }

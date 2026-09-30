@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -127,7 +128,16 @@ func New(region, accessID, accessSecret string) (*Client, error) {
 	if !ok || !credentialPattern.MatchString(accessID) || !credentialPattern.MatchString(accessSecret) {
 		return nil, errors.New("tuya: invalid region or credentials")
 	}
-	return &Client{base: base, id: accessID, secret: accessSecret, http: noRedirects(&http.Client{Timeout: CallTimeout}), now: time.Now}, nil
+	return &Client{base: base, id: accessID, secret: accessSecret, http: noRedirects(&http.Client{Timeout: CallTimeout, Transport: transport()}), now: time.Now}, nil
+}
+
+// transport is the default transport without any proxy from the environment (no proxy may see a signed request
+// or a token) and with TLS 1.2 at least. Certificates are always verified.
+func transport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	return t
 }
 
 // noRedirects keeps every request on the region's host: a redirect is answered as the final response (and then

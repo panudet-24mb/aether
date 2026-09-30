@@ -2,6 +2,7 @@ package tuyacloud
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -254,5 +255,23 @@ func TestRedirectNotFollowed(t *testing.T) {
 	c := NewForTest(srv.URL, "fakeaccessid0001", "fakesecret0000000000000000000001", srv.Client(), nil)
 	if e := c.Authenticate(context.Background()); !errors.Is(e, ErrResponse) {
 		t.Fatalf("redirect: %v", e)
+	}
+}
+
+// The real client never uses an environment proxy, requires TLS 1.2, verifies certificates and refuses redirects.
+func TestClientTransport(t *testing.T) {
+	c, e := New("eu", "abcdefgh12345678", "secretsecretsecretsecret12345678")
+	if e != nil {
+		t.Fatal(e)
+	}
+	tr, ok := c.http.Transport.(*http.Transport)
+	if !ok || tr.Proxy != nil || tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion != tls.VersionTLS12 || tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("transport: %+v", tr)
+	}
+	if c.http.CheckRedirect == nil {
+		t.Fatal("redirects followed")
+	}
+	if http.DefaultTransport.(*http.Transport).Proxy == nil {
+		t.Fatal("the default transport was modified instead of cloned")
 	}
 }

@@ -24,8 +24,9 @@ type account struct {
 // z2mModel is domain.Z2MGatewayModel and edgeModel domain.EdgeGatewayModel; this binary deliberately depends on
 // nothing but the database driver.
 const (
-	z2mModel  = "zigbee2mqtt"
-	edgeModel = "aether-edge"
+	z2mModel   = "zigbee2mqtt"
+	edgeModel  = "aether-edge"
+	cloudModel = "tuya-cloud" // domain.TuyaCloudGatewayModel: never a broker account
 )
 
 // render builds the runtime password and ACL files from the static base files and the enrolled gateways.
@@ -42,6 +43,10 @@ func render(basePasswords, baseACL string, accounts []account) (string, string) 
 	// base file the block is inert.
 	a += "\nuser aether-commander\ntopic write aether/z2m/+/+/set\ntopic write aether/edge/+/+/set\n"
 	for _, c := range accounts {
+		// A Tuya Cloud gateway has nothing on site: no password and no ACL, even if an account row exists.
+		if c.Model == cloudModel {
+			continue
+		}
 		p += "gw-" + c.ID + ":" + c.Hash + "\n"
 		if c.Model == z2mModel {
 			a += "\nuser gw-" + c.ID + "\ntopic readwrite aether/z2m/" + c.ID + "/#\n"

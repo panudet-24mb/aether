@@ -12,6 +12,8 @@ var (
 	ErrInvalid      = errors.New("invalid_input")
 	ErrConflict     = errors.New("conflict")
 	ErrNotFound     = errors.New("not_found")
+	// ErrUnavailable is a feature this deployment is not configured for (HTTP 503), e.g. Tuya Cloud without its key.
+	ErrUnavailable = errors.New("unavailable")
 )
 
 type User struct {

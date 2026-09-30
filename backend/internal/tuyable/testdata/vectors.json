@@ -1,0 +1,647 @@
+{
+ "source": {
+  "PlusPlus-ua/ha_tuya_ble": "6037ac5a04ceb23a36d1b88e2303aa1da7fdbe83",
+  "ha-tuya-ble/ha_tuya_ble": "40899aeff5f1bcb63aca26fba4ee59b76e101681"
+ },
+ "crc16": [
+  {
+   "data": "",
+   "crc": 65535
+  },
+  {
+   "data": "00",
+   "crc": 16575
+  },
+  {
+   "data": "313233343536373839",
+   "crc": 19255
+  },
+  {
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "crc": 22379
+  },
+  {
+   "data": "ffffffffffffffffffffffffffffffffff",
+   "crc": 49217
+  }
+ ],
+ "varint": [
+  {
+   "value": 0,
+   "bytes": "00"
+  },
+  {
+   "value": 1,
+   "bytes": "01"
+  },
+  {
+   "value": 127,
+   "bytes": "7f"
+  },
+  {
+   "value": 128,
+   "bytes": "8001"
+  },
+  {
+   "value": 255,
+   "bytes": "ff01"
+  },
+  {
+   "value": 300,
+   "bytes": "ac02"
+  },
+  {
+   "value": 16383,
+   "bytes": "ff7f"
+  },
+  {
+   "value": 16384,
+   "bytes": "808001"
+  },
+  {
+   "value": 2097152,
+   "bytes": "80808001"
+  },
+  {
+   "value": 268435455,
+   "bytes": "ffffff7f"
+  }
+ ],
+ "keys": [
+  {
+   "local_key": "0123456789abcdef",
+   "sec_key": "",
+   "pairing_login_key": "303132333435",
+   "login_key": "d6a9a933c8aafc51e55ac0662b6e4d4a",
+   "srand": "a1b2c3d4e5f6",
+   "session_key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "login_flag": 4,
+   "session_flag": 5
+  },
+  {
+   "local_key": "Zk8#pQ2!mN4$vB6&",
+   "sec_key": "",
+   "pairing_login_key": "5a6b38237051",
+   "login_key": "76447ad03e7144edbae60f0630c5d8d0",
+   "srand": "a1b2c3d4e5f6",
+   "session_key": "33c4f1cda85652a7c62cbe7e208d9552",
+   "login_flag": 4,
+   "session_flag": 5
+  },
+  {
+   "local_key": "0123456789abcdef",
+   "sec_key": "fedcba9876543210",
+   "pairing_login_key": "303132333435",
+   "login_key": "957b49743a06a938c9246950faadbaa9",
+   "srand": "a1b2c3d4e5f6",
+   "session_key": "e0322c79f9ba5895432587e1682d7dc6",
+   "login_flag": 14,
+   "session_flag": 15
+  }
+ ],
+ "frames": [
+  {
+   "name": "device_info",
+   "seq": 1,
+   "response_to": 0,
+   "code": 0,
+   "data": "",
+   "key": "d6a9a933c8aafc51e55ac0662b6e4d4a",
+   "flag": 4,
+   "protocol": 2,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000001000000000000000092690000",
+   "fragments": [
+    "00212004000102030405060708090a0b0c0d0e0f",
+    "0135a7c0a89c84145e2ce517b648d9d45a"
+   ]
+  },
+  {
+   "name": "device_info_fd50",
+   "seq": 1,
+   "response_to": 0,
+   "code": 0,
+   "data": "00f3",
+   "key": "d6a9a933c8aafc51e55ac0662b6e4d4a",
+   "flag": 4,
+   "protocol": 2,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000001000000000000000200f3784e",
+   "fragments": [
+    "00212004000102030405060708090a0b0c0d0e0f",
+    "0174cac13ec0a00ce3e0d4fef497a37c45"
+   ]
+  },
+  {
+   "name": "pair",
+   "seq": 2,
+   "response_to": 0,
+   "code": 1,
+   "data": "757569642d303030303030303030306131303132333435626631323334353637383930616263646566000000",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000002000000000001002c757569642d3030303030303030303061313031323334356266313233343536373839306162636465660000005a36000000000000",
+   "fragments": [
+    "00513005000102030405060708090a0b0c0d0e0f",
+    "01ef3d0c3138f60f38db3b0b3f4ba0118aa1a3ff",
+    "0206c14d918d379143884f4441d5842237f320eb",
+    "032b8721883cf5143bdb7c7e7e7a280a80a3c9a9",
+    "04ec93e1bcdf51c8"
+   ]
+  },
+  {
+   "name": "status",
+   "seq": 3,
+   "response_to": 0,
+   "code": 3,
+   "data": "",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "000000030000000000030000f2800000",
+   "fragments": [
+    "00213005000102030405060708090a0b0c0d0e0f",
+    "0119c6b37764bd37d290e1aa374de12093"
+   ]
+  },
+  {
+   "name": "dps_v3",
+   "seq": 4,
+   "response_to": 0,
+   "code": 2,
+   "data": "01010101020204000000eb",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000004000000000002000b01010101020204000000ebae5700000000000000",
+   "fragments": [
+    "00313005000102030405060708090a0b0c0d0e0f",
+    "01cfe67e7876eed5f013a41327f29371ee329667",
+    "02993fb93a25f9555e97ca9cde53"
+   ]
+  },
+  {
+   "name": "dps_v4",
+   "seq": 5,
+   "response_to": 0,
+   "code": 39,
+   "data": "000000000501010001000304000102",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 4,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000005000000000027000f000000000501010001000304000102da2f000000",
+   "fragments": [
+    "00314005000102030405060708090a0b0c0d0e0f",
+    "01ff3f00cd23fd028b2a06ec0adef3ecc70539e0",
+    "02e1412360ac8281e0ef7e336ebc"
+   ]
+  },
+  {
+   "name": "ack_receive_dp",
+   "seq": 6,
+   "response_to": 17,
+   "code": 32769,
+   "data": "",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "000000060000001180010000a1cb0000",
+   "fragments": [
+    "00213005000102030405060708090a0b0c0d0e0f",
+    "0165793532af4ac0aec772fc0109cb4ade"
+   ]
+  },
+  {
+   "name": "long_string",
+   "seq": 7,
+   "response_to": 0,
+   "code": 2,
+   "data": "65035a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+   "key": "1419d18dd75b9c7c05f2c1e940d9d1a5",
+   "flag": 5,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000007000000000002005d65035a787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878bd450000000000",
+   "fragments": [
+    "0081013005000102030405060708090a0b0c0d0e",
+    "010ff6f30391d07f7418d27c2c046bb852f65076",
+    "022e191dea6bc0377b673753ffbfe5eba6d54a7c",
+    "03e5b8ffa34977e2afc65399c31b05f78d2b0b0c",
+    "04a77025d10eaed7a0c5478c326eb24d2d7f46ee",
+    "05a9b3d9479d0bdfa7aec229814ce6e775143d7b",
+    "064bf5c65ae3beb1d6353ab417b5fefc50745d"
+   ]
+  },
+  {
+   "name": "device_info_advertised_v3",
+   "seq": 1,
+   "response_to": 0,
+   "code": 0,
+   "data": "",
+   "key": "d6a9a933c8aafc51e55ac0662b6e4d4a",
+   "flag": 4,
+   "protocol": 3,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000001000000000000000092690000",
+   "fragments": [
+    "00213004000102030405060708090a0b0c0d0e0f",
+    "0135a7c0a89c84145e2ce517b648d9d45a"
+   ]
+  },
+  {
+   "name": "device_info_advertised_v4",
+   "seq": 1,
+   "response_to": 0,
+   "code": 0,
+   "data": "",
+   "key": "d6a9a933c8aafc51e55ac0662b6e4d4a",
+   "flag": 4,
+   "protocol": 4,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000001000000000000000092690000",
+   "fragments": [
+    "00214004000102030405060708090a0b0c0d0e0f",
+    "0135a7c0a89c84145e2ce517b648d9d45a"
+   ]
+  },
+  {
+   "name": "device_info_v2",
+   "seq": 1,
+   "response_to": 0,
+   "code": 0,
+   "data": "",
+   "key": "957b49743a06a938c9246950faadbaa9",
+   "flag": 14,
+   "protocol": 2,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "00000001000000000000000092690000",
+   "fragments": [
+    "0021200e000102030405060708090a0b0c0d0e0f",
+    "019634c94d579f7072c9e54563bdd1d7a2"
+   ]
+  },
+  {
+   "name": "status_v2",
+   "seq": 2,
+   "response_to": 0,
+   "code": 3,
+   "data": "",
+   "key": "e0322c79f9ba5895432587e1682d7dc6",
+   "flag": 15,
+   "protocol": 4,
+   "iv": "000102030405060708090a0b0c0d0e0f",
+   "plaintext": "000000020000000000030000628d0000",
+   "fragments": [
+    "0021400f000102030405060708090a0b0c0d0e0f",
+    "0173b297836069d168d8844eea1a4a7b0a"
+   ]
+  }
+ ],
+ "pairing_request": {
+  "uuid": "uuid-0000000000a1",
+  "login6": "303132333435",
+  "device_id": "bf1234567890abcdef",
+  "payload": "757569642d303030303030303030306131303132333435626631323334353637383930616263646566000000"
+ },
+ "dps": [
+  {
+   "length_size": 1,
+   "encoded": "01010101",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    }
+   ]
+  },
+  {
+   "length_size": 1,
+   "encoded": "01010100020204000000eb030204ffffffd80404010205030568656c6c6f06000300ff100705020003",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": false
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 235
+    },
+    {
+     "id": 3,
+     "type": 2,
+     "value": -40
+    },
+    {
+     "id": 4,
+     "type": 4,
+     "value": 2
+    },
+    {
+     "id": 5,
+     "type": 3,
+     "value": "hello"
+    },
+    {
+     "id": 6,
+     "type": 0,
+     "value": "00ff10"
+    },
+    {
+     "id": 7,
+     "type": 5,
+     "value": "0003"
+    }
+   ]
+  },
+  {
+   "length_size": 1,
+   "encoded": "080402012c090404000111700a02047fffffff0b020480000000",
+   "decoded": [
+    {
+     "id": 8,
+     "type": 4,
+     "value": 300
+    },
+    {
+     "id": 9,
+     "type": 4,
+     "value": 70000
+    },
+    {
+     "id": 10,
+     "type": 2,
+     "value": 2147483647
+    },
+    {
+     "id": 11,
+     "type": 2,
+     "value": -2147483648
+    }
+   ]
+  },
+  {
+   "length_size": 1,
+   "encoded": "0c0300",
+   "decoded": [
+    {
+     "id": 12,
+     "type": 3,
+     "value": ""
+    }
+   ]
+  },
+  {
+   "length_size": 2,
+   "encoded": "0101000101",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    }
+   ]
+  },
+  {
+   "length_size": 2,
+   "encoded": "010100010002020004000000eb03020004ffffffd804040001020503000568656c6c6f0600000300ff10070500020003",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": false
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 235
+    },
+    {
+     "id": 3,
+     "type": 2,
+     "value": -40
+    },
+    {
+     "id": 4,
+     "type": 4,
+     "value": 2
+    },
+    {
+     "id": 5,
+     "type": 3,
+     "value": "hello"
+    },
+    {
+     "id": 6,
+     "type": 0,
+     "value": "00ff10"
+    },
+    {
+     "id": 7,
+     "type": 5,
+     "value": "0003"
+    }
+   ]
+  },
+  {
+   "length_size": 2,
+   "encoded": "08040002012c09040004000111700a0200047fffffff0b02000480000000",
+   "decoded": [
+    {
+     "id": 8,
+     "type": 4,
+     "value": 300
+    },
+    {
+     "id": 9,
+     "type": 4,
+     "value": 70000
+    },
+    {
+     "id": 10,
+     "type": 2,
+     "value": 2147483647
+    },
+    {
+     "id": 11,
+     "type": 2,
+     "value": -2147483648
+    }
+   ]
+  },
+  {
+   "length_size": 2,
+   "encoded": "0c030000",
+   "decoded": [
+    {
+     "id": 12,
+     "type": 3,
+     "value": ""
+    }
+   ]
+  }
+ ],
+ "receive": [
+  {
+   "code": 32769,
+   "data": "01010101020204000000d7",
+   "dps_at": 0,
+   "length_size": 1,
+   "ack": "",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  },
+  {
+   "code": 32771,
+   "data": "016955b90001010101020204000000d7",
+   "dps_at": 5,
+   "length_size": 1,
+   "ack": "",
+   "time": 1767225600.0,
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  },
+  {
+   "code": 32771,
+   "data": "003137363732323536303031323301010101020204000000d7",
+   "dps_at": 14,
+   "length_size": 1,
+   "ack": "",
+   "time": 1767225600.123,
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  },
+  {
+   "code": 32774,
+   "data": "00000000090001010100010102020004000000d7",
+   "dps_at": 7,
+   "length_size": 2,
+   "ack": "0000000009000100",
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  },
+  {
+   "code": 32774,
+   "data": "000000000a8001010100010102020004000000d7",
+   "dps_at": 7,
+   "length_size": 2,
+   "ack": null,
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  },
+  {
+   "code": 32775,
+   "data": "000000000b0000016955b900010100010102020004000000d7",
+   "dps_at": 12,
+   "length_size": 2,
+   "ack": "000000000b000000",
+   "time": 1767225600.0,
+   "decoded": [
+    {
+     "id": 1,
+     "type": 1,
+     "value": true
+    },
+    {
+     "id": 2,
+     "type": 2,
+     "value": 215
+    }
+   ]
+  }
+ ],
+ "time": {
+  "unix_ms": 1767225600000,
+  "tz_hundredths": 700,
+  "time1": "3137363732323536303030303002bc",
+  "time2": "1a01010700000302bc",
+  "note": "time2 weekday is Python tm_wday (Monday=0); 2026-01-01 is a Thursday"
+ },
+ "device_info": {
+  "data": "010203000501a1b2c3d4e5f60401404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "device_version": "1.2",
+  "protocol_version": "3.0",
+  "protocol": 3,
+  "flags": 5,
+  "bound": true,
+  "srand": "a1b2c3d4e5f6",
+  "hardware_version": "4.1",
+  "auth_key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+ },
+ "adverts": [
+  {
+   "service_data": "006776796767336d38",
+   "manufacturer_data": "800300000000bef2a8cc24339e9a8edf2c0d28afa0e0",
+   "product_id": "gvygg3m8",
+   "uuid": "tuya5d8f2a3c9e1b",
+   "bound": true,
+   "protocol": 3
+  },
+  {
+   "service_data": "006162636465666768696a6b6c6d6e6f70",
+   "manufacturer_data": "00040000000082305fd583b32c93170d287f30dd3cd7",
+   "product_id": "abcdefghijklmnop",
+   "uuid": "0123456789abcdef",
+   "bound": false,
+   "protocol": 4
+  }
+ ]
+}

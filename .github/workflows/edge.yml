@@ -25,7 +25,7 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Test the agent and its protocol library
         working-directory: backend
-        run: go test -race ./internal/edge/... ./internal/tuyalocal/... ./cmd/aether-edge/... ./internal/edgeinstall/...
+        run: go test -race ./internal/edge/... ./internal/tuyalocal/... ./internal/tuyable/... ./cmd/aether-edge/... ./internal/edgeinstall/...
       - name: Version
         id: version
         run: |

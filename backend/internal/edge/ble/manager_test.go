@@ -409,7 +409,7 @@ func (f *floodRadio) Scan(ctx context.Context, on func(ble.Advertisement)) error
 	sd, md := other.Advert()
 	return f.real.Scan(ctx, func(a ble.Advertisement) {
 		on(a)
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 1000 && ctx.Err() == nil; i++ {
 			on(ble.Advertisement{MAC: fmt.Sprintf("02:00:00:00:%02x:%02x", i/256, i%256), RSSI: -30, ServiceData: sd, ManufacturerData: md})
 		}
 	})

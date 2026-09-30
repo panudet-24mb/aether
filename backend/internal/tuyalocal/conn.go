@@ -130,6 +130,11 @@ func Dial(ctx context.Context, o Options) (*Conn, error) {
 	d := net.Dialer{Timeout: o.DialTimeout}
 	nc, e := d.DialContext(ctx, "tcp", addr)
 	if e != nil {
+		// A device that already has a local client can reset a second one before the handshake completes
+		// (a refused connection, by contrast, means nothing is listening).
+		if errors.Is(e, syscall.ECONNRESET) {
+			return nil, ErrBusy
+		}
 		return nil, e
 	}
 	c := &Conn{opts: o, nc: nc, fr: NewFrameReader(nc), sess: sess, done: make(chan struct{}), queryAck: make(chan error, 1)}

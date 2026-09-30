@@ -296,6 +296,11 @@ func ruleEvent(ruleType string) string {
 	return ruleType
 }
 
+// Subscribes reports whether a rule of this type listens to this event type, whatever its device scope.
+func Subscribes(rule domain.AlertRule, eventType string) bool {
+	return ruleEvent(rule.EventType) == eventType
+}
+
 // Matches reports whether an enabled rule subscribes to this event for this device.
 func Matches(rule domain.AlertRule, ev domain.DeviceEvent) bool {
 	if !rule.Enabled || ruleEvent(rule.EventType) != ev.EventType {
@@ -326,9 +331,16 @@ func Matches(rule domain.AlertRule, ev domain.DeviceEvent) bool {
 	return false
 }
 
+// MaxLifeSafetyDedupeSec caps the dedupe window of SOS and hazard rules.
+const MaxLifeSafetyDedupeSec = 300
+
 // ValidateRule enforces the same limits the database does plus scope sanity.
 func ValidateRule(r domain.AlertRule) error {
 	if strings.TrimSpace(r.Name) == "" || len(r.Name) > 128 || !contains(domain.RuleEventTypes, r.EventType) || !contains(domain.Severities, r.Severity) || r.DedupeSec < 0 || r.DedupeSec > 86400 || len(r.Channels) > 20 || len(r.Scope.ExternalIDs) > 200 {
+		return domain.ErrInvalid
+	}
+	// A second SOS press or alarm five minutes later is a new call for help (alert_rules_life_safety_dedupe).
+	if domain.BypassesShadow(r.EventType) && r.DedupeSec > MaxLifeSafetyDedupeSec {
 		return domain.ErrInvalid
 	}
 	for _, id := range r.Scope.ExternalIDs {

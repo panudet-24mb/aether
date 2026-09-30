@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/mail"
@@ -105,7 +106,14 @@ func (s *Sender) ValidateChannel(kind string, config map[string]string, hasSecre
 		if !s.SMTP.Configured() {
 			return errors.New("smtp_not_configured")
 		}
-		if len(recipients(config)) == 0 {
+		if config["audience"] == AudienceMembers {
+			// Recipients are resolved per alert from the members who can see its project.
+			if _, ok := MemberRoles(config); !ok || config["to"] != "" {
+				return domain.ErrInvalid
+			}
+			return nil
+		}
+		if config["audience"] != "" || len(recipients(config)) == 0 {
 			return domain.ErrInvalid
 		}
 	default:
@@ -114,14 +122,61 @@ func (s *Sender) ValidateChannel(kind string, config map[string]string, hasSecre
 	return nil
 }
 
+// AudienceMembers is the email channel audience resolved at delivery time from the workspace members who
+// can see the alert's project (core.alert_recipients); the worker fills config["to"] before sending.
+const AudienceMembers = "members"
+
+// DefaultMemberRoles is who a "members" email reaches when the channel names no roles.
+var DefaultMemberRoles = []string{"owner", "admin", "operator"}
+
+// MemberRoles parses config["roles"] (comma separated) for a "members" email channel.
+func MemberRoles(config map[string]string) ([]string, bool) {
+	raw := strings.TrimSpace(config["roles"])
+	if raw == "" {
+		return DefaultMemberRoles, true
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, part := range strings.Split(raw, ",") {
+		role := strings.TrimSpace(part)
+		if role != "owner" && role != "admin" && role != "operator" && role != "viewer" {
+			return nil, false
+		}
+		if !seen[role] {
+			seen[role] = true
+			out = append(out, role)
+		}
+	}
+	return out, len(out) > 0
+}
+
+// MaxMemberRecipients caps one "members" delivery; the worker logs when more members qualify.
+const MaxMemberRecipients = 50
+
+// recipients parses config["to"]. A hand-written list is all-or-nothing, as the operator typed it; a "members"
+// list comes from the directory, so one malformed stored address is skipped rather than silencing the rest.
 func recipients(config map[string]string) []string {
 	var out []string
+	members := config["audience"] == AudienceMembers
+	limit := 10
+	if members {
+		limit = MaxMemberRecipients
+	}
 	for _, part := range strings.Split(config["to"], ",") {
 		addr := strings.TrimSpace(part)
 		if addr == "" {
 			continue
 		}
-		if p, e := mail.ParseAddress(addr); e != nil || p.Address != addr || len(out) >= 10 {
+		if len(out) >= limit {
+			if members {
+				break
+			}
+			return nil
+		}
+		if p, e := mail.ParseAddress(addr); e != nil || p.Address != addr {
+			if members {
+				continue
+			}
 			return nil
 		}
 		out = append(out, addr)
@@ -238,50 +293,104 @@ func (s *Sender) sendEmail(ctx context.Context, config map[string]string, payloa
 		return errors.New("no recipients")
 	}
 	subject := strings.ReplaceAll(strings.ReplaceAll(payload.Alert.Title, "\r", " "), "\n", " ")
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Aether] %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", s.SMTP.From, strings.Join(to, ", "), subject, payload.Text)
-	// net/smtp.SendMail has no deadline; one hung MX would stall the single worker for every tenant.
+	message := func(to string) []byte {
+		return []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Aether] %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", s.SMTP.From, to, subject, payload.Text))
+	}
+	client, closeConn, e := s.dialSMTP(ctx)
+	if e != nil {
+		return e
+	}
+	defer closeConn()
+	defer client.Close()
+	if config["audience"] != AudienceMembers {
+		// A hand-written list is one message the recipients see together, as before.
+		if e := client.Mail(s.SMTP.From); e != nil {
+			return errors.New("smtp sender rejected")
+		}
+		for _, rcpt := range to {
+			if e := client.Rcpt(rcpt); e != nil {
+				return errors.New("smtp recipient rejected")
+			}
+		}
+		if e := writeData(client, message(strings.Join(to, ", "))); e != nil {
+			return e
+		}
+		return client.Quit()
+	}
+	// Members of a workspace do not learn each other's addresses: one message addressed to
+	// "undisclosed-recipients:;" with one RCPT per member (a blind copy). A rejected address is skipped; the
+	// delivery succeeds when the server accepted at least one member, and is sent once, so a retry never
+	// repeats it to the members who already have it.
+	if e := client.Mail(s.SMTP.From); e != nil {
+		return errors.New("smtp sender rejected")
+	}
+	accepted, rejected := 0, 0
+	for _, rcpt := range to {
+		if e := client.Rcpt(rcpt); e != nil {
+			rejected++
+			continue
+		}
+		accepted++
+	}
+	if rejected > 0 {
+		// Counts only: the addresses are personal data and stay out of the log.
+		slog.Warn("alert email: recipients rejected", "accepted", accepted, "rejected", rejected)
+	}
+	if accepted == 0 {
+		_ = client.Reset()
+		return errors.New("smtp recipient rejected")
+	}
+	if e := writeData(client, message("undisclosed-recipients:;")); e != nil {
+		return e
+	}
+	return client.Quit()
+}
+
+// dialSMTP connects with a deadline (net/smtp.SendMail has none; one hung MX would stall the single worker for
+// every tenant), upgrades to TLS when offered and authenticates.
+func (s *Sender) dialSMTP(ctx context.Context) (*smtp.Client, func(), error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(15 * time.Second)
 	}
 	conn, e := (&net.Dialer{}).DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", s.SMTP.Host, s.SMTP.Port))
 	if e != nil {
-		return errors.New("smtp connection failed")
+		return nil, nil, errors.New("smtp connection failed")
 	}
-	defer conn.Close()
 	_ = conn.SetDeadline(deadline)
 	client, e := smtp.NewClient(conn, s.SMTP.Host)
 	if e != nil {
-		return errors.New("smtp handshake failed")
+		conn.Close()
+		return nil, nil, errors.New("smtp handshake failed")
 	}
-	defer client.Close()
+	fail := func(msg string) (*smtp.Client, func(), error) {
+		client.Close()
+		conn.Close()
+		return nil, nil, errors.New(msg)
+	}
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if e := client.StartTLS(&tls.Config{ServerName: s.SMTP.Host, MinVersion: tls.VersionTLS12}); e != nil {
-			return errors.New("smtp starttls failed")
+			return fail("smtp starttls failed")
 		}
 	}
 	if s.SMTP.Username != "" {
 		if e := client.Auth(smtp.PlainAuth("", s.SMTP.Username, s.SMTP.Password, s.SMTP.Host)); e != nil {
-			return errors.New("smtp authentication failed")
+			return fail("smtp authentication failed")
 		}
 	}
-	if e := client.Mail(s.SMTP.From); e != nil {
-		return errors.New("smtp sender rejected")
-	}
-	for _, rcpt := range to {
-		if e := client.Rcpt(rcpt); e != nil {
-			return errors.New("smtp recipient rejected")
-		}
-	}
+	return client, func() { conn.Close() }, nil
+}
+
+func writeData(client *smtp.Client, msg []byte) error {
 	w, e := client.Data()
 	if e != nil {
 		return errors.New("smtp delivery failed")
 	}
-	if _, e := w.Write([]byte(msg)); e != nil {
+	if _, e := w.Write(msg); e != nil {
 		return errors.New("smtp delivery failed")
 	}
 	if e := w.Close(); e != nil {
 		return errors.New("smtp delivery failed")
 	}
-	return client.Quit()
+	return nil
 }

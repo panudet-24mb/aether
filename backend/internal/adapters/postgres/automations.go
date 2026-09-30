@@ -110,8 +110,26 @@ func (r *Repository) AutomationChannels(ctx context.Context, p domain.Principal)
 }
 
 func channelSet(tx *gorm.DB, out map[string]bool) error {
+	return usableChannels(tx, out, nil, false)
+}
+
+// gatewayOrNil passes an empty gateway id to SQL as NULL.
+func gatewayOrNil(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
+
+// usableChannels lists the channels a flow may notify. With scoped set, a workspace flow may only use workspace
+// channels and a project flow also its own project's, the same rule alert rules follow (docs/platform/alerts.md).
+func usableChannels(tx *gorm.DB, out map[string]bool, project *string, scoped bool) error {
 	var ids []string
-	if e := tx.Raw(`SELECT id FROM core.notification_channels LIMIT 200`).Scan(&ids).Error; e != nil {
+	q := tx.Raw(`SELECT id FROM core.notification_channels LIMIT 200`)
+	if scoped {
+		q = tx.Raw(`SELECT id FROM core.notification_channels WHERE project_id IS NULL OR project_id=?::uuid LIMIT 200`, project)
+	}
+	if e := q.Scan(&ids).Error; e != nil {
 		return e
 	}
 	for _, id := range ids {
@@ -1020,9 +1038,13 @@ func runFlow(tx *gorm.DB, tenant string, row flowRow, external string, f *firing
 					return e
 				}
 			}
+			// A project channel only carries alerts of its project: the flow's, or the project of the gateway
+			// that triggered it. The delivery worker checks the gateway's project again when it sends.
 			for _, channel := range act.ChannelIDs {
-				res := tx.Exec(`INSERT INTO core.notifications(tenant_id,id,alert_id,channel_id,next_attempt_at) SELECT ?,?,?,id,now() FROM core.notification_channels WHERE id=? AND enabled`,
-					tenant, uuid.NewString(), alertID, channel)
+				res := tx.Exec(`INSERT INTO core.notifications(tenant_id,id,alert_id,channel_id,next_attempt_at) SELECT ?,?,?,c.id,now() FROM core.notification_channels c
+          WHERE c.id=? AND c.enabled AND (c.project_id IS NULL OR c.project_id=?::uuid
+            OR c.project_id=(SELECT g.project_id FROM core.gateways g WHERE g.id=?::uuid))`,
+					tenant, uuid.NewString(), alertID, channel, row.ProjectID, gatewayOrNil(f.gateway))
 				if res.Error != nil {
 					return res.Error
 				}

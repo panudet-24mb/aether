@@ -19,6 +19,10 @@
 .ac-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .ac-toolbar input { font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-paper); color: var(--color-ink); min-width: 260px; }
 .ac-note { font-size: 12px; color: var(--color-muted); line-height: 1.6; }
+/* Project filter and project badge on rules / channels */
+.ac-filter { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--color-muted); }
+.ac-filter select { font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-paper); color: var(--color-ink); max-width: 220px; }
+.ac-status.ac-project.is-project { color: var(--color-accent); border-color: var(--color-accent-dark); }
 .ac-chip { padding: 6px 12px; border-radius: 20px; border: 1px solid var(--color-border); background: transparent; color: var(--color-muted); font-size: 13px; cursor: pointer; }
 .ac-chip.is-on { color: var(--color-accent); border-color: var(--color-accent-dark); background: var(--color-accent-faint); }
 .ac-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-panel-raised); color: var(--color-ink); font-size: 13px; cursor: pointer; white-space: nowrap; }

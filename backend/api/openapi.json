@@ -1706,7 +1706,7 @@
   },
   "/api/v1/rules": {
    "get": {
-    "summary": "List alert rules; builtin=true marks the rules Aether seeded for the workspace (button/tamper), which can be edited or disabled like any other",
+    "summary": "List alert rules; builtin=true marks the rules Aether seeded for the workspace (button/tamper), which can be edited or disabled like any other; project_id is null for workspace-wide rules, and a member limited to projects sees workspace rules read-only (device lists trimmed) plus the rules of their projects",
     "operationId": "get__api_v1_rules",
     "security": [
      {
@@ -1730,7 +1730,7 @@
     }
    },
    "post": {
-    "summary": "Create an alert rule (owner/admin)",
+    "summary": "Create an alert rule (owner/admin); optional project_id limits it to devices on that project's gateways (required for a project-limited admin), and its channels must be workspace-wide or of the same project",
     "operationId": "post__api_v1_rules",
     "security": [
      {
@@ -1877,7 +1877,7 @@
   },
   "/api/v1/rules/{id}/update": {
    "post": {
-    "summary": "Replace an alert rule",
+    "summary": "Replace an alert rule; leaving project_id out keeps the stored project, null or empty makes it workspace-wide",
     "operationId": "post__api_v1_rules_id_update",
     "security": [
      {
@@ -2072,7 +2072,7 @@
   },
   "/api/v1/channels": {
    "get": {
-    "summary": "List notification channels (secrets omitted)",
+    "summary": "List notification channels (secrets omitted); project_id is null for workspace-wide channels, whose config is blanked for members who cannot manage them",
     "operationId": "get__api_v1_channels",
     "security": [
      {
@@ -2096,7 +2096,7 @@
     }
    },
    "post": {
-    "summary": "Create a webhook, LINE Messaging API or email channel",
+    "summary": "Create a webhook, LINE Messaging API or email channel; optional project_id; email accepts config.audience=members with optional config.roles (owner,admin,operator,viewer) to mail the members who can see the alert's project",
     "operationId": "post__api_v1_channels",
     "security": [
      {
@@ -2255,7 +2255,7 @@
   },
   "/api/v1/channels/{id}/test": {
    "post": {
-    "summary": "Send a synthetic test alert through the channel; 502 with detail on failure",
+    "summary": "Send a synthetic test alert through the channel; 502 with detail on failure. A members email channel sends only to the calling member",
     "operationId": "post__api_v1_channels_id_test",
     "security": [
      {

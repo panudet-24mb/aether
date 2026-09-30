@@ -16,8 +16,13 @@ type AfterHours = { from: string; to: string; days: number[] };
 type Scope = { external_ids?: string[]; offline_after_sec?: number; metric?: string; op?: string; value?: number; gateway_ids?: string[]; after_hours?: AfterHours };
 // `builtin`: a rule Aether seeded for the workspace (emergency button, tamper). Label only — it can be
 // edited, disabled and deleted like any other rule.
-type Rule = { id: string; name: string; enabled: boolean; event_type: string; severity: string; scope: Scope; channels: string[]; dedupe_sec: number; created_at: string; builtin?: boolean };
-type Channel = { id: string; name: string; kind: string; enabled: boolean; config: Record<string, string>; has_secret: boolean; created_at: string };
+// `project_id`: null = the whole workspace; otherwise the rule only fires for devices on that project's gateways.
+type Rule = { id: string; name: string; enabled: boolean; event_type: string; severity: string; scope: Scope; channels: string[]; dedupe_sec: number; created_at: string; builtin?: boolean; project_id?: string | null };
+type Channel = { id: string; name: string; kind: string; enabled: boolean; config: Record<string, string>; has_secret: boolean; created_at: string; project_id?: string | null };
+type Project = { id: string; name: string };
+type ChannelDraft = { name: string; kind: string; url: string; to: string; secret: string; project_id: string; audience: "" | "members"; roles: string[] };
+/** "" = every row, "workspace" = rows without a project, otherwise one project id. */
+type ProjectFilter = string;
 type Notification = { id: string; alert_id: string; channel_id: string | null; status: string; attempts: number; next_attempt_at: string; last_error: string | null; created_at: string; sent_at: string | null };
 type Tab = "alerts" | "events" | "rules" | "channels";
 
@@ -30,6 +35,9 @@ const WEEKDAYS: [number, string, string][] = [[1, "จ", "จันทร์"], 
 const afterHoursText = (a: AfterHours) => `นอกเวลา ${a.from}–${a.to}${a.days.length === 7 ? " ทุกวัน" : ` · ${WEEKDAYS.filter(([d]) => a.days.includes(d)).map(([, s]) => s).join(" ")}`}`;
 const SEVERITY_LABEL: Record<string, string> = { info: "ข้อมูล", warning: "เตือน", critical: "วิกฤต" };
 const KIND_LABEL: Record<string, string> = { webhook: "Webhook", line: "LINE Messaging API", email: "อีเมล" };
+const ROLE_LABEL: [string, string][] = [["owner", "เจ้าของ"], ["admin", "ผู้ดูแล"], ["operator", "ผู้ปฏิบัติงาน"], ["viewer", "ผู้ดู"]];
+const DEFAULT_ROLES = ["owner", "admin", "operator"];
+const inFilter = (projectId: string | null | undefined, filter: ProjectFilter) => filter === "" || (filter === "workspace" ? !projectId : projectId === filter);
 
 function EventIcon({ type, size = 15 }: { type: string; size?: number }) {
   if (type.startsWith("tamper")) return <ShieldAlert size={size} />;
@@ -72,7 +80,11 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
   const [resolveTarget, setResolveTarget] = useState<Alert | null>(null);
   const [note, setNote] = useState("");
   const [ruleEditor, setRuleEditor] = useState<Partial<Rule> | null>(null);
-  const [channelEditor, setChannelEditor] = useState<{ name: string; kind: string; url: string; to: string; secret: string } | null>(null);
+  const [channelEditor, setChannelEditor] = useState<ChannelDraft | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  // A member limited to some projects manages only those; workspace-wide rows are read-only for them.
+  const [restricted, setRestricted] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("");
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "rule" | "channel"; id: string; name: string } | null>(null);
   const unauthorized = useRef(false);
   const onSummaryRef = useLatest(onSummary);
@@ -153,6 +165,35 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
       clearTimeout(timer);
     };
   }, [load]);
+  // Projects and the member's own scope, fetched once the rules or channels tab is first opened.
+  const scopeLoaded = useRef(false);
+  useEffect(() => {
+    if ((tab !== "rules" && tab !== "channels") || scopeLoaded.current) return;
+    scopeLoaded.current = true;
+    void (async () => {
+      try {
+        const [pr, me] = await Promise.all([get<{ items: Project[] }>("/projects"), get<{ role: string; project_ids: string[] | null }>("/me")]);
+        setProjects(pr.items.map((x) => ({ id: x.id, name: x.name })));
+        setRestricted(me.role !== "owner" && !!me.project_ids && me.project_ids.length > 0);
+      } catch {
+        scopeLoaded.current = false;
+      }
+    })();
+  }, [tab, get]);
+  const projectName = (id: string | null | undefined) => (!id ? "ทั้ง workspace" : projects.find((x) => x.id === id)?.name ?? "โปรเจกต์");
+  // A restricted member cannot change workspace-wide rows; the server refuses too, this only hides the buttons.
+  const readOnly = (projectId: string | null | undefined) => restricted && !projectId;
+  const newChannel = (): ChannelDraft => ({ name: "", kind: "webhook", url: "", to: "", secret: "", project_id: restricted ? projects[0]?.id ?? "" : "", audience: "", roles: [...DEFAULT_ROLES] });
+  const projectPicker = (
+    <label className="ac-filter">
+      โปรเจกต์
+      <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} aria-label="กรองตามโปรเจกต์">
+        <option value="">ทั้งหมด</option>
+        <option value="workspace">ทั้ง workspace</option>
+        {projects.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+      </select>
+    </label>
+  );
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 3500);
@@ -316,14 +357,15 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
       {tab === "rules" && (
         <div className="ac-body">
           <div className="ac-toolbar">
-            <button type="button" className="ac-btn primary" onClick={() => setRuleEditor({ name: "", enabled: true, event_type: "tamper", severity: "critical", scope: {}, channels: [], dedupe_sec: 600 })}>
+            <button type="button" className="ac-btn primary" disabled={restricted && projects.length === 0} onClick={() => setRuleEditor({ name: "", enabled: true, event_type: "tamper", severity: "critical", scope: {}, channels: [], dedupe_sec: 600, project_id: restricted ? projects[0]?.id ?? null : null })}>
               <Plus size={15} /> สร้างกฎ
             </button>
+            {projects.length > 0 && projectPicker}
             <span className="ac-note">กฎ = ชนิดเหตุการณ์ + ขอบเขตอุปกรณ์ + ระดับ + ช่องทาง · ไม่เปิดซ้ำขณะที่เรื่องเดิมยังไม่ปิด และภายในช่วง dedupe หลังปิดเรื่อง</span>
           </div>
           {rules.length === 0 && <div className="ac-empty"><Zap size={30} /><h2>ยังไม่มีกฎ</h2><p>ตัวอย่างที่ควรมี: tamper ทุกอุปกรณ์ = วิกฤต, กดปุ่ม B10 = วิกฤต, ขาดการติดต่อ 5 นาที = เตือน, ประตูเปิดนอกเวลาทำการ = เตือน</p></div>}
           <ul className="ac-list">
-            {rules.map((r) => (
+            {rules.filter((r) => inFilter(r.project_id, projectFilter)).map((r) => (
               <li key={r.id} className={`ac-item ${r.enabled ? "" : "is-off"}`}>
                 <span className="ac-item-icon"><EventIcon type={r.event_type} size={18} /></span>
                 <div className="ac-item-body">
@@ -331,6 +373,8 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
                     <strong>{r.name}</strong>
                     <span className={`ac-sev sev-${r.severity}`}>{SEVERITY_LABEL[r.severity]}</span>
                     {r.builtin && <span className="ac-status" title="Aether สร้างกฎนี้ให้ตอนเปิดใช้งาน แก้ไขหรือปิดได้ตามต้องการ">สร้างให้อัตโนมัติ</span>}
+                    {(projects.length > 0 || r.project_id) && <span className={`ac-status ac-project ${r.project_id ? "is-project" : ""}`}>{projectName(r.project_id)}</span>}
+                    {readOnly(r.project_id) && <span className="ac-status" title="กฎของทั้ง workspace แก้ได้เฉพาะผู้ที่เห็นทุกโปรเจกต์">อ่านอย่างเดียว</span>}
                     {!r.enabled && <span className="ac-status">ปิดใช้</span>}
                   </div>
                   <small>
@@ -344,10 +388,12 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
                     {` · dedupe ${r.dedupe_sec}s`}
                   </small>
                 </div>
-                <div className="ac-item-actions">
-                  <button type="button" className="ac-btn" onClick={() => setRuleEditor({ ...r, scope: { ...r.scope }, channels: [...r.channels] })}>แก้ไข</button>
-                  <button type="button" className="ac-btn danger" aria-label={`ลบกฎ ${r.name}`} onClick={() => setDeleteTarget({ kind: "rule", id: r.id, name: r.name })}><Trash2 size={14} /></button>
-                </div>
+                {!readOnly(r.project_id) && (
+                  <div className="ac-item-actions">
+                    <button type="button" className="ac-btn" onClick={() => setRuleEditor({ ...r, scope: { ...r.scope }, channels: [...r.channels] })}>แก้ไข</button>
+                    <button type="button" className="ac-btn danger" aria-label={`ลบกฎ ${r.name}`} onClick={() => setDeleteTarget({ kind: "rule", id: r.id, name: r.name })}><Trash2 size={14} /></button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -357,25 +403,26 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
       {tab === "channels" && (
         <div className="ac-body">
           <div className="ac-toolbar">
-            <button type="button" className="ac-btn primary" onClick={() => setChannelEditor({ name: "", kind: "webhook", url: "", to: "", secret: "" })}>
+            <button type="button" className="ac-btn primary" disabled={restricted && projects.length === 0} onClick={() => setChannelEditor(newChannel())}>
               <Plus size={15} /> เพิ่มช่องทาง
             </button>
+            {projects.length > 0 && projectPicker}
             <span className="ac-note">Webhook: POST JSON พร้อม HMAC ใน X-Aether-Signature · LINE: Messaging API push (ต้องมี channel access token และ user/group id) · อีเมล{emailAvailable ? " พร้อมใช้" : ": server ยังไม่ตั้งค่า SMTP"}</span>
           </div>
           {channels.length === 0 && <div className="ac-empty"><Send size={30} /><h2>ยังไม่มีช่องทาง</h2><p>เพิ่ม webhook เพื่อทดสอบได้ทันที (เช่น webhook.site หรือ endpoint ในเครื่องขณะพัฒนา)</p></div>}
           <ul className="ac-list">
-            {channels.map((c) => (
+            {channels.filter((c) => inFilter(c.project_id, projectFilter)).map((c) => (
               <li key={c.id} className={`ac-item ${c.enabled ? "" : "is-off"}`}>
                 <span className="ac-item-icon">{c.kind === "webhook" ? <Webhook size={18} /> : c.kind === "line" ? <MessageSquare size={18} /> : <Mail size={18} />}</span>
                 <div className="ac-item-body">
-                  <div className="ac-item-head"><strong>{c.name}</strong><span className="ac-status">{KIND_LABEL[c.kind] ?? c.kind}</span>{c.has_secret && <span className="ac-status">มี secret</span>}</div>
-                  <small>{c.kind === "webhook" ? (c.config.url ?? "ปลายทางถูกซ่อน (เฉพาะ owner/admin)") : c.config.to ? `ส่งถึง ${c.config.to}` : "ผู้รับถูกซ่อน (เฉพาะ owner/admin)"} · สร้าง {when(c.created_at)}</small>
+                  <div className="ac-item-head"><strong>{c.name}</strong><span className="ac-status">{KIND_LABEL[c.kind] ?? c.kind}</span>{c.has_secret && <span className="ac-status">มี secret</span>}{(projects.length > 0 || c.project_id) && <span className={`ac-status ac-project ${c.project_id ? "is-project" : ""}`}>{projectName(c.project_id)}</span>}{readOnly(c.project_id) && <span className="ac-status">อ่านอย่างเดียว</span>}</div>
+                  <small>{c.kind === "webhook" ? (c.config.url ?? "ปลายทางถูกซ่อน") : c.config.audience === "members" ? `ส่งถึงสมาชิกที่เห็น${c.project_id ? "โปรเจกต์นี้" : "อุปกรณ์นั้น"} · ${(c.config.roles || DEFAULT_ROLES.join(",")).split(",").map((r) => ROLE_LABEL.find(([id]) => id === r)?.[1] ?? r).join(", ")}` : c.config.to ? `ส่งถึง ${c.config.to}` : "ผู้รับถูกซ่อน"} · สร้าง {when(c.created_at)}</small>
                 </div>
-                <div className="ac-item-actions">
+                {!readOnly(c.project_id) && <div className="ac-item-actions">
                   <button type="button" className="ac-btn" disabled={busy} aria-pressed={c.enabled} onClick={() => void action(() => client.post(`/channels/${c.id}/update`, { enabled: !c.enabled }), c.enabled ? "ปิดใช้ช่องทางแล้ว" : "เปิดใช้ช่องทางแล้ว")}>{c.enabled ? "ปิดใช้" : "เปิดใช้"}</button>
                   <button type="button" className="ac-btn" disabled={busy} onClick={() => void action(async () => { await client.post(`/channels/${c.id}/test`, {}); }, `ส่งข้อความทดสอบไป ${c.name} แล้ว`)}><Send size={14} /> ทดสอบ</button>
                   <button type="button" className="ac-btn danger" aria-label={`ลบช่องทาง ${c.name}`} onClick={() => setDeleteTarget({ kind: "channel", id: c.id, name: c.name })}><Trash2 size={14} /></button>
-                </div>
+                </div>}
               </li>
             ))}
           </ul>
@@ -409,8 +456,8 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
 
       {/* Rule editor */}
       {ruleEditor && (
-        <RuleForm rule={ruleEditor} channels={channels} gateways={gateways} busy={busy} error={actionError} onCancel={() => { setActionError(""); setRuleEditor(null); }} onSave={(rule) => void action(async () => {
-          const payload = { name: rule.name, enabled: rule.enabled, event_type: rule.event_type, severity: rule.severity, scope: rule.scope, channels: rule.channels, dedupe_sec: rule.dedupe_sec };
+        <RuleForm rule={ruleEditor} channels={channels} gateways={gateways} projects={projects} restricted={restricted} busy={busy} error={actionError} onCancel={() => { setActionError(""); setRuleEditor(null); }} onSave={(rule) => void action(async () => {
+          const payload = { name: rule.name, enabled: rule.enabled, event_type: rule.event_type, severity: rule.severity, scope: rule.scope, channels: rule.channels, dedupe_sec: rule.dedupe_sec, project_id: rule.project_id ?? null };
           if (rule.id) await client.post(`/rules/${rule.id}/update`, payload);
           else await client.post("/rules", payload);
           setRuleEditor(null);
@@ -423,11 +470,17 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
           <DialogHeader><DialogTitle>เพิ่มช่องทางแจ้งเตือน</DialogTitle><DialogDescription>secret ถูกเข้ารหัสเก็บฝั่ง server และไม่แสดงอีก</DialogDescription></DialogHeader>
           {channelEditor && (
             <form onSubmit={(e) => { e.preventDefault(); const c = channelEditor; void action(async () => {
-              const config: Record<string, string> = c.kind === "webhook" ? { url: c.url.trim() } : { to: c.to.trim() };
-              await client.post("/channels", { name: c.name.trim(), kind: c.kind, config, secret: c.secret });
+              const config: Record<string, string> = c.kind === "webhook" ? { url: c.url.trim() } : c.kind === "email" && c.audience === "members" ? { audience: "members", roles: c.roles.join(",") } : { to: c.to.trim() };
+              await client.post("/channels", { name: c.name.trim(), kind: c.kind, config, secret: c.secret, project_id: c.project_id || null });
               setChannelEditor(null);
             }, "เพิ่มช่องทางแล้ว · กดทดสอบเพื่อยืนยันว่าส่งถึง"); }}>
               <label>ชื่อ<input value={channelEditor.name} required onChange={(e) => setChannelEditor({ ...channelEditor, name: e.target.value })} placeholder="เช่น ทีมช่าง LINE group" /></label>
+              {projects.length > 0 && (
+                <label>ใช้กับ<select value={channelEditor.project_id} onChange={(e) => setChannelEditor({ ...channelEditor, project_id: e.target.value })}>
+                  {!restricted && <option value="">ทั้ง workspace (ใช้ได้กับทุกกฎ)</option>}
+                  {projects.map((x) => <option key={x.id} value={x.id}>โปรเจกต์ {x.name} (เฉพาะกฎของโปรเจกต์นี้)</option>)}
+                </select></label>
+              )}
               <label>ชนิด<select value={channelEditor.kind} onChange={(e) => setChannelEditor({ ...channelEditor, kind: e.target.value })}>
                 <option value="webhook">Webhook (HTTP POST JSON)</option>
                 <option value="line">LINE Messaging API</option>
@@ -443,11 +496,28 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
                 <label>ส่งถึง (userId / groupId / roomId)<input value={channelEditor.to} required onChange={(e) => setChannelEditor({ ...channelEditor, to: e.target.value })} placeholder="Uxxxxxxxx หรือ Cxxxxxxxx" /></label>
                 <p className="ac-note">ใช้ LINE Official Account + Messaging API (LINE Notify ยุติบริการแล้ว) · ผู้รับต้องเพิ่ม OA เป็นเพื่อนหรืออยู่ในกลุ่มที่มี OA</p>
               </>)}
-              {channelEditor.kind === "email" && <label>ผู้รับ (คั่นด้วย , สูงสุด 10)<input value={channelEditor.to} required onChange={(e) => setChannelEditor({ ...channelEditor, to: e.target.value })} placeholder="ops@example.com, oncall@example.com" /></label>}
+              {channelEditor.kind === "email" && (<>
+                <fieldset className="ac-checks">
+                  <legend>ส่งถึง</legend>
+                  <label className="ac-check"><input type="radio" name="audience" checked={channelEditor.audience === ""} onChange={() => setChannelEditor({ ...channelEditor, audience: "" })} /> ระบุอีเมลเอง</label>
+                  <label className="ac-check"><input type="radio" name="audience" checked={channelEditor.audience === "members"} onChange={() => setChannelEditor({ ...channelEditor, audience: "members" })} /> สมาชิกที่เห็นโปรเจกต์ของอุปกรณ์ที่แจ้งเตือน</label>
+                </fieldset>
+                {channelEditor.audience === "members" ? (
+                  <fieldset className="ac-checks">
+                    <legend>บทบาทที่ได้รับ</legend>
+                    {ROLE_LABEL.map(([id, label]) => (
+                      <label key={id} className="ac-check"><input type="checkbox" checked={channelEditor.roles.includes(id)} onChange={(e) => setChannelEditor({ ...channelEditor, roles: e.target.checked ? [...channelEditor.roles, id] : channelEditor.roles.filter((r) => r !== id) })} /> {label}</label>
+                    ))}
+                    <small>รายชื่อคำนวณตอนส่งแต่ละครั้ง: เจ้าของทุกคน สมาชิกที่เห็นทุกโปรเจกต์ และสมาชิกที่ได้สิทธิ์โปรเจกต์นั้น ไม่รวมคนที่ปิดโมดูลการแจ้งเตือน (สูงสุด 50 คน)</small>
+                  </fieldset>
+                ) : (
+                  <label>ผู้รับ (คั่นด้วย , สูงสุด 10)<input value={channelEditor.to} required onChange={(e) => setChannelEditor({ ...channelEditor, to: e.target.value })} placeholder="ops@example.com, oncall@example.com" /></label>
+                )}
+              </>)}
               {actionError && <p className="ac-dialog-error" role="alert">{actionError}</p>}
               <div className="ac-dialog-actions">
                 <button type="button" className="ac-btn" disabled={busy} onClick={() => { setActionError(""); setChannelEditor(null); }}>ยกเลิก</button>
-                <button type="submit" className="ac-btn primary" disabled={busy || !channelEditor.name.trim() || utf8(channelEditor.name) > 128}>{busy ? "กำลังบันทึก…" : "บันทึกช่องทาง"}</button>
+                <button type="submit" className="ac-btn primary" disabled={busy || !channelEditor.name.trim() || utf8(channelEditor.name) > 128 || (restricted && !channelEditor.project_id) || (channelEditor.kind === "email" && channelEditor.audience === "members" && channelEditor.roles.length === 0)}>{busy ? "กำลังบันทึก…" : "บันทึกช่องทาง"}</button>
               </div>
             </form>
           )}
@@ -467,14 +537,19 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
   );
 }
 
-function RuleForm({ rule, channels, gateways, busy, error, onCancel, onSave }: { rule: Partial<Rule>; channels: Channel[]; gateways: { id: string; name: string }[]; busy: boolean; error: string; onCancel: () => void; onSave: (rule: Rule) => void }) {
-  const [draft, setDraft] = useState<Rule>({ id: rule.id ?? "", name: rule.name ?? "", enabled: rule.enabled ?? true, event_type: rule.event_type ?? "tamper", severity: rule.severity ?? "critical", scope: rule.scope ?? {}, channels: rule.channels ?? [], dedupe_sec: rule.dedupe_sec ?? 600, created_at: rule.created_at ?? "" });
+function RuleForm({ rule, channels, gateways, projects, restricted, busy, error, onCancel, onSave }: { rule: Partial<Rule>; channels: Channel[]; gateways: { id: string; name: string }[]; projects: Project[]; restricted: boolean; busy: boolean; error: string; onCancel: () => void; onSave: (rule: Rule) => void }) {
+  const [draft, setDraft] = useState<Rule>({ id: rule.id ?? "", name: rule.name ?? "", enabled: rule.enabled ?? true, event_type: rule.event_type ?? "tamper", severity: rule.severity ?? "critical", scope: rule.scope ?? {}, channels: rule.channels ?? [], dedupe_sec: rule.dedupe_sec ?? 600, created_at: rule.created_at ?? "", project_id: rule.project_id ?? null });
+  // A workspace rule may use workspace channels; a project rule also its own project's channels.
+  const usable = channels.filter((c) => !c.project_id || c.project_id === draft.project_id);
+  const setProject = (project: string | null) => setDraft({ ...draft, project_id: project, channels: draft.channels.filter((id) => { const c = channels.find((x) => x.id === id); return !!c && (!c.project_id || c.project_id === project); }) });
   const [ids, setIds] = useState((rule.scope?.external_ids ?? []).join(", "));
   const set = (patch: Partial<Rule>) => setDraft({ ...draft, ...patch });
   const scope = (patch: Scope) => set({ scope: { ...draft.scope, ...patch } });
   const afterHours = AFTER_HOURS_TYPES.has(draft.event_type) ? draft.scope.after_hours : undefined;
   const timeOk = (t: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
-  const valid = draft.name.trim() !== "" && utf8(draft.name) <= 128 && (draft.event_type !== "threshold" || (!!draft.scope.metric && !!draft.scope.op && draft.scope.value != null && Number.isFinite(draft.scope.value)))
+  // SOS and hazard may not hold a repeat back for more than 5 minutes (the server enforces the same cap).
+  const maxDedupe = draft.event_type === "button" || draft.event_type === "hazard" ? 300 : 86400;
+  const valid = draft.name.trim() !== "" && utf8(draft.name) <= 128 && (!restricted || !!draft.project_id) && draft.dedupe_sec >= 0 && draft.dedupe_sec <= maxDedupe && (draft.event_type !== "threshold" || (!!draft.scope.metric && !!draft.scope.op && draft.scope.value != null && Number.isFinite(draft.scope.value)))
     && (!afterHours || (timeOk(afterHours.from) && timeOk(afterHours.to) && afterHours.from !== afterHours.to && afterHours.days.length > 0));
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onCancel()}>
@@ -482,6 +557,13 @@ function RuleForm({ rule, channels, gateways, busy, error, onCancel, onSave }: {
         <DialogHeader><DialogTitle>{draft.id ? "แก้ไขกฎ" : "สร้างกฎ"}</DialogTitle><DialogDescription>เมื่อเหตุการณ์ชนิดนี้เกิดกับอุปกรณ์ในขอบเขต ระบบจะเปิดการแจ้งเตือนและส่งไปยังช่องทางที่เลือก</DialogDescription></DialogHeader>
         <form onSubmit={(e) => { e.preventDefault(); if (!valid) return; const external_ids = ids.split(",").map((s) => s.trim().replace(/:/g, "").toLowerCase()).filter(Boolean); onSave({ ...draft, scope: { ...draft.scope, external_ids, gateway_ids: draft.event_type === "zone" && draft.scope.gateway_ids?.length ? draft.scope.gateway_ids : undefined, after_hours: afterHours ? { ...afterHours, days: [...afterHours.days].sort((a, b) => a - b) } : undefined } }); }}>
           <label>ชื่อกฎ<input value={draft.name} required onChange={(e) => set({ name: e.target.value })} placeholder="เช่น ป้ายกันถอดถูกแกะ" /></label>
+          {projects.length > 0 && (
+            <label>ใช้กับ<select value={draft.project_id ?? ""} onChange={(e) => setProject(e.target.value || null)}>
+              {!restricted && <option value="">ทั้ง workspace (ทุกโปรเจกต์)</option>}
+              {projects.map((x) => <option key={x.id} value={x.id}>โปรเจกต์ {x.name}</option>)}
+            </select></label>
+          )}
+          {draft.project_id && (draft.event_type === "button" || draft.event_type === "hazard") && <p className="ac-note">SOS และควัน/แก๊สในโปรเจกต์อื่นที่ไม่มีกฎของตัวเองยังเปิดการแจ้งเตือนวิกฤตในหน้านี้เสมอ แต่จะไม่ส่งออกช่องทางใด</p>}
           <div className="ac-grid">
             <label>ชนิดเหตุการณ์<select value={draft.event_type} onChange={(e) => set({ event_type: e.target.value })}>{RULE_TYPES.map(([id, l]) => <option key={id} value={id}>{l}</option>)}</select></label>
             <label>ระดับ<select value={draft.severity} onChange={(e) => set({ severity: e.target.value })}>{Object.entries(SEVERITY_LABEL).map(([id, l]) => <option key={id} value={id}>{l}</option>)}</select></label>
@@ -531,13 +613,13 @@ function RuleForm({ rule, channels, gateways, busy, error, onCancel, onSave }: {
           )}
           <label>เฉพาะอุปกรณ์ (MAC คั่นด้วย , · เว้นว่าง = ทุกอุปกรณ์)<input value={ids} onChange={(e) => setIds(e.target.value)} placeholder="F0:00:00:00:00:09, AC233FC274EB" /></label>
           <fieldset className="ac-channels"><legend>ส่งไปยัง</legend>
-            {channels.length === 0 && <span className="ac-note">ยังไม่มีช่องทาง · สร้างได้ที่แท็บ “ช่องทาง” การแจ้งเตือนจะยังแสดงในหน้านี้</span>}
-            {channels.map((c) => (
+            {usable.length === 0 && <span className="ac-note">ยังไม่มีช่องทางที่ใช้กับกฎนี้ได้ · สร้างได้ที่แท็บ “ช่องทาง” การแจ้งเตือนจะยังแสดงในหน้านี้</span>}
+            {usable.map((c) => (
               <label key={c.id} className="ac-check"><input type="checkbox" checked={draft.channels.includes(c.id)} onChange={(e) => set({ channels: e.target.checked ? [...draft.channels, c.id] : draft.channels.filter((x) => x !== c.id) })} /> {c.name} <small>{KIND_LABEL[c.kind]}</small></label>
             ))}
           </fieldset>
           <div className="ac-grid">
-            <label>หลังปิดเรื่อง ไม่เปิดซ้ำภายใน (วินาที)<input type="number" min={0} max={86400} value={draft.dedupe_sec} onChange={(e) => set({ dedupe_sec: Number(e.target.value) })} /></label>
+            <label>หลังปิดเรื่อง ไม่เปิดซ้ำภายใน (วินาที{maxDedupe === 300 ? ", ไม่เกิน 300 สำหรับ SOS/ควัน" : ""})<input type="number" min={0} max={maxDedupe} value={draft.dedupe_sec} onChange={(e) => set({ dedupe_sec: Number(e.target.value) })} /></label>
             <label className="ac-check inline"><input type="checkbox" checked={draft.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> เปิดใช้กฎนี้</label>
           </div>
           {error && <p className="ac-dialog-error" role="alert">{error}</p>}

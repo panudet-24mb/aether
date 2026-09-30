@@ -115,7 +115,7 @@ func mayControl(tx *gorm.DB, p domain.Principal) (bool, error) {
 // deployment switch and, when p is given, whether that member may control devices.
 func (r *Repository) checkOptions(tx *gorm.DB, p *domain.Principal, project *string, def automation.Definition, enabled bool) (automation.Options, error) {
 	opts := automation.Options{Channels: map[string]bool{}, Enabled: enabled, CommandsEnabled: r.opts.AutomationCommands}
-	if e := channelSet(tx, opts.Channels); e != nil {
+	if e := usableChannels(tx, opts.Channels, project, true); e != nil {
 		return opts, e
 	}
 	if !automation.HasCommand(def) {

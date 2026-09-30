@@ -89,6 +89,14 @@ func (w *Worker) deliver(ctx context.Context, tenant string, now time.Time) {
 			_ = w.Store.FinishNotification(ctx, tenant, job.Notification.ID, "failed", "channel removed or disabled")
 			continue
 		}
+		if job.FailReason != "" {
+			_ = w.Store.FinishNotification(ctx, tenant, job.Notification.ID, "failed", job.FailReason)
+			continue
+		}
+		if job.RetryReason != "" {
+			_ = w.Store.FinishNotification(ctx, tenant, job.Notification.ID, "retry", job.RetryReason)
+			continue
+		}
 		secret := ""
 		if job.SecretEnc != "" {
 			if secret, e = security.OpenAny(job.SecretEnc, w.Secrets, w.LegacySecrets); e != nil {

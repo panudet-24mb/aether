@@ -93,6 +93,10 @@ type AlertRule struct {
 	Scope     RuleScope `json:"scope"`
 	Channels  []string  `json:"channels"`
 	DedupeSec int       `json:"dedupe_sec"`
+	// ProjectID limits the rule to devices on gateways of that project; nil is the whole workspace.
+	ProjectID *string `json:"project_id"`
+	// KeepProject: an update that did not mention project_id leaves the stored project untouched.
+	KeepProject bool `json:"-"`
 	// Builtin marks a rule Aether seeded itself (migration 00024 / seedDefaultRules). It is a label only:
 	// such a rule can be edited, disabled and deleted like any other.
 	Builtin   bool      `json:"builtin"`
@@ -108,7 +112,9 @@ type NotificationChannel struct {
 	Enabled   bool              `json:"enabled"`
 	Config    map[string]string `json:"config"`
 	HasSecret bool              `json:"has_secret"`
-	CreatedAt time.Time         `json:"created_at"`
+	// ProjectID makes the channel belong to one project; nil is the whole workspace.
+	ProjectID *string   `json:"project_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type DeviceEvent struct {
@@ -178,6 +184,10 @@ type NotificationJob struct {
 	Alert        Alert
 	Event        DeviceEvent
 	GatewayName  string
+	// FailReason, when set, fails the delivery without sending (retrying cannot help).
+	FailReason string
+	// RetryReason, when set, skips sending this time and schedules the usual backoff retry.
+	RetryReason string
 }
 
 func (p Principal) CanOperate() bool {

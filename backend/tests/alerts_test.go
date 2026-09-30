@@ -80,9 +80,27 @@ func TestAlertPipelineFromPacketToNotification(t *testing.T) {
 	if e != nil || len(events) != 1 || events[0].EventType != domain.EventTamper {
 		t.Fatalf("events: %+v %v", events, e)
 	}
-	open, e := f.repo.ListAlerts(ctx, a, "open", 50)
-	if e != nil || len(open) != 1 || open[0].Severity != "critical" || open[0].ExternalID != "f00000000009" {
-		t.Fatalf("alerts: %+v %v", open, e)
+	all, e := f.repo.ListAlerts(ctx, a, "open", 50)
+	if e != nil || len(all) != 2 {
+		t.Fatalf("alerts: %+v %v", all, e)
+	}
+	// With no workspace-wide SOS rule at all (the built-in ones were deleted, not disabled), the B10 press
+	// still opens its critical fallback alert (docs/platform/alerts.md); it is set aside here.
+	var open []domain.Alert
+	for _, al := range all {
+		if al.ExternalID == "f00000000007" {
+			if al.RuleID != nil || !al.SOS() {
+				t.Fatalf("the uncovered SOS must open a critical fallback alert: %+v", al)
+			}
+			if e := f.repo.TransitionAlert(ctx, a, al.ID, "resolved", ""); e != nil {
+				t.Fatal(e)
+			}
+			continue
+		}
+		open = append(open, al)
+	}
+	if len(open) != 1 || open[0].Severity != "critical" || open[0].ExternalID != "f00000000009" {
+		t.Fatalf("alerts: %+v", open)
 	}
 	if foreign, e := f.repo.ListAlerts(ctx, b, "", 50); e != nil || len(foreign) != 0 {
 		t.Fatalf("tenant isolation broken: %+v %v", foreign, e)
@@ -203,7 +221,7 @@ func TestAlertPipelineFromPacketToNotification(t *testing.T) {
 		}
 	}
 	kept, e := f.repo.ListAlerts(ctx, a, "", 50)
-	if e != nil || len(kept) != 3 || kept[0].RuleID != nil {
+	if e != nil || len(kept) != 4 || kept[0].RuleID != nil {
 		t.Fatalf("alert history after rule deletion: %+v %v", kept, e)
 	}
 	if notes, e := f.repo.ListNotifications(ctx, a, 10); e != nil || len(notes) != 1 || notes[0].ChannelID != nil || notes[0].Status != "sent" {

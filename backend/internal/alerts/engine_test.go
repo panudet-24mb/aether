@@ -124,3 +124,19 @@ func TestMatchesScopeAndValidation(t *testing.T) {
 		t.Fatalf("message: %q", msg)
 	}
 }
+
+func TestLifeSafetyDedupeIsCapped(t *testing.T) {
+	for _, eventType := range []string{domain.EventButton, domain.EventHazard} {
+		r := domain.AlertRule{Name: "x", EventType: eventType, Severity: "critical", DedupeSec: MaxLifeSafetyDedupeSec}
+		if e := ValidateRule(r); e != nil {
+			t.Fatalf("%s at the cap: %v", eventType, e)
+		}
+		r.DedupeSec++
+		if e := ValidateRule(r); e == nil {
+			t.Fatalf("%s above the cap was accepted", eventType)
+		}
+	}
+	if e := ValidateRule(domain.AlertRule{Name: "x", EventType: domain.EventTamper, Severity: "warning", DedupeSec: 3600}); e != nil {
+		t.Fatalf("tamper keeps the long window: %v", e)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,11 +20,12 @@ type ruleRow struct {
 	Enabled                       bool
 	Scope, Channels               json.RawMessage
 	DedupeSec                     int
+	ProjectID                     *string
 	CreatedAt, UpdatedAt          time.Time
 }
 
 func (row ruleRow) rule() domain.AlertRule {
-	r := domain.AlertRule{ID: row.ID, Name: row.Name, Enabled: row.Enabled, EventType: row.EventType, Severity: row.Severity, DedupeSec: row.DedupeSec, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Channels: []string{}}
+	r := domain.AlertRule{ID: row.ID, Name: row.Name, Enabled: row.Enabled, EventType: row.EventType, Severity: row.Severity, DedupeSec: row.DedupeSec, ProjectID: row.ProjectID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Channels: []string{}}
 	_ = json.Unmarshal(row.Scope, &r.Scope)
 	_ = json.Unmarshal(row.Channels, &r.Channels)
 	if r.Channels == nil {
@@ -32,14 +34,26 @@ func (row ruleRow) rule() domain.AlertRule {
 	return r
 }
 
+// maxRules and maxChannels are the per-workspace caps, counted tenant-wide by SECURITY DEFINER functions.
+const (
+	maxRules    = 100
+	maxChannels = 20
+)
+
 func loadRules(tx *gorm.DB, enabledOnly bool) ([]domain.AlertRule, error) {
 	var rows []ruleRow
-	q := `SELECT id,name,enabled,event_type,severity,scope,channels,dedupe_sec,created_at,updated_at FROM core.alert_rules`
+	q := `SELECT id,name,enabled,event_type,severity,scope,channels,dedupe_sec,project_id::text AS project_id,created_at,updated_at FROM core.alert_rules`
 	if enabledOnly {
 		q += ` WHERE enabled`
 	}
-	if e := tx.Raw(q + ` ORDER BY created_at,id LIMIT 100`).Scan(&rows).Error; e != nil {
+	// SOS and hazard rules load first, so a workspace over the cap (which the API refuses to create, see
+	// core.alert_rule_count) can never lose them; a truncation is logged, not hidden.
+	if e := tx.Raw(q + ` ORDER BY (event_type IN ('button','hazard')) DESC, created_at, id LIMIT 101`).Scan(&rows).Error; e != nil {
 		return nil, e
+	}
+	if len(rows) > maxRules {
+		slog.Warn("alert rules truncated", "limit", maxRules)
+		rows = rows[:maxRules]
 	}
 	out := make([]domain.AlertRule, 0, len(rows))
 	for _, row := range rows {
@@ -120,11 +134,25 @@ func insertEvent(tx *gorm.DB, tenant string, ev *domain.DeviceEvent) error {
 }
 
 // createAlerts opens one alert per matching rule (subject to the rule's dedupe window) and queues its notifications.
+// A rule that belongs to a project only matches devices on gateways of that project, and a delivery is only
+// queued to a channel that is workspace-wide or of the gateway's project (docs/platform/alerts.md).
 func createAlerts(tx *gorm.DB, tenant string, ev domain.DeviceEvent, rules []domain.AlertRule) error {
+	var gateways []struct{ ProjectID *string }
+	if e := tx.Raw(`SELECT project_id::text AS project_id FROM core.gateways WHERE id=?`, ev.GatewayID).Scan(&gateways).Error; e != nil {
+		return e
+	}
+	var project *string
+	if len(gateways) == 1 {
+		project = gateways[0].ProjectID
+	}
+	// covered: some rule really matched this device here (in its project, enabled, in device scope and time
+	// window), whether or not its dedupe window then held the alert back.
+	covered := false
 	for _, rule := range rules {
-		if !alerts.Matches(rule, ev) {
+		if !ruleInProject(rule, project) || !alerts.Matches(rule, ev) {
 			continue
 		}
+		covered = true
 		// One alert at a time per rule and device. For SOS the alert that blocks a new one is only an
 		// UNACKNOWLEDGED one: once somebody has acknowledged a press, the next press is a new call for help
 		// and must ring again, not vanish behind an alert that is merely waiting to be resolved.
@@ -148,12 +176,58 @@ func createAlerts(tx *gorm.DB, tenant string, ev domain.DeviceEvent, rules []dom
 			return e
 		}
 		for _, channel := range rule.Channels {
-			if e := tx.Exec(`INSERT INTO core.notifications(tenant_id,id,alert_id,channel_id,next_attempt_at) SELECT ?,?,?,id,now() FROM core.notification_channels WHERE id=? AND enabled`, tenant, uuid.NewString(), id, channel).Error; e != nil {
+			if e := tx.Exec(`INSERT INTO core.notifications(tenant_id,id,alert_id,channel_id,next_attempt_at) SELECT ?,?,?,id,now() FROM core.notification_channels
+        WHERE id=? AND enabled AND (project_id IS NULL OR project_id=?::uuid)`, tenant, uuid.NewString(), id, channel, project).Error; e != nil {
 				return e
 			}
 		}
 	}
+	// An SOS or a hazard that no rule covered still opens a critical fallback alert (no channel is notified,
+	// because no rule chose one). The only way to silence it is a decision full-scope members control: the
+	// workspace has workspace-wide rules for the event type and every one of them is disabled. Nothing a
+	// project-limited admin does to project rules can switch that on or off (docs/platform/alerts.md).
+	if domain.BypassesShadow(ev.EventType) && !covered {
+		silenced, e := workspaceSilenced(tx, ev.EventType)
+		if e != nil || silenced {
+			return e
+		}
+		return openFallbackAlert(tx, tenant, ev)
+	}
 	return nil
+}
+
+// workspaceSilenced: workspace-wide rules exist for this event type and all of them are disabled. The rules
+// passed to createAlerts are the enabled ones only, so this asks the table; it runs only for an SOS or a
+// hazard that nothing covered, and ingest and the workers see every rule (scope '*').
+func workspaceSilenced(tx *gorm.DB, eventType string) (bool, error) {
+	var state struct {
+		Rules   int64
+		Enabled int64
+	}
+	e := tx.Raw(`SELECT count(*) AS rules, count(*) FILTER (WHERE enabled) AS enabled FROM core.alert_rules WHERE project_id IS NULL AND event_type=?`, eventType).Scan(&state).Error
+	return state.Rules > 0 && state.Enabled == 0, e
+}
+
+func ruleInProject(rule domain.AlertRule, project *string) bool {
+	return rule.ProjectID == nil || (project != nil && *rule.ProjectID == *project)
+}
+
+// openFallbackAlert records a critical alert with no rule, at most one open fallback per device and event type.
+// Automation alerts have no rule either; only core.alerts.fallback tells them apart, so a flow's open info
+// alert never holds the next SOS back.
+func openFallbackAlert(tx *gorm.DB, tenant string, ev domain.DeviceEvent) error {
+	var n int64
+	if e := tx.Raw(`SELECT count(*) FROM core.alerts WHERE fallback AND external_id=? AND event_type=? AND status='open'`, ev.ExternalID, ev.EventType).Scan(&n).Error; e != nil {
+		return e
+	}
+	if n > 0 {
+		return nil
+	}
+	if e := tx.Exec(`INSERT INTO core.alerts(tenant_id,id,rule_id,event_id,gateway_id,external_id,device_name,event_type,severity,title,opened_at,fallback) VALUES(?,?,NULL,?,?,?,?,?,'critical',?,?,true)`,
+		tenant, uuid.NewString(), ev.ID, ev.GatewayID, ev.ExternalID, ev.DeviceName, ev.EventType, alerts.Title(ev), ev.OccurredAt).Error; e != nil {
+		return e
+	}
+	return signal(tx, tenant, "alert", ev.GatewayID)
 }
 
 // Limits on the informational `action` events of Zigbee2MQTT buttons and remotes.
@@ -683,12 +757,13 @@ func (r *Repository) ClaimNotifications(ctx context.Context, tenant string, limi
 					Enabled        bool
 					Config         json.RawMessage
 					SecretEnc      *string
+					ProjectID      *string
 				}
-				if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc FROM core.notification_channels WHERE id=?`, *c.ChannelID).Scan(&ch).Error; e != nil {
+				if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc,project_id::text AS project_id FROM core.notification_channels WHERE id=?`, *c.ChannelID).Scan(&ch).Error; e != nil {
 					return e
 				}
 				if len(ch) == 1 && ch[0].Enabled {
-					job.Channel = domain.NotificationChannel{ID: ch[0].ID, Name: ch[0].Name, Kind: ch[0].Kind, Enabled: true, Config: map[string]string{}}
+					job.Channel = domain.NotificationChannel{ID: ch[0].ID, Name: ch[0].Name, Kind: ch[0].Kind, Enabled: true, Config: map[string]string{}, ProjectID: ch[0].ProjectID}
 					_ = json.Unmarshal(ch[0].Config, &job.Channel.Config)
 					if ch[0].SecretEnc != nil {
 						job.SecretEnc = *ch[0].SecretEnc
@@ -709,6 +784,28 @@ func (r *Repository) ClaimNotifications(ctx context.Context, tenant string, limi
 				if len(events) == 1 {
 					job.Event = events[0].event()
 				}
+				// A project channel only ever carries its project's alerts. The gateway may have moved since the
+				// alert was queued, so the check uses its project now and fails the delivery if they differ.
+				if job.Channel.ID != "" && job.Channel.ProjectID != nil {
+					var current []struct{ ProjectID *string }
+					if e := tx.Raw(`SELECT project_id::text AS project_id FROM core.gateways WHERE id=?`, job.Alert.GatewayID).Scan(&current).Error; e != nil {
+						return e
+					}
+					if len(current) != 1 || current[0].ProjectID == nil || *current[0].ProjectID != *job.Channel.ProjectID {
+						job.FailReason = "channel belongs to another project than the device's gateway"
+					}
+				}
+				// A "members" email goes to the people who can see this alert's project, decided now, so a
+				// member added or removed since the alert opened is reflected. The lookup runs in a savepoint:
+				// a failure fails this one delivery, not the whole batch the claim above reserved.
+				if job.FailReason == "" && job.Channel.Kind == "email" && job.Channel.Config["audience"] == alerts.AudienceMembers {
+					to, reason, e := memberRecipients(tx, job.Alert.ID, job.Channel.Config)
+					if e != nil {
+						return e
+					}
+					job.FailReason, job.RetryReason = reason.fail, reason.retry
+					job.Channel.Config["to"] = strings.Join(to, ",")
+				}
 				var name string
 				_ = tx.Raw(`SELECT name FROM core.gateways WHERE id=?`, job.Alert.GatewayID).Scan(&name).Error
 				job.GatewayName = name
@@ -718,6 +815,40 @@ func (r *Repository) ClaimNotifications(ctx context.Context, tenant string, limi
 		return nil
 	})
 	return out, e
+}
+
+// recipientProblem: fail ends the delivery (retrying cannot help), retry leaves it queued for the next attempt.
+type recipientProblem struct{ fail, retry string }
+
+// memberRecipients resolves a "members" email for one alert inside a savepoint. A lookup error rolls back only
+// the savepoint and is retried with the usual backoff; a list longer than the cap is cut, owners first, and logged.
+func memberRecipients(tx *gorm.DB, alert string, config map[string]string) ([]string, recipientProblem, error) {
+	roles, ok := alerts.MemberRoles(config)
+	if !ok {
+		return nil, recipientProblem{fail: "members channel has invalid roles"}, nil
+	}
+	if e := tx.SavePoint("recipients").Error; e != nil {
+		return nil, recipientProblem{}, e
+	}
+	var to []string
+	if e := tx.Raw(`SELECT email FROM core.alert_recipients(?::uuid, ?::text[])`, alert, pgArray(roles)).Scan(&to).Error; e != nil {
+		slog.Warn("alert email: recipient lookup failed", "alert", alert)
+		if rb := tx.RollbackTo("recipients").Error; rb != nil {
+			return nil, recipientProblem{}, rb
+		}
+		return nil, recipientProblem{retry: "recipient lookup failed"}, nil
+	}
+	if e := tx.Exec(`RELEASE SAVEPOINT recipients`).Error; e != nil {
+		return nil, recipientProblem{}, e
+	}
+	if len(to) == 0 {
+		return nil, recipientProblem{fail: "no member can see this alert's project"}, nil
+	}
+	if len(to) > alerts.MaxMemberRecipients {
+		slog.Warn("alert email: members truncated", "alert", alert, "members", len(to), "limit", alerts.MaxMemberRecipients)
+		to = to[:alerts.MaxMemberRecipients]
+	}
+	return to, recipientProblem{}, nil
 }
 
 // FinishNotification records the outcome: "sent", "retry" (backoff, failed after 5 attempts) or "failed" (terminal).
@@ -768,6 +899,9 @@ func (r *Repository) PruneAlertData(ctx context.Context, tenant string) error {
 // SetChannelEnabled toggles delivery without touching the sealed secret.
 func (r *Repository) SetChannelEnabled(ctx context.Context, p domain.Principal, id string, enabled bool) error {
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		if _, e := writableRow(tx, "notification_channels", id); e != nil {
+			return e
+		}
 		res := tx.Exec(`UPDATE core.notification_channels SET enabled=? WHERE id=?`, enabled, id)
 		if res.Error != nil {
 			return res.Error
@@ -870,8 +1004,29 @@ func (r *Repository) ListRules(ctx context.Context, p domain.Principal) ([]domai
 	var out []domain.AlertRule
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		var e error
-		out, e = loadRules(tx, false)
-		return e
+		if out, e = loadRules(tx, false); e != nil {
+			return e
+		}
+		all, e := scopeAll(tx)
+		if e != nil || all {
+			return e
+		}
+		// A member limited to some projects sees workspace-wide rules read-only; their device and gateway
+		// lists may name other projects' hardware, so they are trimmed to what this member can see.
+		var devices, gateways []string
+		if e := tx.Raw(`SELECT lower(external_id) FROM core.sensor_streams UNION SELECT lower(external_id) FROM core.devices WHERE removed_at IS NULL`).Scan(&devices).Error; e != nil {
+			return e
+		}
+		if e := tx.Raw(`SELECT id::text FROM core.gateways`).Scan(&gateways).Error; e != nil {
+			return e
+		}
+		for i := range out {
+			if out[i].ProjectID == nil {
+				out[i].Scope.ExternalIDs = keepKnown(out[i].Scope.ExternalIDs, devices, true)
+				out[i].Scope.GatewayIDs = keepKnown(out[i].Scope.GatewayIDs, gateways, false)
+			}
+		}
+		return nil
 	})
 	if out == nil {
 		out = []domain.AlertRule{}
@@ -883,20 +1038,50 @@ func (r *Repository) SaveRule(ctx context.Context, p domain.Principal, rule doma
 	scope, _ := json.Marshal(rule.Scope)
 	channels, _ := json.Marshal(rule.Channels)
 	return classify(r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		if create {
-			var n int64
-			if e := tx.Raw(`SELECT count(*) FROM core.alert_rules`).Scan(&n).Error; e != nil {
+		if !create {
+			current, e := writableRow(tx, "alert_rules", rule.ID)
+			if e != nil {
 				return e
 			}
-			if n >= 100 {
+			// An update that does not name a project keeps the rule where it is.
+			if rule.KeepProject {
+				rule.ProjectID = current
+			}
+		}
+		if create || !rule.KeepProject {
+			if e := checkAlertProject(tx, rule.ProjectID); e != nil {
+				return e
+			}
+		}
+		// A workspace rule may use workspace channels; a project rule also its own project's channels.
+		if len(rule.Channels) > 0 {
+			var n int64
+			if e := tx.Raw(`SELECT count(DISTINCT id) FROM core.notification_channels WHERE id = ANY(?::uuid[]) AND (project_id IS NULL OR project_id=?::uuid)`, pgArray(rule.Channels), rule.ProjectID).Scan(&n).Error; e != nil {
+				return e
+			}
+			if int(n) != len(distinct(rule.Channels)) {
+				return domain.ErrInvalid
+			}
+		}
+		if create {
+			// Check-then-insert under the workspace's alert-configuration lock, so two creates cannot both
+			// pass the cap.
+			if e := alertConfigLock(tx, p.TenantID); e != nil {
+				return e
+			}
+			var n int64
+			if e := tx.Raw(`SELECT core.alert_rule_count()`).Scan(&n).Error; e != nil {
+				return e
+			}
+			if n >= maxRules {
 				return domain.ErrConflict
 			}
-			if e := tx.Exec(`INSERT INTO core.alert_rules(tenant_id,id,name,enabled,event_type,severity,scope,channels,dedupe_sec) VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb,?)`, p.TenantID, rule.ID, rule.Name, rule.Enabled, rule.EventType, rule.Severity, string(scope), string(channels), rule.DedupeSec).Error; e != nil {
+			if e := tx.Exec(`INSERT INTO core.alert_rules(tenant_id,id,name,enabled,event_type,severity,scope,channels,dedupe_sec,project_id) VALUES(?,?,?,?,?,?,?::jsonb,?::jsonb,?,?::uuid)`, p.TenantID, rule.ID, rule.Name, rule.Enabled, rule.EventType, rule.Severity, string(scope), string(channels), rule.DedupeSec, rule.ProjectID).Error; e != nil {
 				return e
 			}
 			return audit(tx, p, "rule.created", rule.ID)
 		}
-		res := tx.Exec(`UPDATE core.alert_rules SET name=?,enabled=?,event_type=?,severity=?,scope=?::jsonb,channels=?::jsonb,dedupe_sec=?,updated_at=now() WHERE id=?`, rule.Name, rule.Enabled, rule.EventType, rule.Severity, string(scope), string(channels), rule.DedupeSec, rule.ID)
+		res := tx.Exec(`UPDATE core.alert_rules SET name=?,enabled=?,event_type=?,severity=?,scope=?::jsonb,channels=?::jsonb,dedupe_sec=?,project_id=?::uuid,updated_at=now() WHERE id=?`, rule.Name, rule.Enabled, rule.EventType, rule.Severity, string(scope), string(channels), rule.DedupeSec, rule.ProjectID, rule.ID)
 		if res.Error != nil {
 			return res.Error
 		}
@@ -909,6 +1094,9 @@ func (r *Repository) SaveRule(ctx context.Context, p domain.Principal, rule doma
 
 func (r *Repository) DeleteRule(ctx context.Context, p domain.Principal, id string) error {
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		if _, e := writableRow(tx, "alert_rules", id); e != nil {
+			return e
+		}
 		res := tx.Exec(`DELETE FROM core.alert_rules WHERE id=?`, id)
 		if res.Error != nil {
 			return res.Error
@@ -925,11 +1113,12 @@ type channelRow struct {
 	Enabled        bool
 	Config         json.RawMessage
 	SecretEnc      *string
+	ProjectID      *string
 	CreatedAt      time.Time
 }
 
 func (row channelRow) channel() domain.NotificationChannel {
-	ch := domain.NotificationChannel{ID: row.ID, Name: row.Name, Kind: row.Kind, Enabled: row.Enabled, Config: map[string]string{}, HasSecret: row.SecretEnc != nil && *row.SecretEnc != "", CreatedAt: row.CreatedAt}
+	ch := domain.NotificationChannel{ID: row.ID, Name: row.Name, Kind: row.Kind, Enabled: row.Enabled, Config: map[string]string{}, HasSecret: row.SecretEnc != nil && *row.SecretEnc != "", ProjectID: row.ProjectID, CreatedAt: row.CreatedAt}
 	_ = json.Unmarshal(row.Config, &ch.Config)
 	return ch
 }
@@ -938,11 +1127,24 @@ func (r *Repository) ListChannels(ctx context.Context, p domain.Principal) ([]do
 	out := []domain.NotificationChannel{}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		var rows []channelRow
-		if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc,created_at FROM core.notification_channels ORDER BY created_at,id LIMIT 50`).Scan(&rows).Error; e != nil {
+		if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc,project_id::text AS project_id,created_at FROM core.notification_channels ORDER BY created_at,id LIMIT 51`).Scan(&rows).Error; e != nil {
+			return e
+		}
+		if len(rows) > 50 {
+			slog.Warn("notification channels truncated", "limit", 50)
+			rows = rows[:50]
+		}
+		all, e := scopeAll(tx)
+		if e != nil {
 			return e
 		}
 		for _, row := range rows {
-			out = append(out, row.channel())
+			ch := row.channel()
+			// A project-limited member cannot manage workspace channels; their targets are credentials.
+			if !all && ch.ProjectID == nil {
+				ch.Config = map[string]string{}
+			}
+			out = append(out, ch)
 		}
 		return nil
 	})
@@ -952,18 +1154,24 @@ func (r *Repository) ListChannels(ctx context.Context, p domain.Principal) ([]do
 func (r *Repository) CreateChannel(ctx context.Context, p domain.Principal, ch domain.NotificationChannel, secretEnc string) error {
 	config, _ := json.Marshal(ch.Config)
 	return classify(r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		var n int64
-		if e := tx.Raw(`SELECT count(*) FROM core.notification_channels`).Scan(&n).Error; e != nil {
+		if e := checkAlertProject(tx, ch.ProjectID); e != nil {
 			return e
 		}
-		if n >= 20 {
+		if e := alertConfigLock(tx, p.TenantID); e != nil {
+			return e
+		}
+		var n int64
+		if e := tx.Raw(`SELECT core.notification_channel_count()`).Scan(&n).Error; e != nil {
+			return e
+		}
+		if n >= maxChannels {
 			return domain.ErrConflict
 		}
 		var secret *string
 		if secretEnc != "" {
 			secret = &secretEnc
 		}
-		if e := tx.Exec(`INSERT INTO core.notification_channels(tenant_id,id,name,kind,enabled,config,secret_enc) VALUES(?,?,?,?,?,?::jsonb,?)`, p.TenantID, ch.ID, ch.Name, ch.Kind, ch.Enabled, string(config), secret).Error; e != nil {
+		if e := tx.Exec(`INSERT INTO core.notification_channels(tenant_id,id,name,kind,enabled,config,secret_enc,project_id) VALUES(?,?,?,?,?,?::jsonb,?,?::uuid)`, p.TenantID, ch.ID, ch.Name, ch.Kind, ch.Enabled, string(config), secret, ch.ProjectID).Error; e != nil {
 			return e
 		}
 		return audit(tx, p, "channel.created", ch.ID)
@@ -972,6 +1180,9 @@ func (r *Repository) CreateChannel(ctx context.Context, p domain.Principal, ch d
 
 func (r *Repository) DeleteChannel(ctx context.Context, p domain.Principal, id string) error {
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		if _, e := writableRow(tx, "notification_channels", id); e != nil {
+			return e
+		}
 		res := tx.Exec(`DELETE FROM core.notification_channels WHERE id=?`, id)
 		if res.Error != nil {
 			return res.Error
@@ -989,7 +1200,10 @@ func (r *Repository) ChannelWithSecret(ctx context.Context, p domain.Principal, 
 	var secret string
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		var rows []channelRow
-		if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc,created_at FROM core.notification_channels WHERE id=?`, id).Scan(&rows).Error; e != nil {
+		if _, e := writableRow(tx, "notification_channels", id); e != nil {
+			return e
+		}
+		if e := tx.Raw(`SELECT id,name,kind,enabled,config,secret_enc,project_id::text AS project_id,created_at FROM core.notification_channels WHERE id=?`, id).Scan(&rows).Error; e != nil {
 			return e
 		}
 		if len(rows) != 1 {
@@ -1013,4 +1227,96 @@ func (r *Repository) ListNotifications(ctx context.Context, p domain.Principal, 
 		out = []domain.Notification{}
 	}
 	return out, e
+}
+
+// alertConfigLock serialises rule and channel creation per workspace (advisory key 10).
+func alertConfigLock(tx *gorm.DB, tenant string) error {
+	return tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?,10))`, tenant).Error
+}
+
+// scopeAll reports whether the transaction's member sees every project (owner, unrestricted member, workers).
+func scopeAll(tx *gorm.DB) (bool, error) {
+	var all bool
+	e := tx.Raw(`SELECT core.scope_all()`).Scan(&all).Error
+	return all, e
+}
+
+// checkAlertProject: a workspace-wide rule or channel needs full scope; a project one needs a project the
+// member can see (core.projects is project-scoped, so an invisible or foreign id counts as unknown).
+func checkAlertProject(tx *gorm.DB, project *string) error {
+	all, e := scopeAll(tx)
+	if e != nil {
+		return e
+	}
+	if project == nil {
+		if !all {
+			return domain.ErrForbidden
+		}
+		return nil
+	}
+	// An archived project takes no new rules or channels; core.projects is project-scoped, so an invisible
+	// or foreign id counts as unknown too.
+	var n int64
+	if e := tx.Raw(`SELECT count(*) FROM core.projects WHERE id=?::uuid AND archived_at IS NULL`, *project).Scan(&n).Error; e != nil {
+		return e
+	}
+	if n != 1 {
+		return domain.ErrInvalid
+	}
+	return nil
+}
+
+// writableRow tells "not there" (404) from "there, but workspace-wide or another project's" (403) before an
+// update or delete, which RLS would otherwise both turn into zero rows, and returns the row's project. The
+// table name is a constant.
+func writableRow(tx *gorm.DB, table, id string) (*string, error) {
+	var rows []struct{ ProjectID *string }
+	if e := tx.Raw(`SELECT project_id::text AS project_id FROM core.`+table+` WHERE id=?::uuid`, id).Scan(&rows).Error; e != nil {
+		return nil, e
+	}
+	if len(rows) != 1 {
+		return nil, domain.ErrNotFound
+	}
+	all, e := scopeAll(tx)
+	if e != nil {
+		return nil, e
+	}
+	if !all && rows[0].ProjectID == nil {
+		return nil, domain.ErrForbidden
+	}
+	return rows[0].ProjectID, nil
+}
+
+// keepKnown filters ids to the ones in known (compared lower-case when fold is set), keeping the order.
+func keepKnown(ids, known []string, fold bool) []string {
+	if len(ids) == 0 {
+		return ids
+	}
+	set := make(map[string]bool, len(known))
+	for _, k := range known {
+		set[k] = true
+	}
+	out := []string{}
+	for _, id := range ids {
+		key := id
+		if fold {
+			key = strings.ToLower(id)
+		}
+		if set[key] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func distinct(ids []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }

@@ -5,6 +5,7 @@ import (
 	"aether/backend/internal/app"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/security"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -129,6 +130,9 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 		Scope     domain.RuleScope `json:"scope"`
 		Channels  []string         `json:"channels"`
 		DedupeSec *int             `json:"dedupe_sec"`
+		// Tri-state: absent keeps the stored project on update (workspace on create), null or "" is the
+		// whole workspace, a uuid is one project.
+		ProjectID json.RawMessage `json:"project_id"`
 	}
 	parseRule := func(c fiber.Ctx, id string) (domain.AlertRule, error) {
 		var in ruleInput
@@ -136,6 +140,23 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 			return domain.AlertRule{}, e
 		}
 		rule := domain.AlertRule{ID: id, Name: strings.TrimSpace(in.Name), Enabled: in.Enabled == nil || *in.Enabled, EventType: in.EventType, Severity: in.Severity, Scope: in.Scope, Channels: in.Channels, DedupeSec: 600}
+		if len(in.ProjectID) == 0 {
+			rule.KeepProject = true
+		} else {
+			var raw *string
+			if e := json.Unmarshal(in.ProjectID, &raw); e != nil {
+				return rule, domain.ErrInvalid
+			}
+			project, e := optionalProject(raw)
+			if e != nil {
+				return rule, e
+			}
+			rule.ProjectID = project
+		}
+		// SOS and hazard default to the built-in rule's short window; the cap is 300 s (alerts.ValidateRule).
+		if domain.BypassesShadow(rule.EventType) {
+			rule.DedupeSec = 30
+		}
 		if in.DedupeSec != nil {
 			rule.DedupeSec = *in.DedupeSec
 		}
@@ -158,6 +179,7 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 			return e
 		}
 		rule, e := parseRule(c, uuid.NewString())
+		rule.KeepProject = false
 		if e != nil {
 			return e
 		}
@@ -181,6 +203,16 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 		}
 		if e := s.Repo.SaveRule(c.Context(), p, rule, false); e != nil {
 			return e
+		}
+		// The stored project is what the answer reports when the request left it out.
+		if rule.KeepProject {
+			if stored, e := s.Repo.ListRules(c.Context(), p); e == nil {
+				for _, r := range stored {
+					if r.ID == rule.ID {
+						rule.ProjectID = r.ProjectID
+					}
+				}
+			}
 		}
 		return c.JSON(rule)
 	})
@@ -217,16 +249,20 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 			return e
 		}
 		var in struct {
-			Name    string            `json:"name"`
-			Kind    string            `json:"kind"`
-			Enabled *bool             `json:"enabled"`
-			Config  map[string]string `json:"config"`
-			Secret  string            `json:"secret"`
+			Name      string            `json:"name"`
+			Kind      string            `json:"kind"`
+			Enabled   *bool             `json:"enabled"`
+			Config    map[string]string `json:"config"`
+			Secret    string            `json:"secret"`
+			ProjectID *string           `json:"project_id"`
 		}
 		if e := body(c, &in, 8192); e != nil {
 			return e
 		}
 		ch := domain.NotificationChannel{ID: uuid.NewString(), Name: strings.TrimSpace(in.Name), Kind: in.Kind, Enabled: in.Enabled == nil || *in.Enabled, Config: map[string]string{}, HasSecret: in.Secret != ""}
+		if ch.ProjectID, e = optionalProject(in.ProjectID); e != nil {
+			return e
+		}
 		if ch.Name == "" || len(ch.Name) > 128 || len(in.Secret) > 512 || len(in.Config) > 10 {
 			return domain.ErrInvalid
 		}
@@ -308,6 +344,15 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 				return errors.New("channel secret unreadable")
 			}
 		}
+		// A "members" email is resolved per alert; a test message goes only to the person pressing the button,
+		// never to the whole project.
+		if ch.Kind == "email" && ch.Config["audience"] == alerts.AudienceMembers {
+			self, e := s.Repo.MemberSelf(c.Context(), p)
+			if e != nil {
+				return e
+			}
+			ch.Config["to"] = self.Email
+		}
 		now := time.Now().UTC()
 		ev := domain.DeviceEvent{ID: uuid.NewString(), ExternalID: "test", DeviceName: "Aether test", EventType: "test", Detail: map[string]any{"note": "ข้อความทดสอบจากหน้าการแจ้งเตือน ไม่ได้มาจากอุปกรณ์จริง"}, OccurredAt: now}
 		alert := domain.Alert{ID: uuid.NewString(), EventID: ev.ID, DeviceName: ev.DeviceName, EventType: "test", Severity: "info", Title: "ทดสอบช่องทางแจ้งเตือน · " + ch.Name, Status: "open", OpenedAt: now}
@@ -333,4 +378,16 @@ func alertRoutes(r fiber.Router, s *app.Service, sender *alerts.Sender) {
 		}
 		return c.JSON(fiber.Map{"items": out})
 	})
+}
+
+// optionalProject accepts a missing, null or empty project as "the whole workspace", otherwise a uuid.
+func optionalProject(in *string) (*string, error) {
+	if in == nil || strings.TrimSpace(*in) == "" {
+		return nil, nil
+	}
+	id := strings.ToLower(strings.TrimSpace(*in))
+	if !security.ValidID(id) {
+		return nil, domain.ErrInvalid
+	}
+	return &id, nil
 }

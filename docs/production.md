@@ -786,7 +786,7 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mq
 | log ของ PostgreSQL | อยู่ใน log ของ container `postgres` (query ที่ช้ากว่า 500 ms, checkpoint, lock wait, autovacuum) |
 | ข้อมูลจริง | Docker volume ตาม `AETHER_PG_VOLUME` ใน `.env.prod` (ค่าเริ่มต้น `aether-prod_postgres-data`) |
 | ไฟล์สำรอง | `<backup-dir>` (dump + `drills.log`) และ `<pitr-dir>` (คลัง pgBackRest) |
-| สุขภาพการสำรอง | `infra/prod/pitr-info.sh` หรือ `/run/aether-ops/status.json` ใน container `pitr`; บรรทัด `PITR ALERT` ใน log ของ `pitr` |
+| สุขภาพการสำรอง | `infra/prod/pitr-info.sh` หรือ `/run/aether-ops/status.json` ใน container `pitr`; บรรทัด `PITR ALERT` ใน log ของ `pitr`; owner เห็นบนเว็บ (ดูด้านล่าง) |
 
 ```sh
 # สุขภาพรวม
@@ -806,12 +806,24 @@ sudo grep -h '"status":5' <log-dir>/access.log | tail -20
 | `docker compose ps` | มี service ไหน ไม่ใช่ `healthy` นานกว่า 5 นาที |
 | ไฟล์ backup ล่าสุด | เก่ากว่า 36 ชั่วโมง (`pitr` แจ้งเองเมื่อ dump เก่ากว่า 30 ชม. หรือ backup ของ pgBackRest เก่ากว่า 36 ชม.) |
 | `pitr` / `backup` | `unhealthy` = มีปัญหาการสำรอง ดู `logs pitr` บรรทัด `PITR ALERT` |
+| แถบ "สำรองข้อมูลมีปัญหา / ต้องดูแล" บนเว็บ (owner) | ข้อมูลเดียวกับ `status.json` ของ `pitr` · แดง = ข้อมูลที่เขียนตอนนี้อาจกู้ไม่ได้ (archive ล้ม, WAL ถูกทิ้ง, คลังสำรองเสีย, backup/dump ล้ม) หรือไฟล์สถานะเก่ากว่า 15 นาที (`pitr` หยุด) · เหลือง = ค้าง/เก่า/ดิสก์ใกล้เต็ม · รายละเอียดที่ "ความเป็นส่วนตัว › สถานะระบบ" |
 | ขนาด `core.sensor_samples` | โตเร็วกว่าที่ประมาณไว้ในข้อ 1 เกิน 30% → ลด interval หรือ retention |
 | `logs api` บรรทัด `PARTITION ALERT` | มีแถวตกใน partition `DEFAULT`, partition ล่วงหน้าเหลือไม่ถึง 7 วัน (งานดูแล partition ไม่ได้รันหรือล้ม ดู `partition maintenance failed`) หรือ constraint `*_cutover` ค้าง (`00037` ยังไม่รัน ดู §6) · `drop_held` ระดับ Warn = partition หมดอายุตามนาฬิกาแต่ข้อมูลล่าสุดยังไม่ยืนยัน (นาฬิกาเครื่องเดินเร็วเกิน? ตรวจ `timedatectl`) |
 | `logs api` บรรทัด `access log write failed` / ผู้ใช้เห็น 503 | บันทึกการเข้าถึงข้อมูลส่วนบุคคล (`core.access_log`) เขียนไม่ได้ API จึงไม่ส่งข้อมูลนั้นออก (fail closed): ตรวจฐานข้อมูล ดิสก์เต็ม หรือ partition ของ `access_log` (ดู `PARTITION ALERT`) |
 | HTTP 429 ใน access log | ถ้าเยอะจากผู้ใช้จริง ให้เพิ่ม `API_RATE_LIMIT` |
 | จำนวน gateway ที่ออนไลน์ | ลดลงโดยไม่มีเหตุผล = ปัญหาเครือข่าย หรือใบรับรองหมดอายุ |
 | เวลาเซิร์ฟเวอร์ | `timedatectl` ต้อง synchronized ตลอด |
+
+### สถานะสำรองข้อมูลบนเว็บ (owner)
+
+API อ่าน `status.json` ที่ `pitr` เขียน (volume `ops-status` mount แบบอ่านอย่างเดียวที่ `/run/aether-ops`, ตัวแปร `OPS_STATUS_FILE`) แล้วส่งให้ owner ที่ `GET /api/v1/system/status` เท่านั้น (role อื่นได้ 403):
+
+- **workspace ไหนเห็น:** สถานะนี้เป็นของทั้งเครื่อง ไม่ใช่ของ workspace · `OPS_STATUS_TENANT` (uuid ของ workspace) กำหนดให้เห็นเฉพาะ owner ของ workspace นั้น owner ของ workspace อื่นได้ 403 · `create-owner.sh` บันทึก workspace แรกลงไปให้เอง (ถ้ายังไม่ได้ตั้ง) แล้วต้อง `up -d api` · เครื่องที่ติดตั้งก่อนหน้านี้ตั้งด้วย `setup.py <flag เดิม> --ops-status-tenant <tenant-uuid>` (uuid ดูได้จาก `GET /api/v1/me` ของ owner หรือบรรทัด `Owner created. … tenant_id=` ตอนสร้าง owner) · ไม่ตั้ง = owner ทุก workspace เห็น (เหมาะกับเครื่องที่มี workspace เดียว) · `--ops-status-tenant all` ล้างค่า
+
+- อ่านเฉพาะไฟล์ปกติ (ไม่ใช่ FIFO หรือ directory) ไม่เกิน 64 KiB แปลงเป็นรูปแบบที่กำหนดไว้ ฟิลด์อื่นถูกตัดทิ้ง key ซ้ำเหลือรายการเดียว ข้อความแจ้งเตือนถูกตัดอักขระควบคุมและอักขระจัดรูปแบบ (bidi, zero-width) จำกัดความยาว และซ่อนสิ่งที่ดูเหมือนความลับ (URL ที่มี credential, `Bearer …`, `…password=`/`…token:`/`"secret": "…"`)
+- `overall` = `ok` / `warn` / `alert` · ไฟล์หาย อ่านไม่ได้ หรือ `checked_at` เก่ากว่า 15 นาที = `alert` (`status_missing` / `status_invalid` / `status_stale`)
+- เว็บแสดงแถบลอยมุมล่างขวาให้ owner เฉพาะเมื่อไม่ใช่ `ok` (ไม่ดันหน้าเลื่อน) และหน้า "ความเป็นส่วนตัว › สถานะระบบ" แสดงรายละเอียด (ย้อนเวลาได้ตั้งแต่เมื่อไร backup/WAL/dump ล่าสุด ดิสก์คลังสำรอง) · โหลดทุก 5 นาทีเฉพาะตอนแท็บเปิดอยู่
+- ไม่ตั้ง `OPS_STATUS_FILE` (เช่น dev) = ปิดฟีเจอร์ API ตอบ `{"configured": false}` และเว็บไม่แสดงอะไร
 
 ```sh
 # ขนาดตารางที่โตเร็วที่สุด

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,7 +18,11 @@ import (
 // CommandChannel is the pg_notify channel that wakes mqtt-commander; the payload is the tenant id.
 const CommandChannel = "aether_command"
 
-const commandColumns = `tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,error,created_at,expires_at,sent_at,settled_at,transport,wire`
+// commandIngestColumns is what the ingest's confirmation reads: no column newer than the ingest path needs, so a
+// collector keeps confirming commands while a later migration is still being applied (confirm_sec came in 00043).
+const commandIngestColumns = `tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,error,created_at,expires_at,sent_at,settled_at,transport,wire`
+
+const commandColumns = commandIngestColumns + `,confirm_sec`
 
 type commandRow struct {
 	TenantID, ID, GatewayID, DeviceID string
@@ -31,12 +36,13 @@ type commandRow struct {
 	SentAt, SettledAt                 *time.Time
 	Transport                         string
 	Wire                              json.RawMessage
+	ConfirmSec                        int
 }
 
 func (c commandRow) command() domain.Command {
 	return domain.Command{ID: c.ID, TenantID: c.TenantID, GatewayID: c.GatewayID, DeviceID: c.DeviceID, IEEE: c.IEEE, Property: c.Property,
 		Requested: c.Requested, Value: c.Value, Source: c.Source, ActorID: c.ActorID, AutomationID: c.AutomationID, Status: c.Status, Error: c.Error,
-		CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, SentAt: c.SentAt, SettledAt: c.SettledAt, Transport: c.Transport, Wire: c.Wire}
+		CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, SentAt: c.SentAt, SettledAt: c.SettledAt, Transport: c.Transport, Wire: c.Wire, ConfirmSec: c.ConfirmSec}
 }
 
 func commands(rows []commandRow) []domain.Command {
@@ -143,15 +149,31 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 		return domain.Command{}, false, e
 	}
 	var wire any
+	confirm := domain.CommandConfirmWindow
 	if z.Transport == "edge" || z.Transport == "cloud" {
 		dpMap := map[string]tuya.Ref{}
 		if e := json.Unmarshal(z.DPMap, &dpMap); e != nil {
 			return domain.Command{}, false, e
 		}
-		// The LAN protocol addresses data points by id, Tuya Cloud by code.
+		// The LAN protocol addresses data points by id, Tuya Cloud by code; over BLE an enum is sent as its index.
 		encode := tuya.Wire
 		if z.Transport == "cloud" {
 			encode = tuya.CloudWire
+		}
+		if z.Transport == "edge" {
+			var rows []struct{ Transport, TuyaCategory string }
+			if e := tx.Raw(`SELECT transport,tuya_category FROM core.tuya_devices WHERE gateway_id=? AND tuya_id=? AND removed_at IS NULL`,
+				d.GatewayID, strings.ToLower(d.ExternalID)).Scan(&rows).Error; e != nil {
+				return domain.Command{}, false, e
+			}
+			if len(rows) == 1 && rows[0].Transport == "ble" {
+				// A lock is never actuated over BLE until the owner explicitly decides to allow it: its data points
+				// include unlock requests and member keys (docs/platform/tuya-ble.md).
+				if tuya.LockCategory(rows[0].TuyaCategory) {
+					return domain.Command{}, false, domain.Because(domain.ErrInvalid, "not_settable")
+				}
+				encode, confirm = tuya.WireBLE, domain.CommandConfirmWindowBLE
+			}
 		}
 		w, e := encode(dpMap, req.Property, value)
 		if e != nil {
@@ -188,9 +210,10 @@ func queueCommand(tx *gorm.DB, tenant string, req domain.CommandRequest, source 
 		return domain.Command{}, false, domain.ErrRateLimited
 	}
 	var rows []commandRow
-	if e := tx.Raw(`INSERT INTO core.device_commands(tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,created_at,expires_at,transport,wire)
-    VALUES(?,?,?,?,?,?,?,?::jsonb,?,?,?,'pending',?,?,?,?::jsonb) RETURNING `+commandColumns,
-		tenant, req.ID, d.GatewayID, req.DeviceID, d.ExternalID, req.Property, req.Action, string(value), source, actor, automation, now, now.Add(domain.CommandTTL), z.Transport, wire).Scan(&rows).Error; e != nil {
+	if e := tx.Raw(`INSERT INTO core.device_commands(tenant_id,id,gateway_id,device_id,ieee,property,requested,value,source,actor_id,automation_id,status,created_at,expires_at,transport,wire,confirm_sec)
+    VALUES(?,?,?,?,?,?,?,?::jsonb,?,?,?,'pending',?,?,?,?::jsonb,?) RETURNING `+commandColumns,
+		tenant, req.ID, d.GatewayID, req.DeviceID, d.ExternalID, req.Property, req.Action, string(value), source, actor, automation, now, now.Add(domain.CommandTTL), z.Transport, wire,
+		int(confirm/time.Second)).Scan(&rows).Error; e != nil {
 		if errors.Is(e, gorm.ErrDuplicatedKey) {
 			return domain.Command{}, false, domain.Because(domain.ErrConflict, "in_flight")
 		}
@@ -320,12 +343,13 @@ func (r *Repository) MarkCommandFailed(ctx context.Context, tenant, id, reason s
 	})
 }
 
-// TimeoutCommands settles sent commands that no state report confirmed within domain.CommandConfirmWindow.
+// TimeoutCommands settles sent commands that no state report confirmed within their confirm window.
 func (r *Repository) TimeoutCommands(ctx context.Context, tenant string, now time.Time) (int, error) {
 	var gateways []string
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
+		// Each command carries its own window (confirm_sec: 10 s, 45 s for a BLE device).
 		if e := tx.Raw(`UPDATE core.device_commands SET status='timeout',settled_at=?,error='no state report from the device'
-    WHERE status='sent' AND sent_at<=? RETURNING gateway_id`, now, now.Add(-domain.CommandConfirmWindow)).Scan(&gateways).Error; e != nil {
+    WHERE status='sent' AND sent_at<=?::timestamptz-make_interval(secs=>confirm_sec) RETURNING gateway_id`, now, now).Scan(&gateways).Error; e != nil {
 			return e
 		}
 		return signalGateways(tx, tenant, gateways)
@@ -345,7 +369,7 @@ func confirmCommands(tx *gorm.DB, tenant, gateway, ieee string, features []zigbe
 		return out, nil
 	}
 	var open []commandRow
-	if e := tx.Raw(`SELECT `+commandColumns+` FROM core.device_commands WHERE gateway_id=? AND ieee=?
+	if e := tx.Raw(`SELECT `+commandIngestColumns+` FROM core.device_commands WHERE gateway_id=? AND ieee=?
     AND (status='sent' OR (status='timeout' AND NOT superseded AND settled_at>=?)) ORDER BY created_at LIMIT 100`, gateway, ieee, now.Add(-domain.CommandLateConfirm)).Scan(&open).Error; e != nil {
 		return nil, e
 	}

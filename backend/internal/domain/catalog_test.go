@@ -22,6 +22,11 @@ func TestProfileAllowedOn(t *testing.T) {
 		{"tuya-ts001x-switch@1", EdgeGatewayModel, false},
 		{"minew-s1-pending@1", EdgeGatewayModel, false},
 		{"retired-profile@1", EdgeGatewayModel, false},
+		// Tuya BLE devices too: only under an Aether Edge.
+		{TuyaBLEProfile, EdgeGatewayModel, true},
+		{TuyaBLEProfile, "minew-mg3", false},
+		{TuyaBLEProfile, Z2MGatewayModel, false},
+		{TuyaBLEProfile, TuyaCloudGatewayModel, false},
 		// Tuya Cloud devices live only under a Tuya Cloud gateway, which takes nothing else.
 		{TuyaCloudProfile, TuyaCloudGatewayModel, true},
 		{TuyaCloudProfile, EdgeGatewayModel, false},

@@ -2,8 +2,10 @@
 
 Status: design, plus the parts that need no hardware.
 
-- **Built:** phase B1, the protocol library `internal/tuyable` and its simulator `internal/tuyable/tuyablesim`.
-- **Not started:** phases B2–B5, which cover the Edge radio, storage, import and UI.
+- **Built:** phase B1, the protocol library `internal/tuyable` and its simulator `internal/tuyable/tuyablesim`; phase B2, the Edge
+  transport (`internal/edge/ble`), migration 00043, the config gating and the sightings ingest (see "B2 as built" below). B2 is off
+  everywhere until the server sets `EDGE_BLE=true` **and** an agent built with it is installed with `--ble`.
+- **Not started:** phases B3–B5: import of address, uuid and `sec_key`, classification, the BLE settings route and UI, the ESPHome proxy.
 - **Not verified:** nothing here has been checked against a real Tuya BLE device. Everything is checked against vectors taken from the reference implementation and against the simulator.
 
 This builds on the Wi‑Fi path:
@@ -199,13 +201,127 @@ A one-time import costs about ceil(N/20) extra calls, so the Tuya trial plan is 
 - The import table gets a transport column and pairing state.
 - The Edge installer gets a `--ble` option.
 
+## B2 as built
+
+**Server.**
+- Migration 00043 (`lock_timeout` 5 s both ways): the `core.tuya_devices` BLE columns above, every existing row `transport='wifi'`;
+  `core.edge_ble_seen` with the tenant and restrictive gateway-scope policies of 00032; `core.edge_agents` gains `ble_state`,
+  `ble_seen`, `ble_connected`, `capabilities` and `last_ble_at`; `devices_tuya_one_mode` covers `tuya-ble-device@1`. Its Down refuses
+  while a `tuya-ble-device@1` registration is live.
+- `EDGE_BLE` (default false): without it the profile is not in the catalog, a BLE registration is refused, and no agent is sent a
+  BLE device. `GET /api/v1/catalog` reports `edge_ble`.
+- Config pull: BLE devices (`transport="ble"`, an address or a uuid, the local key) are included only when `EDGE_BLE` is on and the
+  agent sent `X-Aether-Edge-Caps: ble`; `local_capable` (the Wi‑Fi verdict) does not apply to them. The entry adds `mac`, `uuid`,
+  `sec_key` (sealed like the local key, opened with the same keys), `product_id`, `protocol`, `mode`, `poll` and `dp_types`. Wi‑Fi
+  entries are unchanged, byte for byte. The ETag is `"<revision>"`, or `"<revision>;ble"` when BLE devices are included, so a flag
+  flip or a newly capable agent never gets a stale 304. The announced capabilities (known ones only) are stored on the agent row.
+- `aether/edge/<gw>/ble` (sightings): at most 200 per message, one list per 30 s per gateway, entries unheard for a week forgotten,
+  the newest 500 kept per gateway. An imported BLE device heard by address or uuid gets its `rssi` and advertised protocol.
+- `health` may carry `ble:{state,adapter,seen,connected,sessions_ok,sessions_failed,queue}`; the gateway page's status
+  (`GET /api/v1/gateways/:id/edge/status`) returns `ble_state` ("" for an agent that knows nothing of Bluetooth, `off` when it runs
+  without it), `ble_seen`, `ble_connected`, `ble_devices` and `capabilities`.
+- State from a BLE device goes through `tuya.FromBLE` (enum index → label, an index outside the range is dropped) and sets
+  `last_read_at`; commands to one are wired by `tuya.WireBLE` (enum label → index), everything else exactly as over the LAN.
+
+**Agent** (`internal/edge/ble`, only with `BLE_ENABLED=true`).
+- `BLE_ADAPTER` (default `hci0`) and `BLE_MAX_CONNECTIONS` (1–5, default 1). Without `BLE_ENABLED` the poller drops BLE entries and
+  the heartbeat says `ble.state="off"`.
+- `Radio` (`radio.go`): `Scan`, `Connect`. `bluez_linux.go` is BlueZ over the system D-Bus (`tinygo.org/x/bluetooth` v0.16.0,
+  `godbus/dbus/v5`), pure Go, no capability; the link polls `Connected` every 2 s and closes rather than drops notifications.
+  `radio_other.go` is an always-unavailable radio for other systems; tests use `bletest` (a fake radio over `tuyablesim`).
+- `Manager` (`manager.go`): keeps what it hears (Tuya adverts only, at most 500 addresses, oldest evicted), matches a device by
+  address in either byte order or, with none configured, by the uuid in its advertisement. Each tick it picks jobs by priority
+  (command, persistent hold, first read, poll) within the connection budget; a device must have advertised within 10 min to be
+  connected. Modes: `auto` reads on its first advertisement and then every poll interval while heard; `on_demand` only for
+  commands and every poll interval from start; `persistent` holds the connection (and retries 10 s after a drop). Poll: default
+  15 min, minimum 5 min.
+- A session: connect (10 s), `tuyable.Open` with the advertised protocol and FD50 flag (each request 10 s), `Status` unless it is
+  a command job, then deliver pending commands (coalesced per DP, 30 s TTL; a failed write puts them back unless a newer value
+  arrived), publish each report on `…/<device>/state` (bool, integer for value and enum index, string, a bitmap as its integer,
+  raw as hex), and end after 3 s quiet or 30 s.
+- Availability on the existing topic and reasons: online after a successful handshake; `auth_failed` at once when the device
+  refuses the keys, or after three handshakes left unanswered in a row while it advertises; `busy` when the radio reports another
+  central; `unreachable` otherwise, announced after 2 min of failures; `not_found` after 10 min without an advertisement. Backoff
+  10 s doubling to 10 min; a refused key waits the full 10 min even for a command. Malformed keys are announced once and never tried.
+- Sightings on `aether/edge/<gw>/ble` when the list changed, and every 5 min anyway (strongest first, at most 200); again after
+  every broker reconnect.
+
+**Install** (`--ble`). The script checks, before pulling anything or asking for the code, that `/run/dbus/system_bus_socket`
+exists, that bluetoothd is active (`systemctl is-active bluetooth`, or `pgrep bluetoothd`) and that no Bluetooth rfkill switch is
+set. The agent's `.env` gets `BLE_ENABLED=true`, `BLE_ADAPTER=hci0`, `BLE_MAX_CONNECTIONS=1` and
+`DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket`; `compose.yaml` mounts `/run/dbus:/run/dbus:ro` and nothing else of
+`/run`. The container keeps `cap_drop: [ALL]`, `read_only`, `no-new-privileges` and uid 10001.
+
+**D-Bus access, and its honest limit.** The container reaches the host's whole system bus through that socket; what it may do there
+is the host's D-Bus policy.
+- `--ble` always writes `/etc/dbus-1/system.d/aether-edge-bluetooth.conf`: uid 10001 may call exactly what
+  `tinygo.org/x/bluetooth` v0.16.0 uses as a central (read from its source): `Adapter1.SetDiscoveryFilter`/`StartDiscovery`/
+  `StopDiscovery`, `Device1.Connect`/`Disconnect`, `GattCharacteristic1.WriteValue`/`StartNotify`/`StopNotify`,
+  `ObjectManager.GetManagedObjects` and `Properties.Get`/`GetAll` on `org.bluez`. Not `Properties.Set` (it would let the agent power
+  the adapter off or make it discoverable; the library sets properties only for its peripheral role), no `AgentManager1`,
+  `LEAdvertisingManager1`, `GattManager1`, pairing, `ReadValue` or `RemoveDevice`.
+- Checked against a real `dbus-daemon` with a fake `org.bluez` and a default-deny BlueZ policy: uid 10001 gets `StartDiscovery` and
+  `Properties.Get`, and `AccessDenied` for `RemoveDevice` and `Properties.Set`; any other uid gets `AccessDenied` for everything.
+- **The limit:** D-Bus policy only adds. Where the host's BlueZ policy lets every local user call `org.bluez` (upstream BlueZ's
+  default, `<policy context="default"><allow send_destination="org.bluez"/>`), the rule narrows nothing: any local user, the agent
+  included, may already call all of BlueZ. The installer says so when it sees that. There, the options are an AppArmor profile for
+  the container that mediates D-Bus (`dbus send bus=system peer=(name=org.bluez) interface=… member=…` rules, loaded with
+  `security_opt: [apparmor=aether-edge-ble]`; only on hosts whose kernel mediates D-Bus, such as Ubuntu), or a filtering proxy (below).
+- **uid.** The rule is keyed to uid 10001, the container's user, which D-Bus sees as the same uid on the host. When the host has no
+  account with that uid, the installer creates a system account `aether-edge` for it (no home, no shell), so no other account holds it
+  by accident; when another account already has uid 10001, the installer warns that the rule applies to it too.
+- **`--uninstall`** stops the stack, removes the rule file (reloading D-Bus) and the `aether-edge` account if the installer created
+  it, and keeps the installation directory (credentials, a Zigbee2MQTT network key).
+- **Filtering proxy, evaluated and not the default yet.** `xdg-dbus-proxy --filter` with `--call=org.bluez=<interface>.<member>@/org/bluez/*`
+  rules for the same calls, in a sidecar whose socket is the only one mounted into the agent, would enforce the list whatever the
+  host's policy. It is not simple enough to be the default in B2: there is no upstream image of it (Alpine packages
+  `xdg-dbus-proxy` 0.1.6, a C program with GLib that the distroless agent image cannot run), so it needs an image of our own, built,
+  pinned and published next to the agent image (a release decision), plus socket ownership between two containers. It is the
+  recommended next hardening step.
+
+**Commands to BLE devices.**
+- **Locks are read-only.** A BLE device whose Tuya category is a lock or safe (`ms`, `jtmspro`, `jtmsbh`, `gyms`, `hotelms`, `bxx`,
+  `videolock`, `photolock`, `mk`, `ms_category`: `tuya.LockCategory`) is refused every command (`400 not_settable`), its
+  configuration entry has `"readonly":true` and no `dp_types`, and the agent refuses any write to a read-only device.
+- **Deadlines.** `device_commands.confirm_sec` is 45 s for a BLE device (10 s otherwise). The commander publishes every edge command
+  with `"expires_at"` (server time) and `"ttl_ms"`: two thirds of the confirm window (30 s for BLE, 6.67 s for Wi‑Fi). The agent uses the
+  earlier of `expires_at` and its receipt time plus `ttl_ms`, drops a command already past it (logging a hint about the host clock),
+  and never starts a BLE write after it; a BLE write takes at most 10 s, so the device's confirmation arrives within the window. A
+  host clock running ahead of the server makes the agent drop commands, one running behind cannot make it late. Agents before 0.2
+  ignore both fields.
+- **No double actuation.** The commander publishes each command at most once (claim, commit, then publish). The agent coalesces per
+  data point, and a BLE write that failed is retried only until the deadline and only with the same absolute value (toggles are
+  resolved to an explicit value on the server), so a write that did reach the device but whose answer was lost writes that value
+  again, not a second change.
+
+**Spoofing.** Advertisements are not authenticated, so the agent trusts them only as far as it must. A device configured with an
+address is found by that address only (either byte order); a device advertising the same uuid from another address is never
+connected. Only a device configured without an address follows its uuid, and keeps the address it was first found at. When the heard
+list is full, configured devices' addresses are never the ones forgotten, and they lead the sightings list, so a crowd of strong
+strangers cannot push them out. The server matches sightings to imported devices by address in either byte order, or by uuid.
+**B3 must not classify a device as BLE from a sighting alone:** a sighting is a claim anyone in radio range can make, so marking a
+device BLE (and its address) needs the operator's confirmation in the import table.
+
+**Radio details.** A connection attempt that runs past its 10 s is abandoned in BlueZ (`Device1.Disconnect` on the device object
+cancels a connection in progress) and the connection slot stays taken until BlueZ answers or 15 s pass, so the adapter is never asked
+for more connections than the budget. Stopping a scan waits at most 5 s. A persistent connection gives its slot up to a waiting command
+(and is taken up again 10 s later), so persistent mode cannot starve commands even with one slot.
+
+**Release.** The edge image must be rebuilt (`edge.Dockerfile` now copies `internal/tuyable`) and published as a new version before
+anyone can use `--ble`; `domain.EdgeImageTag` stays at 0.1.1 until that release is approved and pushed.
+
+**Still needed on hardware (B0/B4):** that BlueZ lets uid 10001 in a `cap_drop: ALL` container scan and connect (Raspberry Pi OS,
+Ubuntu with AppArmor), whether scanning must pause during a connection, how the host reports a device held by another central
+(`busy` is recognised only when the radio says so), BlueZ's connect time without a deadline of ours, and everything in the B4
+checklist.
+
 ## Phases
 
 | Phase | Content | Hardware |
 |---|---|---|
 | B0 | Pin the references and generate vectors (done). Run a scan spike in a `cap_drop: ALL` container on Raspberry Pi OS and on Ubuntu (AppArmor), and record the D-Bus policy needed. Check `uuid`, `sec_key` and `factory-infos` against a real Tuya project. | Linux host with Bluetooth |
 | B1 | `internal/tuyable` and `tuyablesim` (done). | None |
-| B2 | `internal/edge/ble`: `Radio` interface, BlueZ radio, scheduler, worker. Agent config and health. Migration, route, config gating. Edge image 0.2.0 (ask before publishing). | BlueZ smoke test only |
+| B2 | `internal/edge/ble`: `Radio` interface, BlueZ radio, scheduler, sessions. Agent config and health. Migration 00043, route, config gating (done; image not yet published). | BlueZ smoke test only |
 | B3 | `FactoryInfos` and `sec_key` in the import, classification, BLE settings route, UI, OpenAPI. | None (fake cloud) |
 | B4 | Real-device validation (below). | Devices |
 | B5 | Optional ESPHome proxy radio behind the same `Radio` interface. | ESP32 |
@@ -274,6 +390,13 @@ A one-time import costs about ceil(N/20) extra calls, so the Tuya trial plan is 
 | `backend/internal/tuyable/tuyablesim` | Fake device over an in-memory `Link`. Knobs: protocol 2/3/4 and `sec_key`, `RejectKey`, `PairResult`, `AlreadyBound`, `Mute`/`SetMute`, `AskTime`, `NotifyMTU`, `DropFragment`/`SetDropFragment`, `SingleCentral`, `AfterPair`, `Glitch`, `Push` for every report kind, `Inject` for arbitrary session frames, `Advert` |
 | `backend/internal/tuyable/testdata/gen_vectors.py`, `vectors.json` | The generator (reference functions, MIT notice, pinned pycryptodome) and its output; see the README |
 | Fuzzers | `FuzzReassemble`, `FuzzParseDPs`, `FuzzParseReport`, `FuzzParseAdvert`, `FuzzSealUnseal`, and `FuzzSession` (arbitrary frames sealed with the real session key, so they pass the CRC) |
+| `backend/internal/edge/ble/radio.go` | `Radio`, `Advertisement`, `Device`, `Sighting`, `Health`, `Publisher`, radio states and reasons |
+| `backend/internal/edge/ble/manager.go` | Scan loop, scheduler, sessions, command coalescing, availability, sightings, health |
+| `backend/internal/edge/ble/bluez_linux.go`, `radio_other.go` | BlueZ over D-Bus on Linux; an unavailable radio elsewhere |
+| `backend/internal/edge/ble/bletest` | Fake radio over `tuyablesim` devices (connect failures, silence, scan failures, open-link count) |
+| `backend/migrations/00043_tuya_ble.sql` | BLE columns, `core.edge_ble_seen`, agent BLE state, one-mode index |
+| `backend/internal/adapters/edge/route.go` | `BLESightings` topic, `ParseBLESightings`, health `ble` block |
+| `backend/internal/adapters/tuya/wire.go`, `import.go` | `FromBLE`, `WireBLE`, `DPTypes` |
 
 ## Sources
 

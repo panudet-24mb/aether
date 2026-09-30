@@ -37,6 +37,8 @@ type Service struct {
 	TuyaCloud func(region, accessID, accessSecret string) (TuyaCloud, error)
 	// TuyaCloudEnabled is TUYA_CLOUD: without it the tuya-cloud gateway model and profile do not exist here.
 	TuyaCloudEnabled bool
+	// EdgeBLEEnabled is EDGE_BLE: without it the Tuya BLE profile does not exist here and no agent is sent BLE devices.
+	EdgeBLEEnabled bool
 	// TuyaCloudPublicKey is the tuya-cloud worker's public key (TUYA_CLOUD_PUBLIC_KEY); the API seals to it only.
 	TuyaCloudPublicKey *[32]byte
 	// TuyaCloudEventBudget and TuyaCloudAPIBudget are the monthly allowances the status shows usage against.
@@ -234,7 +236,7 @@ func (s *Service) CreateDevice(ctx context.Context, p domain.Principal, gateway,
 		return domain.Device{}, domain.ErrForbidden
 	}
 	if !security.ValidID(gateway) || !validName(strings.TrimSpace(name)) || !validName(external) || domain.DeviceProfileByID(profile) == nil ||
-		(profile == domain.TuyaCloudProfile && !s.TuyaCloudEnabled) {
+		(profile == domain.TuyaCloudProfile && !s.TuyaCloudEnabled) || (profile == domain.TuyaBLEProfile && !s.EdgeBLEEnabled) {
 		return domain.Device{}, domain.ErrInvalid
 	}
 	d := domain.Device{ID: uuid.NewString(), TenantID: p.TenantID, GatewayID: gateway, Name: strings.TrimSpace(name), ExternalID: external, ProfileID: profile, CreatedAt: time.Now().UTC()}
@@ -354,7 +356,7 @@ func (s *Service) CaptureZ2M(ctx context.Context, tenant, gateway string, m zigb
 // availability may be the bare string.
 func (s *Service) CaptureEdge(ctx context.Context, tenant, gateway string, m edge.Message, body []byte) (string, error) {
 	limit := 16 * 1024
-	if m.Kind == edge.Discovery {
+	if m.Kind == edge.Discovery || m.Kind == edge.BLESightings {
 		limit = edge.MaxPacket
 	}
 	if len(body) == 0 || len(body) > limit || !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 || bytes.Contains(body, []byte(`\u0000`)) {
@@ -367,7 +369,7 @@ func (s *Service) CaptureEdge(ctx context.Context, tenant, gateway string, m edg
 		if !json.Valid(body) || first == "" || first[0] != '{' {
 			return "", domain.ErrInvalid
 		}
-	case edge.Discovery:
+	case edge.Discovery, edge.BLESightings:
 		if !json.Valid(body) || first == "" || first[0] != '[' {
 			return "", domain.ErrInvalid
 		}

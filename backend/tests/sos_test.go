@@ -200,6 +200,7 @@ func TestBuiltinRulesBackfilledForExistingWorkspace(t *testing.T) {
 		}
 	}
 	// Replay 00024 (and 00030) against that state: this is exactly what the owner's database runs.
+	clearDownGuards(t, f)
 	if e := goose.DownTo(f.admin, "../migrations", 23); e != nil {
 		t.Fatalf("down to 00023: %v", e)
 	}
@@ -227,5 +228,21 @@ func TestBuiltinRulesBackfilledForExistingWorkspace(t *testing.T) {
 	}
 	if hazard := byType[domain.EventHazard]; !hazard.Enabled || hazard.Severity != "critical" || hazard.DedupeSec != 300 {
 		t.Fatalf("backfilled hazard rule: %+v", hazard)
+	}
+}
+
+// clearDownGuards retires what other tests left behind that a down migration refuses to strand: live Tuya Cloud
+// gateways and live Tuya BLE registrations (each migration that introduced one refuses to go back below itself while
+// any is live). It touches exactly the rows those checks look at, and only in the test database; tests in this
+// package run one at a time, so nothing else is using them. Needed only by tests that migrate down.
+func clearDownGuards(t *testing.T, f *fixture) {
+	t.Helper()
+	for _, q := range []string{
+		`UPDATE core.gateways SET revoked_at=now() WHERE model='tuya-cloud' AND revoked_at IS NULL`,
+		`UPDATE core.devices SET removed_at=now() WHERE profile_id='tuya-ble-device@1' AND removed_at IS NULL`,
+	} {
+		if _, e := f.admin.Exec(q); e != nil {
+			t.Fatal(e)
+		}
 	}
 }

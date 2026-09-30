@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"aether/backend/internal/edge/ble"
+	"aether/backend/internal/tuyable"
 	"aether/backend/internal/tuyalocal"
 )
 
@@ -64,6 +66,9 @@ type Agent struct {
 	revision int64
 	lan      map[string]lanEntry
 	lanDirty bool
+
+	// ble is the Tuya BLE transport, nil when the agent runs without Bluetooth (BLE_ENABLED unset).
+	ble *ble.Manager
 }
 
 type lanEntry struct {
@@ -77,6 +82,40 @@ func NewAgent(cfg Config, bus Bus, source ConfigSource, listen Listener, timing 
 		workers: map[string]*worker{}, lan: map[string]lanEntry{}}
 }
 
+// WithBLE gives the agent the Tuya BLE transport over radio, with slots connections at most.
+func (a *Agent) WithBLE(radio ble.Radio, slots int, timing ble.Timing) *Agent {
+	a.ble = ble.NewManager(radio, blePublisher{a}, slots, timing, a.log)
+	return a
+}
+
+// blePublisher turns what the BLE transport learns into the same messages the Wi-Fi workers publish.
+type blePublisher struct{ a *Agent }
+
+func (p blePublisher) State(device string, dps map[string]any) {
+	if e := p.a.bus.Publish(topicState(p.a.cfg.GatewayID, device), false, encodeState(dps, false)); e != nil {
+		p.a.log.Warn("state not published", "device", device, "error", e.Error())
+	}
+}
+
+func (p blePublisher) Availability(device string, online bool, reason string) {
+	if e := p.a.bus.Publish(topicAvailability(p.a.cfg.GatewayID, device), true, encodeAvailability(online, reason)); e != nil {
+		p.a.log.Warn("availability not published", "device", device, "error", e.Error())
+		return
+	}
+	if online {
+		p.a.log.Info("device online", "device", device, "transport", "ble")
+	} else {
+		p.a.log.Info("device offline", "device", device, "transport", "ble", "reason", reason)
+	}
+}
+
+func (p blePublisher) Sightings(list []ble.Sighting) {
+	b, _ := json.Marshal(list)
+	if e := p.a.bus.Publish(topicBLE(p.a.cfg.GatewayID), false, b); e != nil {
+		p.a.log.Warn("Bluetooth sightings not published", "error", e.Error())
+	}
+}
+
 // Run keeps the agent going until ctx ends, then says goodbye (status offline) and closes every connection.
 func (a *Agent) Run(ctx context.Context) error {
 	a.bus.Subscribe(topicSetFilter(a.cfg.GatewayID), a.onCommand)
@@ -85,6 +124,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.listen != nil {
 		wg.Add(1)
 		go func() { defer wg.Done(); a.discover(ctx) }()
+	}
+	if a.ble != nil {
+		wg.Add(1)
+		go func() { defer wg.Done(); a.ble.Run(ctx) }()
 	}
 	a.pull(ctx)
 	configT, healthT, discoveryT := time.NewTicker(a.timing.ConfigEvery), time.NewTicker(a.timing.HealthEvery), time.NewTicker(a.timing.DiscoveryEvery)
@@ -123,6 +166,9 @@ func (a *Agent) OnConnect() {
 	a.announceOnline()
 	a.health()
 	a.publishLAN(true)
+	if a.ble != nil {
+		a.ble.PublishSightings()
+	}
 }
 
 func (a *Agent) pull(ctx context.Context) {
@@ -142,11 +188,22 @@ func (a *Agent) pull(ctx context.Context) {
 	}
 }
 
-// reconcile starts, stops and restarts device workers to match the configuration.
+// reconcile starts, stops and restarts device workers to match the configuration. BLE devices go to the BLE
+// transport; the poller already dropped them when the agent runs without it.
 func (a *Agent) reconcile(ctx context.Context, rev int64, devices []Device) {
 	want := make(map[string]Device, len(devices))
+	var bleDevices []ble.Device
 	for _, d := range devices {
+		if d.Transport == "ble" {
+			if a.ble != nil {
+				bleDevices = append(bleDevices, bleDevice(d))
+			}
+			continue
+		}
 		want[d.ID] = d
+	}
+	if a.ble != nil {
+		a.ble.Configure(bleDevices)
 	}
 	a.mu.Lock()
 	a.revision = rev
@@ -168,10 +225,40 @@ func (a *Agent) reconcile(ctx context.Context, rev int64, devices []Device) {
 			a.workers[id] = a.startWorker(ctx, d)
 		}
 	}
-	a.log.Info("configuration applied", "revision", rev, "devices", len(want))
+	a.log.Info("configuration applied", "revision", rev, "devices", len(want), "ble_devices", len(bleDevices))
+}
+
+// bleDevice converts a BLE entry of the configuration.
+func bleDevice(d Device) ble.Device {
+	types := make(map[byte]tuyable.DPType, len(d.DPTypes))
+	for k, t := range d.DPTypes {
+		id, e := strconv.Atoi(k)
+		if e != nil || id < 1 || id > 255 {
+			continue
+		}
+		switch t {
+		case "bool":
+			types[byte(id)] = tuyable.DPBool
+		case "value":
+			types[byte(id)] = tuyable.DPValue
+		case "enum":
+			types[byte(id)] = tuyable.DPEnum
+		case "string":
+			types[byte(id)] = tuyable.DPString
+		case "bitmap":
+			types[byte(id)] = tuyable.DPBitmap
+		case "raw":
+			types[byte(id)] = tuyable.DPRaw
+		}
+	}
+	return ble.Device{ID: d.ID, MAC: d.MAC, UUID: d.UUID, LocalKey: d.Key, SecKey: d.SecKey, ProductID: d.ProductID,
+		Protocol: byte(d.Protocol), Mode: d.Mode, Poll: time.Duration(d.Poll) * time.Second, DPTypes: types, ReadOnly: d.ReadOnly}
 }
 
 func (a *Agent) stopAll() int {
+	if a.ble != nil {
+		a.ble.Configure(nil)
+	}
 	a.mu.Lock()
 	ws := make([]*worker, 0, len(a.workers))
 	for id, w := range a.workers {
@@ -192,14 +279,27 @@ func (a *Agent) onCommand(topic string, payload []byte) {
 	if !ok || !found || leaf != "set" || !ValidDevice(device) {
 		return
 	}
-	dps, e := parseCommand(payload)
+	dps, deadline, e := parseCommandDeadline(payload, a.now())
 	if e != nil {
 		a.log.Warn("command refused: malformed", "device", device)
+		return
+	}
+	if !deadline.IsZero() && !a.now().Before(deadline) {
+		// The server has given up on it (or this host's clock runs ahead of the server's).
+		a.log.Warn("command dropped: it arrived after its deadline (check the host clock if this repeats)", "device", device)
 		return
 	}
 	a.mu.Lock()
 	w := a.workers[device]
 	a.mu.Unlock()
+	if w == nil && a.ble != nil && a.ble.Has(device) {
+		// Delivered on the device's next connection, but not after the deadline; its own status push confirms it,
+		// as on Wi-Fi.
+		if e := a.ble.Command(device, dps, deadline); e != nil {
+			a.log.Warn("command refused", "device", device, "error", e.Error())
+		}
+		return
+	}
 	if w == nil {
 		a.log.Warn("command refused: device not configured on this agent", "device", device)
 		return
@@ -224,7 +324,12 @@ func (a *Agent) health() {
 		}
 	}
 	a.mu.Unlock()
-	b, _ := json.Marshal(healthPayload{Version: Version, DevicesConnected: connected, LANSeen: seen})
+	h := healthPayload{Version: Version, DevicesConnected: connected, LANSeen: seen, BLE: &ble.Health{State: ble.StateOff}}
+	if a.ble != nil {
+		bh := a.ble.Health()
+		h.BLE = &bh
+	}
+	b, _ := json.Marshal(h)
 	if e := a.bus.Publish(topicHealth(a.cfg.GatewayID), false, b); e != nil {
 		a.log.Warn("health not published", "error", e.Error())
 	}

@@ -107,7 +107,7 @@ func TestTeachSignalRaisesButtonEvent(t *testing.T) {
 		capture(nthStep(t, true, i))
 	}
 	// Close the trigger window without sleeping through it.
-	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=now() WHERE id=$1`, session); e != nil {
+	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=$2 WHERE id=$1`, session, time.Now().UTC()); e != nil {
 		t.Fatal(e)
 	}
 
@@ -258,7 +258,7 @@ func TestTeachSignalHonestEmptyResultAndViewerCannotTeach(t *testing.T) {
 	}
 	capture(nthStep(t, false, 3))
 	capture(nthStep(t, false, 4))
-	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=now() WHERE id=$1`, session); e != nil {
+	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=$2 WHERE id=$1`, session, time.Now().UTC()); e != nil {
 		t.Fatal(e)
 	}
 	code, out, _ = req(t, api, "GET", "/api/v1/signals/sessions/"+session, "Bearer "+auth.AccessToken, "", "", nil)

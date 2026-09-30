@@ -12,6 +12,9 @@ import (
 // Round trips over random frames, keys, protocols and MTUs.
 func TestRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
+	// Seal draws a random IV, so the corrupted ciphertexts differ between runs. CRC16 lets about 1 in 65536
+	// corrupted messages through; a few in 500 would mean it is not checked at all.
+	accepted := 0
 	for i := range 500 {
 		data := make([]byte, rng.IntN(300))
 		for j := range data {
@@ -45,13 +48,15 @@ func TestRoundTrip(t *testing.T) {
 		if err != nil || back.Seq != f.Seq || back.Code != f.Code || !bytes.Equal(back.Data, f.Data) {
 			t.Fatalf("round trip %d: %+v, %v", i, back, err)
 		}
-		// Any flipped ciphertext bit is caught by the CRC (or the length check) with overwhelming probability.
+		// A flipped ciphertext bit corrupts a whole CBC block, which the CRC (or the length check) catches.
 		bad := bytes.Clone(got)
 		bad[17+rng.IntN(len(bad)-17)] ^= 1 << rng.IntN(8)
 		if _, _, err := Unseal(bad, func(byte) []byte { return key }); err == nil && !bytes.Equal(bad, got) {
-			// CBC corrupts a whole block; a silent pass would mean the CRC is not checked.
-			t.Fatalf("corrupted message %d accepted", i)
+			accepted++
 		}
+	}
+	if accepted > 2 {
+		t.Fatalf("%d of 500 corrupted messages accepted: the CRC is not being checked", accepted)
 	}
 }
 

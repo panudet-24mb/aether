@@ -28,11 +28,12 @@ Everything lives under `aether/edge/<gateway id>/`:
 | Topic | Direction | Payload |
 |---|---|---|
 | `status` | agent → Aether, retained, also the MQTT last will | `{"state":"online"}` / `{"state":"offline"}` |
-| `health` | agent → Aether, every 60 s | `{"version":"0.1.0","devices_connected":3,"lan_seen":7}` |
+| `health` | agent → Aether, every 60 s | `{"version":"0.1.0","devices_connected":3,"lan_seen":7}`; agents with Bluetooth support add `"ble":{"state":"ok","adapter":"hci0","seen":2,"connected":0,"sessions_ok":5,"sessions_failed":0,"queue":0}` (`"state":"off"` when it runs without it) |
 | `discovery` | agent → Aether | `[{"id":"<tuya id>","ip":"192.168.1.20","version":"3.4","product_key":"…"}]` (max 500) |
+| `ble` | agent → Aether (only with `BLE_ENABLED`) | Tuya BLE devices heard advertising: `[{"mac":"dc:23:4d:00:00:01","uuid":"…","product_id":"…","proto":3,"bound":true,"fd50":false,"rssi":-61}]` (max 200; one list per 30 s kept) |
 | `<device>/state` | agent → Aether | `{"dps":{"1":true,"19":1234},"full":false}` |
 | `<device>/availability` | agent → Aether, retained | `{"state":"offline","reason":"auth_failed"}` |
-| `<device>/set` | mqtt-commander → agent | `{"dps":{"1":true}}` |
+| `<device>/set` | mqtt-commander → agent | `{"dps":{"1":true},"expires_at":"2026-09-30T10:00:06.666Z","ttl_ms":6666}`: the agent drops a command past the earlier of `expires_at` and receipt plus `ttl_ms` (two thirds of the command's confirm window); agents before 0.2 ignore both fields |
 
 Availability reasons: `unreachable`, `auth_failed` (3.4/3.5 negotiation proved the key wrong — definitive),
 `key_suspect` (3.1/3.3 replies do not decrypt — a heuristic), `busy` (the device resets our socket: another local
@@ -277,6 +278,15 @@ came from.
 - `zigbee2mqtt/configuration.yaml` is written only when it does not exist: Zigbee2MQTT stores the network key in
   it, and losing it means pairing every device again. The broker credentials live in `zigbee2mqtt/secret.yaml`
   (`!secret user` / `!secret password`), which every install rewrites.
+
+## Tuya BLE (phase B2)
+
+An agent started with `BLE_ENABLED=true` (installer `--ble`) also reaches Tuya BLE devices through the host's Bluetooth: BlueZ over
+the host's D-Bus, mounted read-only, with every capability still dropped. BLE devices use the same `<device>/state`,
+`<device>/availability` and `<device>/set` topics; the agent announces `X-Aether-Edge-Caps: ble` on its configuration pull, and only
+then (and only while the server has `EDGE_BLE=true`) is it sent BLE devices, whose entries add `transport`, `mac`, `uuid`, `sec_key`,
+`product_id`, `protocol`, `mode`, `poll` and `dp_types`. The ETag becomes `"<revision>;ble"` when they are included. Everything else
+about it (scheduler, sessions, sightings, what still needs hardware) is in [tuya-ble.md](tuya-ble.md).
 
 ## Not yet (later phases)
 

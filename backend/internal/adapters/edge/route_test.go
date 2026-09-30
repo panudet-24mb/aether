@@ -127,3 +127,30 @@ func TestClipKeepsUTF8(t *testing.T) {
 		t.Fatalf("%q", h.Version)
 	}
 }
+
+func TestBLESightingsAndHealth(t *testing.T) {
+	gw := "3f2c1d7e-1a2b-4c5d-8e9f-0a1b2c3d4e5f"
+	if g, m, e := Route(Prefix + gw + "/ble"); e != nil || g != gw || m.Kind != BLESightings {
+		t.Fatalf("route: %v %v", m, e)
+	}
+	list, e := ParseBLESightings([]byte(`[
+		{"mac":"DC:23:4D:00:00:01","uuid":"tuya1234abcd5678","product_id":"gvygg3m8","proto":3,"bound":true,"rssi":-60},
+		{"mac":"dc:23:4d:00:00:01","proto":3},
+		{"mac":"dc:23:4d:00:00:02","uuid":"bad uuid"},
+		{"mac":"not-a-mac"},
+		{"mac":"dc:23:4d:00:00:03","proto":99},
+		{"mac":"dc:23:4d:00:00:04","rssi":500,"fd50":true}]`))
+	if e != nil || len(list) != 2 || list[0].MAC != "dc:23:4d:00:00:01" || *list[0].RSSI != -60 || list[1].RSSI != nil || !list[1].FD50 {
+		t.Fatalf("sightings: %+v %v", list, e)
+	}
+	if _, e := ParseBLESightings([]byte(`{}`)); e == nil {
+		t.Fatal("an object accepted as a list")
+	}
+	h, ok := ParseHealth([]byte(`{"version":"0.2.0","ble":{"state":"weird","adapter":"hci0","seen":-4,"connected":2}}`))
+	if !ok || h.BLE == nil || h.BLE.State != "error" || h.BLE.Seen != 0 || h.BLE.Connected != 2 {
+		t.Fatalf("health: %+v", h.BLE)
+	}
+	if h, _ := ParseHealth([]byte(`{"version":"0.1.1"}`)); h.BLE != nil {
+		t.Fatal("an agent without Bluetooth")
+	}
+}

@@ -24,7 +24,7 @@ type DeviceProfile struct {
 	Brand       string   `json:"brand"`
 	Model       string   `json:"model"`
 	Label       string   `json:"label"`
-	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | tuya-cloud | any
+	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | tuya-ble | tuya-cloud | any
 	Description string   `json:"description"`
 	Image       string   `json:"image,omitempty"`
 	Kinds       []string `json:"kinds"`   // reading kinds the device is expected to produce
@@ -66,6 +66,11 @@ const EdgeGatewayModel = "aether-edge"
 // comes from its Tuya data-point specification (imported once), translated into the same exposes shape
 // Zigbee2MQTT devices use.
 const TuyaWiFiProfile = "tuya-wifi-device@1"
+
+// TuyaBLEProfile is the profile of a Tuya BLE device (point-to-point, not mesh) reached locally through an Aether
+// Edge with Bluetooth: the agent connects to it with its imported keys (docs/platform/tuya-ble.md). Like
+// TuyaWiFiProfile, what it can do comes from its data-point specification. It exists only where EDGE_BLE is on.
+const TuyaBLEProfile = "tuya-ble-device@1"
 
 // TuyaCloudGatewayModel is Tuya Cloud mode: nothing installed on site. The gateway stands for one linked Tuya IoT
 // Platform project; Aether's tuya-cloud worker consumes the project's Message Service and sets properties through
@@ -144,6 +149,10 @@ var DeviceProfiles = []DeviceProfile{
 	// cannot be reached locally; the import marks them.
 	{ID: TuyaWiFiProfile, Brand: "Tuya", Model: "Wi‑Fi device", Label: "อุปกรณ์ Tuya Wi‑Fi (local ผ่าน Aether Edge)", Radio: "tuya-wifi", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
 		Description: "อุปกรณ์ Tuya Wi‑Fi ที่เสียบไฟตลอด เช่น ปลั๊ก สวิตช์ หลอดไฟ มอเตอร์ม่าน · Aether Edge คุยกับอุปกรณ์ในวง LAN ด้วย local key · สั่งงานได้ตามจุดข้อมูลที่ตั้งค่าได้ · ยังไม่ยืนยันกับเครื่องจริง"},
+	// A Tuya BLE device next to an Aether Edge with Bluetooth: sensors that sleep between advertisements, Fingerbots,
+	// BLE switches. Mesh devices speak another protocol and are not covered.
+	{ID: TuyaBLEProfile, Brand: "Tuya", Model: "BLE device", Label: "อุปกรณ์ Tuya Bluetooth (local ผ่าน Aether Edge)", Radio: "tuya-ble", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
+		Description: "อุปกรณ์ Tuya Bluetooth แบบจุดต่อจุด เช่น เซนเซอร์อุณหภูมิ Fingerbot สวิตช์ BLE · Aether Edge เชื่อมต่อด้วย Bluetooth ของเครื่องและ local key · อ่านค่าเป็นรอบเพื่อประหยัดแบตเตอรี่ · ไม่รองรับ Bluetooth mesh · ยังไม่ยืนยันกับเครื่องจริง"},
 	// Any Tuya device of a linked Tuya Cloud project.
 	{ID: TuyaCloudProfile, Brand: "Tuya", Model: "Cloud device", Label: "อุปกรณ์ Tuya (ผ่าน Tuya Cloud)", Radio: "tuya-cloud", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
 		Description: "อุปกรณ์ Tuya ในโปรเจกต์ Tuya IoT ที่เชื่อมไว้ · สถานะมาจาก Message Service และสั่งงานผ่าน Tuya OpenAPI · ต้องมีอินเทอร์เน็ต · ยังไม่ยืนยันกับเครื่องจริง"},
@@ -199,7 +208,7 @@ func (p DeviceProfile) MatchesZ2M(model string, hasSwitch bool) bool {
 }
 
 // ProfileAllowedOn reports whether a device of this profile can be registered under a gateway of this model:
-// Zigbee profiles only on a Zigbee2MQTT gateway and Tuya Wi-Fi profiles only on an Aether Edge, and each of those
+// Zigbee profiles only on a Zigbee2MQTT gateway and Tuya Wi-Fi and BLE profiles only on an Aether Edge, and each of those
 // gateways takes nothing else. A profile id that is no longer in the catalog (a registration made before a catalog
 // change) counts as neither, so an existing BLE device can still be moved between BLE gateways; gateways whose
 // model left the catalog accept only such ordinary profiles.
@@ -212,9 +221,9 @@ func ProfileAllowedOn(profileID, gatewayModel string) bool {
 	case Z2MGatewayModel:
 		return radio == "zigbee"
 	case EdgeGatewayModel:
-		return radio == "tuya-wifi"
+		return radio == "tuya-wifi" || radio == "tuya-ble"
 	case TuyaCloudGatewayModel:
 		return radio == "tuya-cloud"
 	}
-	return radio != "zigbee" && radio != "tuya-wifi" && radio != "tuya-cloud"
+	return radio != "zigbee" && radio != "tuya-wifi" && radio != "tuya-ble" && radio != "tuya-cloud"
 }

@@ -195,14 +195,21 @@ func TestDispatcherPublishesEdgeWire(t *testing.T) {
 	badTarget.ID, badTarget.IEEE = "bad-target", "bf12/../set"
 	unknown := good
 	unknown.ID, unknown.Transport = "unknown", "carrier-pigeon"
-	store := &fakeStore{pending: []domain.Command{good, badWire, badTarget, unknown}}
+	// A BLE command (45 s confirm window) tells the agent it has 30 s; the Wi-Fi one two thirds of 10 s.
+	ble := good
+	ble.ID, ble.IEEE, ble.ConfirmSec = "ble", "bf1234567890abcdeble", 45
+	store := &fakeStore{pending: []domain.Command{good, badWire, badTarget, unknown, ble}}
 	pub := &fakePublisher{}
 	// The database refuses unknown transports; claiming one anyway exercises the publisher's own refusal.
 	d := &Dispatcher{Store: store, Publisher: pub, Now: func() time.Time { return now }, Transports: []string{"z2m", "edge", "carrier-pigeon"}}
-	if n, e := d.RunOnce(context.Background()); e != nil || n != 1 {
+	if n, e := d.RunOnce(context.Background()); e != nil || n != 2 {
 		t.Fatalf("run: %d %v", n, e)
 	}
-	if len(pub.sent) != 1 || pub.sent[0] != "aether/edge/"+gwA+`/bf1234567890abcdefgh/set {"dps":{"1":true}}` {
+	want := []string{
+		"aether/edge/" + gwA + `/bf1234567890abcdefgh/set {"dps":{"1":true},"expires_at":"2026-09-25T10:00:06.666Z","ttl_ms":6666}`,
+		"aether/edge/" + gwA + `/bf1234567890abcdeble/set {"dps":{"1":true},"expires_at":"2026-09-25T10:00:30.000Z","ttl_ms":30000}`,
+	}
+	if len(pub.sent) != 2 || pub.sent[0] != want[0] || pub.sent[1] != want[1] {
 		t.Fatalf("published: %v", pub.sent)
 	}
 	if store.failed["bad-wire"] != "invalid command payload" || store.failed["bad-target"] != "invalid command target" || store.failed["unknown"] != "unknown command transport" {

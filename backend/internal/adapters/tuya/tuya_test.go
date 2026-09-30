@@ -295,3 +295,49 @@ func TestFingerprintAndLocalKey(t *testing.T) {
 		t.Fatalf("refresh %v", ids)
 	}
 }
+
+// Over BLE an enum travels as its index: FromBLE maps it to the label State expects, WireBLE the other way.
+func TestBLEEnums(t *testing.T) {
+	spec := []DP{
+		{ID: 1, Code: "switch", Type: "bool", Access: "rw"},
+		{ID: 4, Code: "mode", Type: "enum", Access: "rw", Range: []string{"auto", "manual", "holiday"}},
+	}
+	in := map[int]json.RawMessage{1: json.RawMessage(`true`), 4: json.RawMessage(`1`)}
+	out := FromBLE(spec, in)
+	if string(out[1]) != "true" || string(out[4]) != `"manual"` {
+		t.Fatalf("from BLE: %s %s", out[1], out[4])
+	}
+	for _, bad := range []string{`3`, `-1`, `1.5`, `"auto"`, `null`} {
+		if got := FromBLE(spec, map[int]json.RawMessage{4: json.RawMessage(bad)}); len(got) != 0 {
+			t.Fatalf("index %s kept as %s", bad, got[4])
+		}
+	}
+	tr := Translate("wk", spec)
+	w, e := WireBLE(tr.DPMap, "mode", json.RawMessage(`"holiday"`))
+	if e != nil || string(w) != `{"dps":{"4":2}}` {
+		t.Fatalf("wire: %s %v", w, e)
+	}
+	if _, e := WireBLE(tr.DPMap, "mode", json.RawMessage(`"party"`)); e == nil {
+		t.Fatal("a label outside the range was wired")
+	}
+	// Everything else is wired exactly as over the LAN.
+	found := false
+	for property, ref := range tr.DPMap {
+		if ref.DP != 1 {
+			continue
+		}
+		found = true
+		lan, e1 := Wire(tr.DPMap, property, json.RawMessage(`"ON"`))
+		ble, e2 := WireBLE(tr.DPMap, property, json.RawMessage(`"ON"`))
+		if e1 != nil || e2 != nil || string(lan) != string(ble) || string(ble) != `{"dps":{"1":true}}` {
+			t.Fatalf("switch %s: %s %s %v %v", property, lan, ble, e1, e2)
+		}
+	}
+	if !found {
+		t.Fatal("no property for data point 1")
+	}
+	types := DPTypes(spec)
+	if types["1"] != "bool" || types["4"] != "enum" || len(types) != 2 {
+		t.Fatalf("types: %v", types)
+	}
+}

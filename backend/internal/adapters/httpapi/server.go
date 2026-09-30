@@ -228,6 +228,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	automationRoutes(secured, service, cfg.AutomationCommands, cfg.AlertsShadow)
 	floorplanRoutes(secured, service)
 	topologyRoutes(secured, service)
+	systemRoutes(secured, cfg.OpsStatusFile, cfg.OpsStatusTenant)
 	assetRoutes(secured, service)
 	commandRoutes(secured, service)
 	edgeRoutes(secured, service, cfg)
@@ -236,7 +237,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	realtimeRoutes(api, service, cfg, hub, reads)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
 		// Tuya Cloud mode is listed only when this deployment enabled it (TUYA_CLOUD).
-		return c.JSON(fiber.Map{"gateway_models": service.GatewayModels(), "device_profiles": service.DeviceProfiles(), "tuya_cloud": service.TuyaCloudEnabled, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
+		return c.JSON(fiber.Map{"gateway_models": service.GatewayModels(), "device_profiles": service.DeviceProfiles(), "tuya_cloud": service.TuyaCloudEnabled, "edge_ble": service.EdgeBLEEnabled, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})
 	})
 	// The Zigbee2MQTT device catalog (zigbee-herdsman-converters, MIT): "is this model supported, and what will
 	// Aether show it as?" before anything is bought or paired. Read-only and the same for every workspace.

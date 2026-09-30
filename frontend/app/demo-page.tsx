@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
-import { Activity, ArrowDownLeft, ArrowRight, ArrowUpRight, Bell, Box, Building2, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Cloud, Cpu, Download, Expand, Gauge, Globe2, Layers3, LayoutDashboard, ListFilter, MapPin, Minus, Network, Plus, Radio, RotateCcw, Search, Server, Settings2, ShieldCheck, Thermometer, Wifi, WifiOff, X, Zap } from "lucide-react";
+import { Activity, ArrowRight, ArrowUpRight, Bell, Box, Building2, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Cloud, Cpu, Download, Expand, Globe2, Layers3, LayoutDashboard, MapPin, Minus, Network, Plus, Radio, RotateCcw, Search, Server, Settings2, ShieldCheck, Thermometer, WifiOff, Zap } from "lucide-react";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -46,9 +46,19 @@ function Building({ floor, setFloor, flat, devices, onDevice, zoom, explode, met
   </g></svg>;
 }
 
+const noSubscribe = () => () => {};
+function readStoredLang(): "en" | "th" {
+  try { return localStorage.getItem("aether-locale") === "th" ? "th" : "en"; } catch { return "en"; }
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("overview");
-  const [lang, setLang] = useState<"en" | "th">("en");
+  // The saved locale lives in localStorage, which the server render cannot see: read it as an external store
+  // (English on the server and during hydration) and let a choice made on this page override it.
+  const storedLang = useSyncExternalStore(noSubscribe, readStoredLang, () => "en" as const);
+  const [chosenLang, setChosenLang] = useState<"en" | "th" | null>(null);
+  const lang = chosenLang ?? storedLang;
+  const setLang = (next: (v: "en" | "th") => "en" | "th") => setChosenLang(next(lang));
   const t = (en: string, th: string) => lang === "th" ? th : en;
   const [devices, setDevices] = useState(seed);
   const [alerts, setAlerts] = useState(initialAlerts);
@@ -71,9 +81,7 @@ export default function Home() {
   const [config, setConfig] = useState(false);
   const [deployment, setDeployment] = useState("cloud");
   const [help, setHelp] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); const saved = localStorage.getItem("aether-locale"); if (saved === "th") setLang("th"); }, []);
-  useEffect(() => { if (mounted) { document.documentElement.lang = lang; localStorage.setItem("aether-locale", lang); } }, [lang, mounted]);
+  useEffect(() => { document.documentElement.lang = lang; if (chosenLang) { try { localStorage.setItem("aether-locale", chosenLang); } catch { /* storage blocked */ } } }, [lang, chosenLang]);
   useEffect(() => {
     type Tool = { name: string; description: string; inputSchema: object; annotations: { readOnlyHint: boolean }; execute: (input: unknown) => unknown };
     const context = (document as Document & { modelContext?: { registerTool: (tool: Tool, options: { signal: AbortSignal }) => void | Promise<void> } }).modelContext;

@@ -190,7 +190,8 @@ func TestMOSKitOccupancyAndLearnedDoor(t *testing.T) {
 	for step := 80; step <= 83; step++ { // 80..83 %30 = 20..23: the door is open
 		capture(step)
 	}
-	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=now() WHERE id=$1`, session); e != nil {
+	// Close the trigger window with the API's clock (it decides "finished" with time.Now, not the database's now()).
+	if _, e := f.admin.ExecContext(ctx, `UPDATE core.signal_sessions SET trigger_until=$2 WHERE id=$1`, session, time.Now().UTC()); e != nil {
 		t.Fatal(e)
 	}
 	code, out, _ = req(t, api, "GET", "/api/v1/signals/sessions/"+session, "Bearer "+auth.AccessToken, "", "", nil)

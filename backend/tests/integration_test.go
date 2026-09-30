@@ -93,12 +93,17 @@ func setup(t *testing.T) *fixture {
 	return &fixture{repo, s, admin, runtime, cfg, authDSN}
 }
 
+var dropLegacyAuthTestRole sync.Once
+
 // testAuthDSN is the login pool of the tests (migration 00040). TEST_AUTH_DATABASE_URL, when set, is used as is:
 // point it at the real aether_auth (backend-local.py test does, with the .env password migrate sets). Otherwise a
-// test login role, aether_auth_test, is given exactly aether_auth's rights as direct grants (CheckAuthRole refuses
-// any role membership, and this keeps that check strict), refreshed on every setup because a migration round trip
-// recreates the login function. Its password is derived from the admin DSN, so the cluster's real aether_auth,
-// whose password belongs to the local .env, is never touched.
+// test login role is given exactly aether_auth's rights as direct grants (CheckAuthRole refuses any role
+// membership, and this keeps that check strict), refreshed on every setup because a migration round trip recreates
+// the login function. The cluster's real aether_auth, whose password belongs to the local .env, is never touched.
+//
+// Roles are cluster-wide and the test databases are not: the role is named after the test database
+// (aether_auth_test_<hash of the name>), so suites running at the same time against different databases on one
+// cluster never rewrite each other's role or password. Its password is derived from the admin DSN.
 func testAuthDSN(t *testing.T, admin *sql.DB, adminDSN, testDB string) string {
 	t.Helper()
 	if dsn := os.Getenv("TEST_AUTH_DATABASE_URL"); dsn != "" {
@@ -107,36 +112,51 @@ func testAuthDSN(t *testing.T, admin *sql.DB, adminDSN, testDB string) string {
 		}
 		return dsn
 	}
-	sum := sha256.Sum256([]byte("aether_auth_test:" + adminDSN))
+	dropLegacyAuthTestRole.Do(func() {
+		// Before per-database names there was one shared aether_auth_test role. Best effort: DROP OWNED only
+		// reaches this database, so the role stays while another database still grants it something.
+		_, _ = admin.Exec(`DO $$
+		BEGIN
+		  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='aether_auth_test') THEN
+		    DROP OWNED BY aether_auth_test;
+		    DROP ROLE aether_auth_test;
+		  END IF;
+		EXCEPTION WHEN dependent_objects_still_exist OR undefined_object THEN NULL;
+		END $$`)
+	})
+	dbSum := sha256.Sum256([]byte(testDB))
+	role := "aether_auth_test_" + hex.EncodeToString(dbSum[:6])
+	sum := sha256.Sum256([]byte(role + ":" + adminDSN))
 	password := hex.EncodeToString(sum[:])
+	// role is a fixed prefix plus hex digits: safe to splice, and quoted with %I inside the block anyway.
 	if _, e := admin.Exec(`DO $$
-	DECLARE f regprocedure; s name;
+	DECLARE f regprocedure; s name; r name := '` + role + `';
 	BEGIN
-	  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='aether_auth_test') THEN
-	    CREATE ROLE aether_auth_test LOGIN;
+	  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=r) THEN
+	    EXECUTE format('CREATE ROLE %I LOGIN', r);
 	  END IF;
-	  ALTER ROLE aether_auth_test LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION;
-	  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname='aether_auth_test') THEN
-	    REVOKE aether_auth FROM aether_auth_test;
+	  EXECUTE format('ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION', r);
+	  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles x ON x.oid=m.member WHERE x.rolname=r) THEN
+	    EXECUTE format('REVOKE aether_auth FROM %I', r);
 	  END IF;
-	  EXECUTE format('GRANT CONNECT ON DATABASE %I TO aether_auth_test', current_database());
-	  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA identity, core FROM aether_auth_test;
-	  REVOKE USAGE ON SCHEMA identity, core FROM aether_auth_test;
+	  EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), r);
+	  EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA identity, core FROM %I', r);
+	  EXECUTE format('REVOKE USAGE ON SCHEMA identity, core FROM %I', r);
 	  FOR s IN SELECT nspname FROM pg_namespace WHERE nspname IN ('identity','core') AND has_schema_privilege('aether_auth', oid, 'USAGE') LOOP
-	    EXECUTE format('GRANT USAGE ON SCHEMA %I TO aether_auth_test', s);
+	    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', s, r);
 	  END LOOP;
 	  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
 	    WHERE n.nspname IN ('identity','core') AND p.prosecdef AND has_function_privilege('aether_auth', p.oid, 'EXECUTE') LOOP
-	    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO aether_auth_test', f);
+	    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', f, r);
 	  END LOOP;
 	END $$`); e != nil {
 		t.Fatalf("test login role: %v", e)
 	}
-	if _, e := admin.Exec(`ALTER ROLE aether_auth_test PASSWORD '` + password + `'`); e != nil {
+	if _, e := admin.Exec(`ALTER ROLE ` + role + ` PASSWORD '` + password + `'`); e != nil {
 		t.Fatalf("test login role: %v", e)
 	}
 	u, _ := url.Parse(adminDSN)
-	u.User = url.UserPassword("aether_auth_test", password)
+	u.User = url.UserPassword(role, password)
 	return u.String()
 }
 

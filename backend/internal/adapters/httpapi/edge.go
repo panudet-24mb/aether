@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -209,15 +210,37 @@ func edgePublicRoutes(api *fiber.App, s *app.Service, cfg config.Config) {
 // group). It is the only response that carries local keys, and only the gateway's own registered devices'.
 func edgeAgentRoutes(ingest fiber.Router, s *app.Service) {
 	ingest.Get("/edge/config", func(c fiber.Ctx) error {
-		revision, devices, e := s.EdgeConfig(c.Context(), c.Locals("gateway_tenant").(string), c.Params("id"))
+		revision, devices, ble, e := s.EdgeConfig(c.Context(), c.Locals("gateway_tenant").(string), c.Params("id"), edgeCapabilities(c.Get("X-Aether-Edge-Caps")))
 		if e != nil {
 			return e
 		}
-		etag := `"` + strconv.FormatInt(revision, 10) + `"`
+		// The ETag names what the answer includes, not only the revision: an agent that gains the capability, or a
+		// server whose EDGE_BLE flag flipped, must get the other answer, not a 304 for the old one.
+		tag := strconv.FormatInt(revision, 10)
+		if ble {
+			tag += ";ble"
+		}
+		etag := `"` + tag + `"`
 		c.Set("ETag", etag)
 		if c.Get("If-None-Match") == etag {
 			return c.SendStatus(304)
 		}
 		return c.JSON(fiber.Map{"revision": revision, "devices": devices})
 	})
+}
+
+// edgeCapabilities reads X-Aether-Edge-Caps: a comma-separated list of what the agent can do. Only known
+// capabilities are kept, each once, so an agent cannot fill the stored list with anything else.
+func edgeCapabilities(header string) []string {
+	out := []string{}
+	if len(header) > 256 {
+		return out
+	}
+	for _, c := range strings.Split(header, ",") {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == domain.EdgeCapabilityBLE && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

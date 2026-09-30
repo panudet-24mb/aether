@@ -701,6 +701,39 @@ func TestPartitionPruningInPlans(t *testing.T) {
 			t.Fatalf("probe reads partitions outside its window:\n%s\n%s", probe.q, plan)
 		}
 	}
+	// Every partition, the ones maintenance creates included, carries the ordered indexes the history queries need
+	// ((tenant, gateway, external, received_at DESC, event_key) on both tables): checked in the catalogue, because a
+	// partition without them would only show up as a slow query once it held data.
+	for _, table := range []string{"sensor_samples", "ble_history"} {
+		want := `(tenant_id, gateway_id, external_id, received_at DESC, event_key)`
+		var missing []string
+		rows, e := f.admin.Query(`SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
+		  WHERE i.inhparent=('core.'||$1)::regclass
+		    AND NOT EXISTS (SELECT 1 FROM pg_indexes x WHERE x.schemaname='core' AND x.tablename=c.relname AND x.indexdef LIKE '%USING btree ' || $2)`, table, want)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for rows.Next() {
+			var name string
+			rows.Scan(&name)
+			missing = append(missing, name)
+		}
+		rows.Close()
+		var parent int
+		f.admin.QueryRow(`SELECT count(*) FROM pg_indexes WHERE schemaname='core' AND tablename=$1 AND indexdef LIKE '%USING btree ' || $2`, table, want).Scan(&parent)
+		if len(missing) != 0 || parent != 1 {
+			t.Fatalf("%s: ordered history index missing on %v (parent has %d)", table, missing, parent)
+		}
+	}
+	// With those indexes a Merge Append delivers the queries' order and needs no sort. Whether the planner prefers
+	// that path depends on the statistics: for an empty or tiny partition an unordered scan plus a sort of a few rows
+	// is cheaper and correct, and on legacy it may pick the (tenant, external_id, received_at) identity index and
+	// add an Incremental Sort for the event_key tie-break. A shared test database holds whatever earlier tests left,
+	// so this check disables sorts and unordered scans for the transaction: a plan without any Sort then exists only
+	// if the ordered path does, which is the property under test (not the cost model).
+	if _, e := tx.Exec(`SET LOCAL enable_sort = off; SET LOCAL enable_incremental_sort = off; SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off`); e != nil {
+		t.Fatal(e)
+	}
 	sorts := regexp.MustCompile(`(?m)^\s*(->\s+)?(Incremental )?Sort\s*$`)
 	for _, q := range []string{
 		// StreamHistory's latest and history sub-queries, presence's latest RSSI.
@@ -758,6 +791,7 @@ func TestSamplePartitionMigrationKeepsData(t *testing.T) {
 	if before.samples == 0 || before.ble == 0 || before.history != 2 {
 		t.Fatalf("seed: %+v", before)
 	}
+	clearDownGuards(t, f)
 	if e := goose.DownTo(f.admin, "../migrations", 35); e != nil {
 		t.Fatalf("down to 00035: %v", e)
 	}
@@ -819,6 +853,7 @@ func TestSamplePartitionDownAfterLegacyDropped(t *testing.T) {
 	if _, e := f.admin.ExecContext(ctx, `DROP TABLE core.sensor_samples_legacy; DROP TABLE core.ble_history_legacy`); e != nil {
 		t.Fatal(e)
 	}
+	clearDownGuards(t, f)
 	if e := goose.DownTo(f.admin, "../migrations", 35); e != nil {
 		t.Fatalf("down to 00035 without legacy: %v", e)
 	}
@@ -854,6 +889,7 @@ func TestSamplePartitionDownAfterLegacyDropped(t *testing.T) {
 func TestPartitionPrepRerunAfterPartialFailure(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
+	clearDownGuards(t, f)
 	if e := goose.DownTo(f.admin, "../migrations", 35); e != nil {
 		t.Fatalf("down to 00035: %v", e)
 	}
@@ -955,6 +991,45 @@ func (l *ingestLoad) worker(pause time.Duration, fn func(n int)) {
 	}()
 }
 
+// settle measures what the load costs on its own before any schema work: after a 200 ms warm-up (first
+// connections, first plans) it lets the workers run for d and returns the p99 of their calls, then forgets those
+// calls (failures are kept). On a machine busy with other work every call is slower, so the lock-wait bound is
+// applied on top of this baseline. A baseline over maxBaseline means the machine is too loaded for a timing test to
+// say anything: the test is skipped (with the numbers) rather than given a looser bound.
+func (l *ingestLoad) settle(t *testing.T, d time.Duration) time.Duration {
+	t.Helper()
+	time.Sleep(200 * time.Millisecond)
+	l.mu.Lock()
+	l.waits = l.waits[:0]
+	l.mu.Unlock()
+	time.Sleep(d)
+	l.mu.Lock()
+	waits := append([]time.Duration(nil), l.waits...)
+	l.waits = l.waits[:0]
+	l.mu.Unlock()
+	if len(waits) < 20 {
+		l.stop.Store(true)
+		l.wg.Wait()
+		t.Skipf("machine too loaded for a timing test: only %d ingest calls in %s without schema work", len(waits), d)
+	}
+	sort.Slice(waits, func(i, j int) bool { return waits[i] < waits[j] })
+	p99 := waits[len(waits)*99/100]
+	if p99 > maxBaseline {
+		l.stop.Store(true)
+		l.wg.Wait()
+		t.Skipf("machine too loaded for a timing test: ingest p99 is %s without any schema work (limit %s)", p99, maxBaseline)
+	}
+	return p99
+}
+
+// maxBaseline is the slowest ingest p99, without schema work, at which the live-ingest timing tests still run.
+const maxBaseline = time.Second
+
+// waitBound is the longest call allowed while schema work runs: lockWait on top of what the same load took without it.
+func waitBound(lockWait, baseline time.Duration) time.Duration {
+	return lockWait + baseline
+}
+
 // finish stops the workers and fails the test on any failed call or a wait of maxWait or more.
 func (l *ingestLoad) finish(t *testing.T, maxWait time.Duration) (calls int, p99, longest time.Duration) {
 	t.Helper()
@@ -1035,10 +1110,11 @@ func noticeDB(t *testing.T, match string) (*sql.DB, *atomic.Int64) {
 // The migration itself under live ingest: Minew and Zigbee2MQTT ingest and a dashboard reader keep flowing through
 // the real repository while 00036 and 00037 run over a few hundred thousand rows, next to a reader that breaks the
 // lock order (sensor_samples and ble_history, then gateways, holding its locks 150 ms in between, every 300 ms). No call may fail or
-// deadlock, none may wait 1.5 s, and 00037 must have taken its give-back-and-retry path at least once.
+// deadlock, none may wait 1.5 s beyond the slowest call of the same load before the migration, and 00037 must have taken its give-back-and-retry path at least once.
 func TestPartitionMigrationUnderLiveIngest(t *testing.T) {
 	l := newLiveRig(t)
 	f, ctx := l.f, l.ctx
+	clearDownGuards(t, f)
 	if e := goose.DownTo(f.admin, "../migrations", 35); e != nil {
 		t.Fatalf("down to 00035: %v", e)
 	}
@@ -1097,7 +1173,7 @@ func TestPartitionMigrationUnderLiveIngest(t *testing.T) {
 		}
 	})
 	admin, retries := noticeDB(t, "00037: tables busy, retrying")
-	time.Sleep(300 * time.Millisecond)
+	baseline := load.settle(t, time.Second)
 	fail := func(msg string, e error) {
 		load.stop.Store(true)
 		load.wg.Wait()
@@ -1153,8 +1229,8 @@ func TestPartitionMigrationUnderLiveIngest(t *testing.T) {
 		fail("order breaker", e)
 	}
 	time.Sleep(500 * time.Millisecond) // ingest keeps going on the partitioned tables
-	calls, p99, longest := load.finish(t, 1500*time.Millisecond)
-	t.Logf("00036 took %s and 00037 %s under load; 00037 gave its locks back %d times; %d calls, p99 %s, max %s", prep, attach, retries.Load(), calls, p99, longest)
+	calls, p99, longest := load.finish(t, waitBound(1500*time.Millisecond, baseline))
+	t.Logf("00036 took %s and 00037 %s under load; 00037 gave its locks back %d times; %d calls, p99 %s, max %s (baseline p99 %s)", prep, attach, retries.Load(), calls, p99, longest, baseline)
 	if retries.Load() == 0 {
 		t.Fatal("00037 never gave its locks back although the order breaker held sensor_samples")
 	}
@@ -1175,6 +1251,7 @@ func TestPartitionMaintenanceUnderLiveIngest(t *testing.T) {
 	f, ctx := l.f, l.ctx
 	steady(t, f.admin)
 	load := l.startIngest(t)
+	baseline := load.settle(t, time.Second)
 	newest := func(parent string) string {
 		t.Helper()
 		names, _, _ := partitionsOf(t, f.admin, parent)
@@ -1203,9 +1280,10 @@ func TestPartitionMaintenanceUnderLiveIngest(t *testing.T) {
 			}
 		}
 	}
-	cycles, created, deadline := 0, 0, time.Now().Add(4*time.Second)
+	// At least 4 s and 10 cycles; on a slow machine the cycles take longer, so keep going (up to 30 s) until 10 ran.
+	cycles, created, deadline, hardStop := 0, 0, time.Now().Add(4*time.Second), time.Now().Add(30*time.Second)
 	var longest time.Duration
-	for time.Now().Before(deadline) {
+	for (time.Now().Before(deadline) || cycles < 10) && time.Now().Before(hardStop) {
 		dropNewest("sensor_samples")
 		dropNewest("ble_history")
 		start := time.Now()
@@ -1235,8 +1313,8 @@ func TestPartitionMaintenanceUnderLiveIngest(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		steady(t, f.admin) // anything deferred is created before the next drop
 	}
-	calls, p99, maxWait := load.finish(t, 1500*time.Millisecond)
-	t.Logf("%d maintenance cycles (%d ranges created, longest run %s) under %d ingest calls, p99 %s, max %s", cycles, created, longest, calls, p99, maxWait)
+	calls, p99, maxWait := load.finish(t, waitBound(1500*time.Millisecond, baseline))
+	t.Logf("%d maintenance cycles (%d ranges created, longest run %s) under %d ingest calls, p99 %s, max %s (baseline p99 %s)", cycles, created, longest, calls, p99, maxWait, baseline)
 	if cycles < 10 || created < cycles {
 		t.Fatalf("%d cycles created %d ranges", cycles, created)
 	}

@@ -67,11 +67,20 @@ func (r *Repository) CaptureEdge(ctx context.Context, tenant, gateway string, m 
 			if !ok {
 				return domain.ErrInvalid
 			}
-			e = tx.Exec(`INSERT INTO core.edge_agents(tenant_id,gateway_id,version,last_health_at,devices_connected,lan_seen,updated_at) VALUES(?,?,?,?,?,?,?)
+			// Agents from 0.2 always send the ble block ("off" when started without BLE_ENABLED); agents before it
+			// send none, and their state stays "" (unknown) rather than "off".
+			bleState, bleSeen, bleConnected := "", 0, 0
+			if h.BLE != nil {
+				bleState, bleSeen, bleConnected = h.BLE.State, h.BLE.Seen, h.BLE.Connected
+			}
+			e = tx.Exec(`INSERT INTO core.edge_agents(tenant_id,gateway_id,version,last_health_at,devices_connected,lan_seen,ble_state,ble_seen,ble_connected,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET version=EXCLUDED.version,last_health_at=EXCLUDED.last_health_at,devices_connected=EXCLUDED.devices_connected,
-      lan_seen=EXCLUDED.lan_seen,updated_at=EXCLUDED.updated_at`, tenant, gateway, h.Version, now, h.DevicesConnected, h.LANSeen, now).Error
+      lan_seen=EXCLUDED.lan_seen,ble_state=EXCLUDED.ble_state,ble_seen=EXCLUDED.ble_seen,ble_connected=EXCLUDED.ble_connected,updated_at=EXCLUDED.updated_at`,
+				tenant, gateway, h.Version, now, h.DevicesConnected, h.LANSeen, bleState, bleSeen, bleConnected, now).Error
 		case edge.Discovery:
 			e = saveLANDevices(tx, tenant, gateway, payload, now)
+		case edge.BLESightings:
+			e = saveBLESightings(tx, tenant, gateway, payload, now)
 		case edge.State:
 			e = r.saveTuyaState(tx, tenant, gateway, m, payload, now)
 		case edge.Availability:
@@ -93,7 +102,7 @@ func (r *Repository) CaptureEdge(ctx context.Context, tenant, gateway string, m 
 func edgeDiagnostic(m edge.Message, payload []byte) string {
 	d := map[string]any{"edge_topic": m.Topic}
 	switch {
-	case m.Kind == edge.Discovery:
+	case m.Kind == edge.Discovery || m.Kind == edge.BLESightings:
 		var list []json.RawMessage
 		_ = json.Unmarshal(payload, &list)
 		d["devices"] = len(list)
@@ -153,6 +162,65 @@ func saveLANDevices(tx *gorm.DB, tenant, gateway string, payload []byte, now tim
 	return nil
 }
 
+// EdgeBLEEvery is the least time between two Bluetooth sightings lists accepted from one Edge.
+const EdgeBLEEvery = 30 * time.Second
+
+// MaxBLESeen bounds the Bluetooth sightings kept per gateway: its most recently heard devices.
+const MaxBLESeen = 500
+
+// saveBLESightings records the Tuya BLE devices the agent hears advertising, at most one list per EdgeBLEEvery per
+// gateway, forgets entries unheard for a week and keeps each gateway's newest MaxBLESeen. An imported BLE device
+// heard in the list (by address or uuid) gets its signal strength and advertised protocol; the agent learns both
+// from the air itself, so its configuration does not move.
+func saveBLESightings(tx *gorm.DB, tenant, gateway string, payload []byte, now time.Time) error {
+	list, e := edge.ParseBLESightings(payload)
+	if e != nil {
+		return e
+	}
+	var accepted []bool
+	if e := tx.Raw(`INSERT INTO core.edge_agents(tenant_id,gateway_id,last_ble_at,updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET last_ble_at=EXCLUDED.last_ble_at,updated_at=EXCLUDED.updated_at
+      WHERE core.edge_agents.last_ble_at IS NULL OR core.edge_agents.last_ble_at<=?
+    RETURNING true`, tenant, gateway, now, now, now.Add(-EdgeBLEEvery)).Scan(&accepted).Error; e != nil {
+		return e
+	}
+	if len(accepted) == 0 {
+		return nil
+	}
+	for _, s := range list {
+		if e := tx.Exec(`INSERT INTO core.edge_ble_seen(tenant_id,gateway_id,mac,uuid,product_id,protocol,bound,fd50,rssi,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(tenant_id,gateway_id,mac) DO UPDATE SET uuid=EXCLUDED.uuid,product_id=EXCLUDED.product_id,protocol=EXCLUDED.protocol,bound=EXCLUDED.bound,
+      fd50=EXCLUDED.fd50,rssi=EXCLUDED.rssi,last_seen=EXCLUDED.last_seen`,
+			tenant, gateway, s.MAC, s.UUID, s.ProductID, s.Protocol, s.Bound, s.FD50, s.RSSI, now).Error; e != nil {
+			return e
+		}
+		protocol := s.Protocol
+		if protocol != 2 && protocol != 3 && protocol != 4 {
+			protocol = 0
+		}
+		// Some devices' factory records list the address byte-reversed: either order matches.
+		if e := tx.Exec(`UPDATE core.tuya_devices SET rssi=?,ble_protocol=CASE WHEN ?<>0 THEN ? ELSE ble_protocol END
+    WHERE gateway_id=? AND transport='ble' AND removed_at IS NULL AND (ble_mac IN (?,?) OR (?<>'' AND ble_uuid=?))`,
+			s.RSSI, protocol, protocol, gateway, s.MAC, reversedMAC(s.MAC), s.UUID, s.UUID).Error; e != nil {
+			return e
+		}
+	}
+	if e := tx.Exec(`DELETE FROM core.edge_ble_seen WHERE gateway_id=? AND last_seen<?`, gateway, now.Add(-7*24*time.Hour)).Error; e != nil {
+		return e
+	}
+	return tx.Exec(`DELETE FROM core.edge_ble_seen WHERE gateway_id=? AND mac IN (
+    SELECT mac FROM core.edge_ble_seen WHERE gateway_id=? ORDER BY last_seen DESC,mac OFFSET ?)`, gateway, gateway, MaxBLESeen).Error
+}
+
+// reversedMAC is a Bluetooth address with its bytes in the other order.
+func reversedMAC(m string) string {
+	parts := strings.Split(m, ":")
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return strings.Join(parts, ":")
+}
+
 // bumpEdgeConfig moves an Aether Edge's configuration revision, so the agent fetches what it must connect to
 // again. It does nothing for a gateway of any other model.
 func bumpEdgeConfig(tx *gorm.DB, gateway string) error {
@@ -173,12 +241,20 @@ func bumpEdgeConfigOfDevice(tx *gorm.DB, device string) error {
 // tuyaDevice is one imported Tuya device as the ingest needs it, in the shape of a Zigbee2MQTT device (the
 // exposes translated from its specification), plus its dp map.
 func tuyaDevice(tx *gorm.DB, gateway, id string) (zigbee2mqtt.Device, map[string]tuya.Ref, bool, error) {
+	d, dpMap, _, ok, e := tuyaDeviceSpec(tx, gateway, id)
+	return d, dpMap, ok, e
+}
+
+// tuyaDeviceSpec is tuyaDevice plus, for a BLE device, its data-point specification (BLE reports enums by index,
+// which only the specification's range turns into labels); nil for a Wi-Fi device.
+func tuyaDeviceSpec(tx *gorm.DB, gateway, id string) (zigbee2mqtt.Device, map[string]tuya.Ref, []tuya.DP, bool, error) {
 	var rows []struct {
-		TuyaID, Name, TuyaCategory, Category string
-		Gangs, Exposes, DPMap                json.RawMessage
+		TuyaID, Name, TuyaCategory, Category, Transport string
+		Gangs, Exposes, DPMap, Spec                     json.RawMessage
 	}
-	if e := tx.Raw(`SELECT tuya_id,name,tuya_category,category,gangs,exposes,dp_map FROM core.tuya_devices WHERE gateway_id=? AND tuya_id=? AND removed_at IS NULL`, gateway, id).Scan(&rows).Error; e != nil || len(rows) == 0 {
-		return zigbee2mqtt.Device{}, nil, false, e
+	if e := tx.Raw(`SELECT tuya_id,name,tuya_category,category,transport,gangs,exposes,dp_map,CASE WHEN transport='ble' THEN spec ELSE '[]'::jsonb END AS spec
+    FROM core.tuya_devices WHERE gateway_id=? AND tuya_id=? AND removed_at IS NULL`, gateway, id).Scan(&rows).Error; e != nil || len(rows) == 0 {
+		return zigbee2mqtt.Device{}, nil, nil, false, e
 	}
 	row := rows[0]
 	name := row.Name
@@ -191,13 +267,20 @@ func tuyaDevice(tx *gorm.DB, gateway, id string) (zigbee2mqtt.Device, map[string
 	}
 	d := zigbee2mqtt.Device{IEEE: row.TuyaID, FriendlyName: name, Model: model, Vendor: "Tuya", Exposes: row.Exposes, Category: row.Category}
 	if e := json.Unmarshal(row.Gangs, &d.Gangs); e != nil {
-		return zigbee2mqtt.Device{}, nil, false, e
+		return zigbee2mqtt.Device{}, nil, nil, false, e
 	}
 	dpMap := map[string]tuya.Ref{}
 	if e := json.Unmarshal(row.DPMap, &dpMap); e != nil {
-		return zigbee2mqtt.Device{}, nil, false, e
+		return zigbee2mqtt.Device{}, nil, nil, false, e
 	}
-	return d, dpMap, true, nil
+	var spec []tuya.DP
+	if row.Transport == "ble" {
+		spec = []tuya.DP{}
+		if e := json.Unmarshal(row.Spec, &spec); e != nil {
+			return zigbee2mqtt.Device{}, nil, nil, false, e
+		}
+	}
+	return d, dpMap, spec, true, nil
 }
 
 // saveTuyaState converts the device's raw data points into property values through its dp map and hands them
@@ -207,9 +290,16 @@ func (r *Repository) saveTuyaState(tx *gorm.DB, tenant, gateway string, m edge.M
 	if e != nil {
 		return e
 	}
-	d, dpMap, ok, e := tuyaDevice(tx, gateway, m.Device)
+	d, dpMap, spec, ok, e := tuyaDeviceSpec(tx, gateway, m.Device)
 	if e != nil || !ok {
 		return e // a device that was not imported: the diagnostic copy is all there is
+	}
+	if spec != nil {
+		// A BLE device: enums arrive as indices. A report is also a read, which battery devices are polled for.
+		dps = tuya.FromBLE(spec, dps)
+		if e := tx.Exec(`UPDATE core.tuya_devices SET last_read_at=? WHERE gateway_id=? AND tuya_id=?`, now, gateway, d.IEEE).Error; e != nil {
+			return e
+		}
 	}
 	properties := tuya.State(dpMap, dps)
 	if len(properties) == 0 {
@@ -308,7 +398,7 @@ func (r *Repository) SaveTuyaDevices(ctx context.Context, p domain.Principal, ga
     FROM (SELECT 1) one LEFT JOIN core.edge_lan_devices l ON l.gateway_id=? AND l.device_id=?
     ON CONFLICT(tenant_id,gateway_id,tuya_id) DO UPDATE SET name=EXCLUDED.name,tuya_category=EXCLUDED.tuya_category,product_id=EXCLUDED.product_id,sub=EXCLUDED.sub,
       spec=EXCLUDED.spec,exposes=EXCLUDED.exposes,dp_map=EXCLUDED.dp_map,gangs=EXCLUDED.gangs,category=EXCLUDED.category,local_capable=EXCLUDED.local_capable,
-      local_key_sealed=EXCLUDED.local_key_sealed,key_fingerprint=EXCLUDED.key_fingerprint,key_status=EXCLUDED.key_status,imported_at=EXCLUDED.imported_at,
+      local_key_sealed=EXCLUDED.local_key_sealed,sec_key_sealed=NULL,key_fingerprint=EXCLUDED.key_fingerprint,key_status=EXCLUDED.key_status,imported_at=EXCLUDED.imported_at,
       updated_at=EXCLUDED.updated_at,removed_at=NULL`,
 				p.TenantID, gateway, id, clipText(d.Name, 128), clipText(d.Category, 32), clipText(d.ProductID, 64), d.Sub, string(spec), string(tr.Exposes), string(dpMap), string(gangs),
 				tr.Category, tr.LocalCapable && !d.Sub, key, fingerprint, status, now, now, gateway, id).Error; e != nil {

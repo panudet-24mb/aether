@@ -306,11 +306,17 @@ services:
       # and the web front's root when it is a private CA (optional; see docs/production.md).
       MQTT_CA_FILE: /run/mqtt-ca/ca.crt
       EDGE_WEB_CA_FILE: /run/edge-web-ca/root.crt
+      # Backup and PITR health written by the pitr service, shown to owners (GET /api/v1/system/status).
+      OPS_STATUS_FILE: /run/aether-ops/status.json
+      # The workspace whose owners see that status (create-owner.sh records the first one); empty: every owner.
+      OPS_STATUS_TENANT: ${OPS_STATUS_TENANT:-}
     volumes:
       - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
       # The broker's CA certificate only (public): never the broker directory, which holds its private key.
       - ${AETHER_SECRETS_DIR}/mqtt/broker/ca.crt:/run/mqtt-ca/ca.crt:ro
       - ${AETHER_SECRETS_DIR}/edge-web-ca:/run/edge-web-ca:ro
+      # Read-only: the API only reads status.json.
+      - ops-status:/run/aether-ops:ro,nocopy
     healthcheck:
       test: ["CMD", "/app/api", "health"]
       interval: 15s

@@ -50,6 +50,7 @@ type edgeRig struct {
 	devices    map[string]string // name -> registration id
 	dispatcher *commander.Dispatcher
 	published  []string
+	ttls       []int64 // ttl_ms of every published command
 	t          *testing.T
 }
 
@@ -139,7 +140,18 @@ func (r *edgeRig) report(name string, dps map[int]any) {
 
 // Publish plays the broker, the agent and the device: the /set's data points are applied and echoed back.
 func (r *edgeRig) Publish(topic string, payload []byte) error {
-	r.published = append(r.published, topic+" "+string(payload))
+	// Every edge command carries its delivery deadline; the rig records the data points alone, and the deadline
+	// fields separately.
+	var cmd struct {
+		DPS       json.RawMessage `json:"dps"`
+		ExpiresAt string          `json:"expires_at"`
+		TTLMS     int64           `json:"ttl_ms"`
+	}
+	if e := json.Unmarshal(payload, &cmd); e != nil || cmd.ExpiresAt == "" || cmd.TTLMS <= 0 {
+		return errors.New("command without a deadline: " + string(payload))
+	}
+	r.ttls = append(r.ttls, cmd.TTLMS)
+	r.published = append(r.published, topic+` {"dps":`+string(cmd.DPS)+`}`)
 	parts := strings.Split(strings.TrimPrefix(topic, edge.Prefix), "/")
 	if len(parts) != 3 || parts[0] != r.gateway || parts[2] != "set" {
 		return errors.New("unexpected topic " + topic)

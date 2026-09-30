@@ -21,11 +21,12 @@ func (s *Service) GatewayModels() []domain.GatewayModel {
 	return out
 }
 
-// DeviceProfiles is the catalog's profile list: the Tuya Cloud profile only when this deployment enabled it.
+// DeviceProfiles is the catalog's profile list: the Tuya Cloud and Tuya BLE profiles only when this deployment
+// enabled them.
 func (s *Service) DeviceProfiles() []domain.DeviceProfile {
 	out := make([]domain.DeviceProfile, 0, len(domain.DeviceProfiles))
 	for _, p := range domain.DeviceProfiles {
-		if p.ID == domain.TuyaCloudProfile && !s.TuyaCloudEnabled {
+		if (p.ID == domain.TuyaCloudProfile && !s.TuyaCloudEnabled) || (p.ID == domain.TuyaBLEProfile && !s.EdgeBLEEnabled) {
 			continue
 		}
 		out = append(out, p)

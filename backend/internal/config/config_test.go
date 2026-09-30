@@ -83,3 +83,38 @@ func TestTuyaCloudFlag(t *testing.T) {
 		t.Fatalf("enabled: %v %+v", e, c)
 	}
 }
+
+// OPS_STATUS_FILE is optional (off in development) and must be a plain absolute path when set.
+func TestOpsStatusFile(t *testing.T) {
+	base(t)
+	if c, e := Load(); e != nil || c.OpsStatusFile != "" {
+		t.Fatal("OPS_STATUS_FILE must default to off", e)
+	}
+	t.Setenv("OPS_STATUS_FILE", "/run/aether-ops/status.json")
+	if c, e := Load(); e != nil || c.OpsStatusFile != "/run/aether-ops/status.json" {
+		t.Fatal("OPS_STATUS_FILE", e)
+	}
+	for _, bad := range []string{"status.json", "/run/../etc/passwd", "/run/aether-ops/"} {
+		t.Setenv("OPS_STATUS_FILE", bad)
+		if _, e := Load(); e == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}
+
+func TestOpsStatusTenant(t *testing.T) {
+	base(t)
+	if c, e := Load(); e != nil || c.OpsStatusTenant != "" {
+		t.Fatal("OPS_STATUS_TENANT must default to every owner", e)
+	}
+	t.Setenv("OPS_STATUS_TENANT", "3F2504E0-4F89-11D3-9A0C-0305E82C3301")
+	if c, e := Load(); e != nil || c.OpsStatusTenant != "3f2504e0-4f89-11d3-9a0c-0305e82c3301" {
+		t.Fatal("OPS_STATUS_TENANT", c.OpsStatusTenant, e)
+	}
+	for _, bad := range []string{"zenture", "00000000-0000-0000-0000-000000000000", "3f2504e0"} {
+		t.Setenv("OPS_STATUS_TENANT", bad)
+		if _, e := Load(); e == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+}

@@ -167,7 +167,7 @@ func TestAlertPipelineFromPacketToNotification(t *testing.T) {
 	if code != 201 {
 		t.Fatalf("second offline rule: %d", code)
 	}
-	if _, e := f.admin.ExecContext(ctx, `UPDATE core.sensor_streams SET last_seen=now()-interval '10 minutes' WHERE external_id='f00000000001'`); e != nil {
+	if _, e := f.admin.ExecContext(ctx, `UPDATE core.sensor_streams SET last_seen=now()-interval '10 minutes' WHERE tenant_id=$1 AND external_id='f00000000001'`, a.TenantID); e != nil {
 		t.Fatal(e)
 	}
 	worker.Tick(ctx, time.Now().UTC())
@@ -181,7 +181,7 @@ func TestAlertPipelineFromPacketToNotification(t *testing.T) {
 		t.Fatalf("offline alert (only the 60 s rule may fire): %+v", open)
 	}
 	// Once the device has been silent past the long threshold, that rule opens its own alert, once.
-	if _, e := f.admin.ExecContext(ctx, `UPDATE core.sensor_streams SET last_seen=now()-interval '2 hours' WHERE external_id='f00000000001'`); e != nil {
+	if _, e := f.admin.ExecContext(ctx, `UPDATE core.sensor_streams SET last_seen=now()-interval '2 hours' WHERE tenant_id=$1 AND external_id='f00000000001'`, a.TenantID); e != nil {
 		t.Fatal(e)
 	}
 	worker.Tick(ctx, time.Now().UTC())

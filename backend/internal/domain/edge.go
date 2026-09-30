@@ -44,6 +44,14 @@ type EdgeStatus struct {
 	Imported         int            `json:"imported"`
 	Registered       int            `json:"registered"`
 	Keys             map[string]int `json:"keys"`
+	// Bluetooth (docs/platform/tuya-ble.md): the agent's radio state from its heartbeat ("" before an agent that
+	// knows about BLE reported, "off" when it runs without it), the Tuya BLE devices it hears and holds connected,
+	// how many it heard in the sightings kept here, and the capabilities it announced on its last pull.
+	BLEState     string   `json:"ble_state"`
+	BLESeen      int      `json:"ble_seen"`
+	BLEConnected int      `json:"ble_connected"`
+	BLEDevices   int      `json:"ble_devices"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // EdgeSealedDevice is one device an Aether Edge must connect to, as stored: the key still sealed. Only the
@@ -55,6 +63,17 @@ type EdgeSealedDevice struct {
 	IP        string
 	Device22  bool
 	Spec      json.RawMessage
+	// BLE devices (Transport "ble") carry their address, uuid, product, advertised protocol, how to reach them and
+	// their sec_key, still sealed.
+	Transport    string
+	MAC          string
+	UUID         string
+	ProductID    string
+	Protocol     int
+	Mode         string
+	PollSeconds  int
+	SecKeySealed string
+	TuyaCategory string
 }
 
 // EdgeDevice is one device of an Aether Edge's configuration, with its local key in the clear: returned only to
@@ -66,7 +85,24 @@ type EdgeDevice struct {
 	IP         string `json:"ip"`
 	Device22   bool   `json:"dev22"`
 	RefreshDPs []int  `json:"refresh_dps"`
+	// BLE devices only (sent only to an agent that announced the capability, and only with EDGE_BLE on). The
+	// fields are omitted for Wi-Fi devices, so a Wi-Fi device reads exactly as before.
+	Transport string            `json:"transport,omitempty"` // "ble"; empty means Wi-Fi
+	MAC       string            `json:"mac,omitempty"`
+	UUID      string            `json:"uuid,omitempty"`
+	SecKey    string            `json:"sec_key,omitempty"`
+	ProductID string            `json:"product_id,omitempty"`
+	Protocol  int               `json:"protocol,omitempty"`
+	Mode      string            `json:"mode,omitempty"`
+	Poll      int               `json:"poll,omitempty"`     // seconds between reads
+	DPTypes   map[string]string `json:"dp_types,omitempty"` // data point id -> bool | value | enum | string | bitmap | raw
+	// ReadOnly: the agent must never write to this device (a lock or safe over BLE); it gets no dp_types either.
+	ReadOnly bool `json:"readonly,omitempty"`
 }
+
+// EdgeCapabilityBLE is the capability an agent built with Bluetooth announces on its configuration pull
+// (X-Aether-Edge-Caps: ble). An agent without it is never sent BLE devices: it would try to reach them over TCP.
+const EdgeCapabilityBLE = "ble"
 
 // EdgeCredentials are what an install code is redeemed for: the gateway's freshly rotated MQTT password and
 // HTTP token, handed over once.

@@ -173,7 +173,7 @@ func (d *Dispatcher) publish(ctx context.Context, tenant string, c domain.Comman
 		slog.Info("command delivered", "command", c.ID, "gateway", c.GatewayID, "property", c.Property)
 		return true
 	}
-	topic, payload, e := message(c)
+	topic, payload, e := message(c, d.Now())
 	if e != nil {
 		return fail(e.Error())
 	}
@@ -189,7 +189,10 @@ func (d *Dispatcher) publish(ctx context.Context, tenant string, c domain.Comman
 // aether/z2m/<gateway>/<ieee>/set. An Aether Edge command is its wire form, {"dps":{"<id>":<raw>}}, computed from
 // the device's specification when it was queued, to aether/edge/<gateway>/<device>/set: the commander never knows
 // what a data point means and never holds a local key.
-func message(c domain.Command) (string, []byte, error) {
+//
+// An edge command also says until when the agent may deliver it (edge.SetDeadline): after that the server has
+// given up on it, and a late actuation (a BLE device that only now came in range) must not happen.
+func message(c domain.Command, now time.Time) (string, []byte, error) {
 	switch c.Transport {
 	case "edge":
 		topic, e := edge.SetTopic(c.GatewayID, c.IEEE)
@@ -198,6 +201,9 @@ func message(c domain.Command) (string, []byte, error) {
 		}
 		payload, e := edge.SetPayload(c.Wire)
 		if e != nil {
+			return "", nil, errors.New("invalid command payload")
+		}
+		if payload, e = edge.SetDeadline(payload, now, c.AgentTTL()); e != nil {
 			return "", nil, errors.New("invalid command payload")
 		}
 		return topic, payload, nil

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -428,10 +429,13 @@ func (s *Service) BootstrapEdge(ctx context.Context, code string) (domain.EdgeCr
 
 // EdgeConfig is the agent's configuration: its registered, keyed devices with their local keys opened. This is
 // the only place a local key leaves its seal, and it goes only to the gateway's own agent.
-func (s *Service) EdgeConfig(ctx context.Context, tenant, gateway string) (int64, []domain.EdgeDevice, error) {
-	revision, sealed, e := s.Repo.EdgeConfig(ctx, tenant, gateway)
+func (s *Service) EdgeConfig(ctx context.Context, tenant, gateway string, capabilities []string) (int64, []domain.EdgeDevice, bool, error) {
+	// BLE devices go only to an agent that announced it can reach them, and only where EDGE_BLE is on: an older
+	// agent would try them over TCP and report them unreachable.
+	ble := s.EdgeBLEEnabled && slices.Contains(capabilities, domain.EdgeCapabilityBLE)
+	revision, sealed, e := s.Repo.EdgeConfig(ctx, tenant, gateway, ble, capabilities)
 	if e != nil {
-		return 0, nil, e
+		return 0, nil, false, e
 	}
 	out := make([]domain.EdgeDevice, 0, len(sealed))
 	for _, d := range sealed {
@@ -442,7 +446,26 @@ func (s *Service) EdgeConfig(ctx context.Context, tenant, gateway string) (int64
 		}
 		var spec []tuya.DP
 		_ = json.Unmarshal(d.Spec, &spec)
-		out = append(out, domain.EdgeDevice{ID: d.ID, Key: key, Version: d.Version, IP: d.IP, Device22: d.Device22, RefreshDPs: tuya.RefreshDPs(spec)})
+		if d.Transport != "ble" {
+			out = append(out, domain.EdgeDevice{ID: d.ID, Key: key, Version: d.Version, IP: d.IP, Device22: d.Device22, RefreshDPs: tuya.RefreshDPs(spec)})
+			continue
+		}
+		secKey := ""
+		if d.SecKeySealed != "" {
+			// Sealed like the local key, with the same keys.
+			if secKey, e = security.OpenAny(d.SecKeySealed, s.TuyaKeys, s.LegacyTuyaKeys); e != nil || !tuya.ValidLocalKey(secKey) {
+				slog.Warn("edge config: a sec_key could not be opened", "gateway", gateway, "device", d.ID)
+				continue
+			}
+		}
+		dev := domain.EdgeDevice{ID: d.ID, Key: key, RefreshDPs: []int{}, Transport: "ble", MAC: d.MAC, UUID: d.UUID, SecKey: secKey,
+			ProductID: d.ProductID, Protocol: d.Protocol, Mode: d.Mode, Poll: d.PollSeconds, DPTypes: tuya.DPTypes(spec)}
+		if tuya.LockCategory(d.TuyaCategory) {
+			// Locks are read-only over BLE: without data-point types the agent could not encode a write even if
+			// the flag were ignored.
+			dev.ReadOnly, dev.DPTypes = true, nil
+		}
+		out = append(out, dev)
 	}
-	return revision, out, nil
+	return revision, out, ble, nil
 }

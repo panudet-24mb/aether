@@ -128,7 +128,7 @@ type Repository interface {
 	CreateEdgeInstallCode(context.Context, domain.Principal, string, string, string, time.Time) error
 	BootstrapEdge(context.Context, string, string, string, string) (string, string, string, error)
 	RotateGatewayToken(context.Context, domain.Principal, string, string) error
-	EdgeConfig(context.Context, string, string) (int64, []domain.EdgeSealedDevice, error)
+	EdgeConfig(context.Context, string, string, bool, []string) (int64, []domain.EdgeSealedDevice, error)
 	QueueCommand(context.Context, domain.Principal, domain.CommandRequest) (domain.Command, bool, error)
 	ListCommands(context.Context, domain.Principal, string, int) ([]domain.Command, error)
 	GetCommand(context.Context, domain.Principal, string) (domain.Command, error)

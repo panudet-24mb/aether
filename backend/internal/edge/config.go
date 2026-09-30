@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -19,9 +20,10 @@ import (
 var Version = "dev"
 
 var (
-	uuidPattern   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	tokenPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{16,256}$`)
-	devicePattern = regexp.MustCompile(`^[a-z0-9]{16,32}$`)
+	uuidPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	tokenPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{16,256}$`)
+	devicePattern  = regexp.MustCompile(`^[a-z0-9]{16,32}$`)
+	adapterPattern = regexp.MustCompile(`^hci[0-9]{1,2}$`)
 )
 
 // Config is the agent's environment. Secrets (HTTPToken, MQTTPassword) are never logged; String redacts them.
@@ -36,6 +38,12 @@ type Config struct {
 	WebCAFile    string // optional extra root for the HTTPS configuration pull (AETHER_TLS=internal)
 	LogLevel     string
 	HealthFile   string // written on every heartbeat; `aether-edge health` checks its age
+	// Tuya BLE through the host's Bluetooth (docs/platform/tuya-ble.md): off unless BLE_ENABLED=true, which the
+	// installer writes with --ble. BLEMaxConnections is the connection budget (1 on a Raspberry Pi's onboard
+	// radio, up to 5 with a USB adapter); BLEAdapter the adapter (hci0).
+	BLEEnabled        bool
+	BLEMaxConnections int
+	BLEAdapter        string
 }
 
 // LoadConfig reads and validates the agent's environment through getenv.
@@ -55,10 +63,31 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if c.HealthFile == "" {
 		c.HealthFile = DefaultHealthFile
 	}
+	var problems []string
+	switch strings.ToLower(strings.TrimSpace(getenv("BLE_ENABLED"))) {
+	case "", "false", "0":
+	case "true", "1":
+		c.BLEEnabled = true
+	default:
+		problems = append(problems, "BLE_ENABLED must be true or false")
+	}
+	c.BLEMaxConnections, c.BLEAdapter = 1, "hci0"
+	if raw := strings.TrimSpace(getenv("BLE_MAX_CONNECTIONS")); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 || n > 5 {
+			problems = append(problems, "BLE_MAX_CONNECTIONS must be 1 to 5")
+		}
+		c.BLEMaxConnections = n
+	}
+	if raw := strings.TrimSpace(getenv("BLE_ADAPTER")); raw != "" {
+		if !adapterPattern.MatchString(raw) {
+			problems = append(problems, "BLE_ADAPTER must be an adapter name such as hci0")
+		}
+		c.BLEAdapter = raw
+	}
 	if c.MQTTUsername == "" {
 		c.MQTTUsername = "gw-" + c.GatewayID
 	}
-	var problems []string
 	api, e := url.Parse(c.API)
 	if e != nil || (api.Scheme != "https" && api.Scheme != "http") || api.Host == "" || api.Path != "" || api.RawQuery != "" {
 		problems = append(problems, "AETHER_API must be an origin such as https://aether.example.com")
@@ -94,7 +123,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 
 // String describes the configuration without its secrets.
 func (c Config) String() string {
-	return fmt.Sprintf("api=%s gateway=%s mqtt=%s user=%s ca=%q web_ca=%q", c.API, c.GatewayID, c.MQTTURL, c.MQTTUsername, c.MQTTCAFile, c.WebCAFile)
+	return fmt.Sprintf("api=%s gateway=%s mqtt=%s user=%s ca=%q web_ca=%q ble=%t ble_adapter=%s ble_connections=%d", c.API, c.GatewayID, c.MQTTURL,
+		c.MQTTUsername, c.MQTTCAFile, c.WebCAFile, c.BLEEnabled, c.BLEAdapter, c.BLEMaxConnections)
 }
 
 // brokerURL turns mqtts://host:port into paho's ssl://host:port (mqtt:// into tcp://).
@@ -116,6 +146,7 @@ func brokerURL(s string) (string, error) {
 func topicStatus(gw string) string     { return "aether/edge/" + gw + "/status" }
 func topicHealth(gw string) string     { return "aether/edge/" + gw + "/health" }
 func topicDiscovery(gw string) string  { return "aether/edge/" + gw + "/discovery" }
+func topicBLE(gw string) string        { return "aether/edge/" + gw + "/ble" }
 func topicState(gw, dev string) string { return "aether/edge/" + gw + "/" + dev + "/state" }
 func topicAvailability(gw, dev string) string {
 	return "aether/edge/" + gw + "/" + dev + "/availability"

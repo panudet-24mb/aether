@@ -44,7 +44,10 @@ type InstallOptions struct {
 	Image     string // aether-edge image reference the compose file pins
 	Z2MImage  string // Zigbee2MQTT image reference; Zigbee2MQTTImage when empty
 	WebCAFile string // optional: a private root for Aether's web front, to reach /edge/bootstrap
-	Client    *http.Client
+	// BLE turns on the Tuya BLE transport: BLE_ENABLED=true in .env and the host's D-Bus socket mounted read-only
+	// (bluetoothd is reached over D-Bus; the container keeps no capability). install.sh checks the host first.
+	BLE    bool
+	Client *http.Client
 	// Out receives what the installer must tell the operator once (the Zigbee2MQTT page token). Nil = discard.
 	Out io.Writer
 }
@@ -283,6 +286,10 @@ func writeFiles(o InstallOptions, b bundle) error {
 			return e
 		}
 	}
+	if o.BLE {
+		env = append(env, "BLE_ENABLED=true", "BLE_ADAPTER=hci0", "BLE_MAX_CONNECTIONS=1",
+			"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket")
+	}
 	if b.WebCAPEM != "" {
 		env = append(env, "WEB_CA_FILE=/config/web-ca.crt")
 		if e := writeFile(filepath.Join(o.Dir, "web-ca.crt"), b.WebCAPEM, 0o644); e != nil {
@@ -314,6 +321,10 @@ func writeFiles(o InstallOptions, b bundle) error {
 	}
 	if b.WebCAPEM != "" {
 		mounts = append(mounts, "      - ./web-ca.crt:/config/web-ca.crt:ro")
+	}
+	if o.BLE {
+		// bluetoothd is reached over the host's system bus; read-only, and nothing else of /run.
+		mounts = append(mounts, "      - /run/dbus:/run/dbus:ro")
 	}
 	volumes := ""
 	if len(mounts) > 0 {

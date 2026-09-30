@@ -41,8 +41,21 @@ fi
 
 # The password reaches the container only on stdin. Inside, umask 077 makes the temporary file
 # 0600 and owned by uid 10001, which is what /app/admin requires before it will read it.
-dc run --rm -T --no-deps \
+OUT="$(dc run --rm -T --no-deps \
 	-e ADMIN_EMAIL="$EMAIL" -e ADMIN_NAME="$NAME" -e TENANT_NAME="$TENANT" \
 	--entrypoint /bin/sh api -c \
 	'umask 077; cat > /tmp/owner-password; ADMIN_PASSWORD_FILE=/tmp/owner-password /app/admin bootstrap; s=$?; rm -f /tmp/owner-password; exit $s' \
-	< "$PWFILE"
+	< "$PWFILE")"
+echo "$OUT"
+
+# Backup/PITR health is about the whole deployment: record this first workspace as the one whose owners see it
+# (OPS_STATUS_TENANT), unless one is already set. `up -d api` applies it.
+TENANT_ID="$(printf '%s\n' "$OUT" | sed -n 's/.*tenant_id=\([0-9a-f-]\{36\}\).*/\1/p' | tail -n 1)"
+if [ -n "$TENANT_ID" ] && [ -z "$(env_get OPS_STATUS_TENANT)" ]; then
+	tmp="$ENV_FILE.tmp.$$"
+	(umask 077; awk -v v="$TENANT_ID" 'BEGIN { done = 0 }
+		index($0, "OPS_STATUS_TENANT=") == 1 { print "OPS_STATUS_TENANT=" v; done = 1; next } { print }
+		END { if (!done) print "OPS_STATUS_TENANT=" v }' "$ENV_FILE" > "$tmp")
+	mv "$tmp" "$ENV_FILE"
+	echo "backup status on the web: owners of workspace $TENANT_ID (OPS_STATUS_TENANT in $ENV_FILE); run 'up -d api' to apply"
+fi

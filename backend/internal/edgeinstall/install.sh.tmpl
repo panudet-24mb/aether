@@ -4,8 +4,12 @@
 #
 #   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh
 #   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --zigbee <SLZB_IP> [--zigbee-ui <THIS_HOST_LAN_IP>]
+#   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --ble
 #   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --update
+#   curl -fsSL __AETHER_ORIGIN__/edge/install.sh | sudo sh -s -- --uninstall
 #   options: --dir <absolute path> (default /opt/aether-edge)
+#            --ble   reach Tuya BLE devices with this host's Bluetooth (BlueZ must be running; the agent talks to it
+#                    over the host's D-Bus socket, mounted read-only, and keeps no capability)
 #
 # The install code (from the gateway panel; 30 minutes, single use) is typed at the prompt, never on the command
 # line, so it does not end up in shell history, sudo logs or a process list. For unattended installs it may come
@@ -22,20 +26,27 @@ Z2M_IMAGE='__Z2M_IMAGE__'
 DIR=/opt/aether-edge
 ZIGBEE=
 ZIGBEE_UI=
+BLE=0
 UPDATE=0
+UNINSTALL=0
+# The agent runs as this uid in its container; D-Bus sees the same uid on the host.
+AGENT_UID=10001
+POLICY=/etc/dbus-1/system.d/aether-edge-bluetooth.conf
 # Taken out of the environment at once: only the one `docker run` that redeems it gets it back.
 ENV_CODE=${AETHER_INSTALL_CODE:-}
 unset AETHER_INSTALL_CODE
 
 die() { echo "aether-edge: $*" >&2; exit 1; }
-usage() { die "usage: sh [-s -- [--zigbee <SLZB_IP> [--zigbee-ui <LAN_IP>]] [--dir <path>] | --update [--dir <path>]]"; }
+usage() { die "usage: sh [-s -- [--zigbee <SLZB_IP> [--zigbee-ui <LAN_IP>]] [--ble] [--dir <path>] | --update [--dir <path>] | --uninstall [--dir <path>]]"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--zigbee) [ $# -ge 2 ] || usage; ZIGBEE=$2; shift 2 ;;
 	--zigbee-ui) [ $# -ge 2 ] || usage; ZIGBEE_UI=$2; shift 2 ;;
+	--ble) BLE=1; shift ;;
 	--dir) [ $# -ge 2 ] || usage; DIR=$2; shift 2 ;;
 	--update) UPDATE=1; shift ;;
+	--uninstall) UNINSTALL=1; shift ;;
 	-h | --help) usage ;;
 	-*) usage ;;
 	*) die "the install code is not given on the command line: run without it and type it at the prompt" ;;
@@ -62,6 +73,24 @@ if [ -n "$ZIGBEE_UI" ]; then
 	case "$ZIGBEE_UI" in *[!0-9.]* | 0.0.0.0) die "--zigbee-ui must be one IPv4 address of this host (not 0.0.0.0)" ;; esac
 fi
 
+# Bluetooth: the agent reaches bluetoothd over the host's system bus as uid 10001, with no capability. Refuse early
+# (before the code is spent) when the host cannot give it that.
+DBUS_SOCKET=/run/dbus/system_bus_socket
+if [ "$BLE" = 1 ] && [ "$UPDATE" = 0 ] && [ "$UNINSTALL" = 0 ]; then
+	[ -S "$DBUS_SOCKET" ] || die "--ble: no D-Bus system bus at $DBUS_SOCKET"
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl is-active --quiet bluetooth 2>/dev/null || die "--ble: bluetoothd is not running (sudo apt install bluez && sudo systemctl enable --now bluetooth)"
+	else
+		pgrep -x bluetoothd >/dev/null 2>&1 || die "--ble: bluetoothd is not running (install BlueZ first)"
+	fi
+	for r in /sys/class/rfkill/rfkill*; do
+		[ -r "$r/type" ] || continue
+		if [ "$(cat "$r/type")" = bluetooth ] && [ "$(cat "$r/soft" 2>/dev/null || echo 0)$(cat "$r/hard" 2>/dev/null || echo 0)" != 00 ]; then
+			die "--ble: the Bluetooth adapter is blocked (rfkill); unblock it with: sudo rfkill unblock bluetooth"
+		fi
+	done
+fi
+
 command -v docker >/dev/null 2>&1 || die "Docker is not installed. Install it first: curl -fsSL https://get.docker.com | sh"
 docker info >/dev/null 2>&1 || die "cannot talk to Docker (run with sudo, or add this user to the docker group)"
 docker compose version >/dev/null 2>&1 || die "the Docker compose plugin is missing (docker compose version failed)"
@@ -75,6 +104,29 @@ set_env() { # set_env KEY VALUE: replace or add one line of .env
 	chmod 600 "$tmp"
 	mv "$tmp" "$DIR/.env"
 }
+
+# reload_dbus makes the system bus read its policy files again.
+reload_dbus() {
+	dbus-send --system --type=method_call --dest=org.freedesktop.DBus / org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 ||
+		systemctl reload dbus >/dev/null 2>&1 || true
+}
+
+if [ "$UNINSTALL" = 1 ]; then
+	[ -f "$DIR/compose.yaml" ] || die "no installation in $DIR"
+	compose down --remove-orphans || true
+	if [ -f "$POLICY" ]; then
+		rm -f "$POLICY"
+		reload_dbus
+		echo "aether-edge: removed the D-Bus rule $POLICY"
+	fi
+	if [ -f "$DIR/.ble-user" ]; then
+		u=$(cat "$DIR/.ble-user")
+		case "$u" in aether-edge) userdel "$u" >/dev/null 2>&1 || deluser "$u" >/dev/null 2>&1 || true ;; esac
+		rm -f "$DIR/.ble-user"
+	fi
+	echo "aether-edge: stopped and removed. $DIR is kept (it holds the credentials and any Zigbee2MQTT network key): delete it yourself when done."
+	exit 0
+fi
 
 if [ "$UPDATE" = 1 ]; then
 	[ -f "$DIR/.env" ] || die "no installation in $DIR (run the installer with an install code first)"
@@ -111,11 +163,59 @@ chmod 700 "$DIR"
 set -- install --server "$ORIGIN" --dir /out --image "$IMAGE" --z2m-image "$Z2M_IMAGE"
 [ -z "$ZIGBEE" ] || set -- "$@" --zigbee "$ZIGBEE"
 [ -z "$ZIGBEE_UI" ] || set -- "$@" --zigbee-ui "$ZIGBEE_UI"
+[ "$BLE" = 0 ] || set -- "$@" --ble
 AETHER_INSTALL_CODE=$CODE
 export AETHER_INSTALL_CODE
 docker run --rm --user 0:0 --read-only --cap-drop ALL --security-opt no-new-privileges \
 	--network host -e AETHER_INSTALL_CODE -v "$DIR:/out" "$IMAGE" "$@"
 unset AETHER_INSTALL_CODE CODE
+
+# Bluetooth access over D-Bus. The rule below lets the agent's uid call only what it uses: discovery, connect and
+# disconnect, GATT write and notifications, and reading objects and properties. Nothing else of BlueZ (no pairing
+# agent, no advertising, no adapter settings) and nothing else on the system bus. The rule is only as narrow as the
+# host's own policy: where BlueZ's policy already lets every local user call org.bluez (upstream's default), it adds
+# nothing and cannot take that away; docs/platform/aether-edge-install.md describes the AppArmor option for that case.
+if [ "$BLE" = 1 ]; then
+	# The uid is the container's; give it a name of its own on the host so no other account shares it by accident.
+	if ! getent passwd "$AGENT_UID" >/dev/null 2>&1; then
+		if useradd --system --uid "$AGENT_UID" --no-create-home --shell /usr/sbin/nologin aether-edge >/dev/null 2>&1 ||
+			adduser -S -D -H -u "$AGENT_UID" -s /sbin/nologin aether-edge >/dev/null 2>&1; then
+			echo aether-edge >"$DIR/.ble-user"
+		fi
+	else
+		owner=$(getent passwd "$AGENT_UID" | cut -d: -f1)
+		[ "$owner" = aether-edge ] || echo "aether-edge: note: uid $AGENT_UID belongs to '$owner' on this host; the Bluetooth rule applies to it as well" >&2
+	fi
+	cat >"$POLICY" <<'POLICY_EOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<!-- Written by the Aether Edge installer for Bluetooth, removed when it uninstalls. The agent (uid 10001) may make
+     exactly the BlueZ calls it uses to scan for and talk to Tuya BLE devices. (No double hyphen in an XML comment.) -->
+<busconfig>
+  <policy user="10001">
+    <allow send_destination="org.bluez" send_interface="org.bluez.Adapter1" send_member="SetDiscoveryFilter"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.Adapter1" send_member="StartDiscovery"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.Adapter1" send_member="StopDiscovery"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.Device1" send_member="Connect"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.Device1" send_member="Disconnect"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.GattCharacteristic1" send_member="WriteValue"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.GattCharacteristic1" send_member="StartNotify"/>
+    <allow send_destination="org.bluez" send_interface="org.bluez.GattCharacteristic1" send_member="StopNotify"/>
+    <allow send_destination="org.bluez" send_interface="org.freedesktop.DBus.ObjectManager" send_member="GetManagedObjects"/>
+    <allow send_destination="org.bluez" send_interface="org.freedesktop.DBus.Properties" send_member="Get"/>
+    <allow send_destination="org.bluez" send_interface="org.freedesktop.DBus.Properties" send_member="GetAll"/>
+  </policy>
+</busconfig>
+POLICY_EOF
+	chmod 644 "$POLICY"
+	reload_dbus
+	echo "aether-edge: wrote the D-Bus rule $POLICY for the agent's Bluetooth calls"
+	for f in /usr/share/dbus-1/system.d/bluetooth.conf /etc/dbus-1/system.d/bluetooth.conf; do
+		[ -r "$f" ] || continue
+		if tr -d '\n' <"$f" | grep -q '<policy context="default">[^<]*\(<[^/p][^>]*>[^<]*\)*<allow send_destination="org.bluez"/>'; then
+			echo "aether-edge: note: $f lets every local user call BlueZ, so the rule above narrows nothing on this host (see the AppArmor option in the docs)" >&2
+		fi
+	done
+fi
 
 compose pull --quiet
 compose up -d --remove-orphans

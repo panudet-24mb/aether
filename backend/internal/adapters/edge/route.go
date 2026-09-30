@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -32,6 +33,8 @@ const (
 	MaxLAN = 500
 	// MaxDPS caps the data points of one state message (Tuya ids are 1..255).
 	MaxDPS = 255
+	// MaxBLE caps one Bluetooth sightings list (Tuya BLE devices heard advertising).
+	MaxBLE = 200
 )
 
 var devicePattern = regexp.MustCompile(`^[a-z0-9]{16,32}$`)
@@ -48,6 +51,8 @@ const (
 	Discovery
 	State
 	Availability
+	// BLESightings is the agent's list of Tuya BLE devices it hears advertising (aether/edge/<gw>/ble).
+	BLESightings
 )
 
 // Message is one routed topic. Device is the Tuya device id for State and Availability.
@@ -79,6 +84,9 @@ func Route(topic string) (string, Message, error) {
 		return gateway, m, nil
 	case "discovery":
 		m.Kind = Discovery
+		return gateway, m, nil
+	case "ble":
+		m.Kind = BLESightings
 		return gateway, m, nil
 	}
 	device, leaf, found := strings.Cut(rest, "/")
@@ -125,6 +133,25 @@ func SetPayload(wire json.RawMessage) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// SetDeadline adds to a command's wire form until when the agent may deliver it: "expires_at" (server time,
+// RFC 3339 with milliseconds) and "ttl_ms" (the same, relative to publishing). The agent takes the earlier of
+// expires_at and its own receive time plus ttl_ms, so neither a slow broker nor a host clock that runs behind can make
+// it actuate after the server gave up; a host clock that runs ahead makes it drop commands (it logs so). Agents
+// before 0.2 ignore both fields.
+func SetDeadline(payload []byte, now time.Time, ttl time.Duration) ([]byte, error) {
+	var obj struct {
+		DPS json.RawMessage `json:"dps"`
+	}
+	if json.Unmarshal(payload, &obj) != nil || len(obj.DPS) == 0 || ttl <= 0 {
+		return nil, domain.ErrInvalid
+	}
+	return json.Marshal(struct {
+		DPS       json.RawMessage `json:"dps"`
+		ExpiresAt string          `json:"expires_at"`
+		TTLMS     int64           `json:"ttl_ms"`
+	}{obj.DPS, now.Add(ttl).UTC().Format("2006-01-02T15:04:05.000Z07:00"), ttl.Milliseconds()})
+}
+
 // ParseOnline reads a status or availability payload: {"state":"online"} or the bare string.
 func ParseOnline(b []byte) (online bool, reason string, ok bool) {
 	var obj struct {
@@ -164,12 +191,26 @@ const (
 
 var reasons = map[string]bool{ReasonUnreachable: true, ReasonAuthFailed: true, ReasonKeySuspect: true, ReasonBusy: true, ReasonNotFound: true}
 
-// HealthReport is the agent's periodic heartbeat.
+// HealthReport is the agent's periodic heartbeat. BLE is present only from agents that know about Bluetooth.
 type HealthReport struct {
-	Version          string `json:"version"`
-	DevicesConnected int    `json:"devices_connected"`
-	LANSeen          int    `json:"lan_seen"`
+	Version          string     `json:"version"`
+	DevicesConnected int        `json:"devices_connected"`
+	LANSeen          int        `json:"lan_seen"`
+	BLE              *BLEHealth `json:"ble,omitempty"`
 }
+
+// BLEHealth is the Bluetooth part of the heartbeat.
+type BLEHealth struct {
+	State          string `json:"state"` // off | ok | no_adapter | no_permission | error
+	Adapter        string `json:"adapter"`
+	Seen           int    `json:"seen"`
+	Connected      int    `json:"connected"`
+	SessionsOK     int    `json:"sessions_ok"`
+	SessionsFailed int    `json:"sessions_failed"`
+	Queue          int    `json:"queue"`
+}
+
+var bleStates = map[string]bool{"off": true, "ok": true, "no_adapter": true, "no_permission": true, "error": true}
 
 // ParseHealth reads the heartbeat; unknown fields are ignored and strings bounded.
 func ParseHealth(b []byte) (HealthReport, bool) {
@@ -184,7 +225,70 @@ func ParseHealth(b []byte) (HealthReport, bool) {
 	if h.LANSeen < 0 || h.LANSeen > 100000 {
 		h.LANSeen = 0
 	}
+	if b := h.BLE; b != nil {
+		if !bleStates[b.State] {
+			b.State = "error"
+		}
+		b.Adapter = clip(b.Adapter, 16)
+		b.Seen, b.Connected = bound(b.Seen, 100000), bound(b.Connected, 100)
+		b.SessionsOK, b.SessionsFailed, b.Queue = bound(b.SessionsOK, 1<<30), bound(b.SessionsFailed, 1<<30), bound(b.Queue, 100000)
+	}
 	return h, true
+}
+
+func bound(n, max int) int {
+	if n < 0 || n > max {
+		return 0
+	}
+	return n
+}
+
+// BLESighting is one Tuya BLE device the agent heard advertising. It carries what the advertisement says without
+// a connection: the address, the device uuid (decrypted with the product id), the product, the protocol version,
+// whether it is bound to an account, whether it uses the FD50 service, and the signal strength.
+type BLESighting struct {
+	MAC       string `json:"mac"`
+	UUID      string `json:"uuid"`
+	ProductID string `json:"product_id"`
+	Protocol  int    `json:"proto"`
+	Bound     bool   `json:"bound"`
+	FD50      bool   `json:"fd50"`
+	RSSI      *int   `json:"rssi"`
+}
+
+var (
+	macPattern   = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
+	tokenPattern = regexp.MustCompile(`^[A-Za-z0-9]{0,64}$`)
+)
+
+// ValidMAC reports a Bluetooth address as Aether stores it: lower-case hex pairs joined by colons.
+func ValidMAC(s string) bool { return macPattern.MatchString(s) }
+
+// ParseBLESightings reads the agent's Bluetooth sightings list. Malformed entries are skipped (an address that is
+// not one, a uuid or product id with other than letters and digits, an impossible protocol); a signal strength out
+// of range is dropped, not the entry. At most MaxBLE are returned, each address once.
+func ParseBLESightings(b []byte) ([]BLESighting, error) {
+	var raw []BLESighting
+	if e := json.Unmarshal(b, &raw); e != nil {
+		return nil, domain.ErrInvalid
+	}
+	out := []BLESighting{}
+	seen := map[string]bool{}
+	for _, s := range raw {
+		s.MAC = strings.ToLower(strings.TrimSpace(s.MAC))
+		if !ValidMAC(s.MAC) || seen[s.MAC] || !tokenPattern.MatchString(s.UUID) || !tokenPattern.MatchString(s.ProductID) || s.Protocol < 0 || s.Protocol > 15 {
+			continue
+		}
+		if s.RSSI != nil && (*s.RSSI < -127 || *s.RSSI > 20) {
+			s.RSSI = nil
+		}
+		seen[s.MAC] = true
+		out = append(out, s)
+		if len(out) == MaxBLE {
+			break
+		}
+	}
+	return out, nil
 }
 
 // LANDevice is one Tuya device the agent saw broadcasting on its LAN.

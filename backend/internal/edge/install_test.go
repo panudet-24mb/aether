@@ -223,21 +223,44 @@ func TestAgentDependencies(t *testing.T) {
 	if _, e := exec.LookPath("go"); e != nil {
 		t.Fatal("go toolchain not on PATH")
 	}
-	out, e := exec.Command("go", "list", "-deps", "aether/backend/cmd/aether-edge").CombinedOutput()
-	if e != nil {
-		t.Fatalf("go list: %v\n%s", e, out)
-	}
-	for _, dep := range strings.Fields(string(out)) {
-		switch {
-		case strings.HasPrefix(dep, "aether/backend/"):
-			switch dep {
-			case "aether/backend/cmd/aether-edge", "aether/backend/internal/edge", "aether/backend/internal/tuyalocal":
-			default:
-				t.Errorf("agent imports server package %s", dep)
+	// The image is built for Linux, where the Bluetooth radio (BlueZ over D-Bus) is compiled in: check both the
+	// host's build and Linux's.
+	for _, goos := range []string{"", "linux"} {
+		cmd := exec.Command("go", "list", "-deps", "aether/backend/cmd/aether-edge")
+		if goos != "" {
+			cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=arm64")
+		}
+		// Stdout only: "go: downloading …" lines on stderr are not packages.
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, e := cmd.Output()
+		if e != nil {
+			t.Fatalf("go list (%s): %v\n%s", goos, e, stderr.String())
+		}
+		for _, dep := range strings.Fields(string(out)) {
+			switch {
+			case strings.HasPrefix(dep, "aether/backend/"):
+				switch dep {
+				case "aether/backend/cmd/aether-edge", "aether/backend/internal/edge", "aether/backend/internal/edge/ble",
+					"aether/backend/internal/tuyalocal", "aether/backend/internal/tuyable":
+				default:
+					t.Errorf("agent imports server package %s", dep)
+				}
+			case strings.HasPrefix(dep, "gorm.io/"), strings.HasPrefix(dep, "github.com/gofiber/"), strings.HasPrefix(dep, "github.com/jackc/"),
+				strings.HasPrefix(dep, "github.com/golang-jwt/"):
+				t.Errorf("agent imports server dependency %s", dep)
+			case strings.Contains(strings.SplitN(dep, "/", 2)[0], "."):
+				// Third-party code in the image is only what it needs: MQTT (paho and what it pulls in) and, for
+				// Bluetooth, the BlueZ client and D-Bus.
+				allowed := false
+				for _, prefix := range []string{"github.com/eclipse/paho.mqtt.golang", "github.com/gorilla/websocket", "golang.org/x/net/",
+					"golang.org/x/sync/", "tinygo.org/x/bluetooth", "github.com/godbus/dbus/v5"} {
+					allowed = allowed || strings.HasPrefix(dep, prefix)
+				}
+				if !allowed {
+					t.Errorf("agent (%s) imports unexpected dependency %s", goos, dep)
+				}
 			}
-		case strings.HasPrefix(dep, "gorm.io/"), strings.HasPrefix(dep, "github.com/gofiber/"), strings.HasPrefix(dep, "github.com/jackc/"),
-			strings.HasPrefix(dep, "github.com/golang-jwt/"):
-			t.Errorf("agent imports server dependency %s", dep)
 		}
 	}
 }

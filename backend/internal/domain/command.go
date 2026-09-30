@@ -56,7 +56,10 @@ const (
 const (
 	CommandTTL           = 10 * time.Second
 	CommandConfirmWindow = 10 * time.Second
-	CommandLateConfirm   = 60 * time.Second
+	// CommandConfirmWindowBLE is the confirm window of a command to a Tuya BLE device: the agent may have to wait
+	// for it to advertise, then connect and authenticate before it can write (docs/platform/tuya-ble.md).
+	CommandConfirmWindowBLE = 45 * time.Second
+	CommandLateConfirm      = 60 * time.Second
 	// CommandTenantPerMinute caps commands per workspace, whatever their source.
 	CommandTenantPerMinute = 60
 )
@@ -85,6 +88,20 @@ type Command struct {
 	// edge command in the device's own terms ({"dps":{"1":true}}), computed when it was queued.
 	Transport string          `json:"transport,omitempty"`
 	Wire      json.RawMessage `json:"-"`
+	// ConfirmSec is how long a sent command waits for its confirming report (CommandConfirmWindow, or
+	// CommandConfirmWindowBLE); an edge command tells the agent to drop it before then (AgentDeadline).
+	ConfirmSec int `json:"-"`
+}
+
+// AgentTTL is how long after publishing an Aether Edge may still deliver a command: two thirds of its confirm
+// window, so a delivery the agent starts at the last moment (a BLE write takes up to 10 s) is still confirmed in
+// time and a command the server already gave up on is never actuated.
+func (c Command) AgentTTL() time.Duration {
+	window := time.Duration(c.ConfirmSec) * time.Second
+	if window <= 0 {
+		window = CommandConfirmWindow
+	}
+	return window * 2 / 3
 }
 
 // CommandRequest is what a caller asks for; the repository validates it against the device's definition.

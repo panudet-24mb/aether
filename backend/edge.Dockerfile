@@ -1,7 +1,8 @@
 # Aether Edge agent image (docs/platform/aether-edge.md). Built for linux/amd64 and linux/arm64 by
 # .github/workflows/edge.yml; locally: docker build -f backend/edge.Dockerfile backend
 #
-# Only cmd/aether-edge is compiled: the agent imports no server code (TestAgentDependencies).
+# Only cmd/aether-edge is compiled: the agent imports no server code (TestAgentDependencies). internal/edge/ble
+# reaches the host's Bluetooth through BlueZ over D-Bus in pure Go (tinygo.org/x/bluetooth, godbus): still CGO off.
 FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -12,6 +13,7 @@ RUN go mod download
 COPY cmd/aether-edge ./cmd/aether-edge
 COPY internal/edge ./internal/edge
 COPY internal/tuyalocal ./internal/tuyalocal
+COPY internal/tuyable ./internal/tuyable
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -ldflags="-s -w -X aether/backend/internal/edge.Version=${VERSION}" -o /out/aether-edge ./cmd/aether-edge
 

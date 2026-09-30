@@ -46,6 +46,25 @@ Aether Edge คือโปรแกรมที่วางไว้ในอ�
 - ตั้งค่าไว้ให้ต่อ SLZB ด้วย `tcp://<IP>:6638` และ `adapter: ember` แล้ว
 - ไฟล์ `zigbee2mqtt/configuration.yaml` ถูกสร้าง **ครั้งแรกครั้งเดียว** เพราะ Zigbee2MQTT เก็บ network key ไว้ในไฟล์นี้ ถ้าไฟล์หาย ต้องจับคู่อุปกรณ์ Zigbee ใหม่ทั้งหมด รหัส MQTT แยกอยู่ใน `zigbee2mqtt/secret.yaml` ซึ่งเขียนใหม่ทุกครั้งที่ติดตั้ง
 
+## ใช้อุปกรณ์ Tuya Bluetooth (ยังไม่ยืนยันกับเครื่องจริง)
+
+ใช้ได้เมื่อเซิร์ฟเวอร์ Aether เปิด `EDGE_BLE=true` และใช้ image ของ Aether Edge รุ่นที่มี Bluetooth แล้วเท่านั้น (รายละเอียดใน [tuya-ble.md](tuya-ble.md))
+
+1. ที่ Pi ติดตั้ง BlueZ แล้วเปิดใช้:
+   ```sh
+   sudo apt install bluez
+   sudo systemctl enable --now bluetooth
+   sudo rfkill unblock bluetooth
+   ```
+2. เพิ่ม `--ble` ในคำสั่งติดตั้ง เช่น `... | sudo sh -s -- --ble` (ใช้คู่กับ `--zigbee` ได้)
+   - สคริปต์ตรวจก่อนว่ามี D-Bus (`/run/dbus/system_bus_socket`), bluetoothd ทำงานอยู่ และ Bluetooth ไม่ถูก rfkill บล็อก ถ้าไม่ผ่านจะหยุดก่อนใช้โค้ด
+   - container ยังตัดสิทธิ์ทั้งหมด (`cap_drop: ALL`) แค่ mount `/run/dbus` แบบอ่านอย่างเดียว เพื่อคุยกับ bluetoothd
+   - สคริปต์เขียน `/etc/dbus-1/system.d/aether-edge-bluetooth.conf` อนุญาตให้ uid 10001 (โปรแกรม Aether Edge) เรียก BlueZ ได้เฉพาะคำสั่งที่ใช้จริง (สแกน, เชื่อมต่อ, เขียน/รับค่า GATT, อ่านสถานะ) และสร้างบัญชีระบบ `aether-edge` ให้ uid นี้ถ้ายังไม่มี
+   - **ข้อจำกัด:** ถ้า BlueZ ของเครื่องเปิดให้ผู้ใช้ทุกคนเรียกได้อยู่แล้ว (ค่าเริ่มต้นของ BlueZ) กฎนี้จำกัดอะไรไม่ได้ สคริปต์จะเตือน ทางเลือกคือโปรไฟล์ AppArmor (ดู [tuya-ble.md](tuya-ble.md))
+   - ถอนการติดตั้ง: `... | sudo sh -s -- --uninstall` หยุดโปรแกรม ลบไฟล์กฎ D-Bus และบัญชี `aether-edge` (โฟลเดอร์ `/opt/aether-edge` ยังอยู่ ให้ลบเอง)
+3. Bluetooth ในตัว Pi ต่อพร้อมกันได้ประมาณ 1 เครื่อง ถ้าใช้ USB dongle (CSR8510 / BCM20702) ตั้ง `BLE_MAX_CONNECTIONS=3` ใน `/opt/aether-edge/.env` แล้ว `docker compose --project-directory /opt/aether-edge up -d`
+4. อุปกรณ์ BLE ต้องไม่ถูกจับคู่อยู่กับ Tuya hub และปิดแอป Smart Life ระหว่างใช้ (อุปกรณ์รับการเชื่อมต่อได้ทีละตัว) · อุปกรณ์ Bluetooth mesh ใช้ไม่ได้ ให้ใช้โหมด Tuya Cloud
+
 ## อัปเดตเวอร์ชัน
 
 ```sh

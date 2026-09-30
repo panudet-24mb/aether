@@ -1,9 +1,10 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, FileClock, RefreshCw, ScrollText, UserX } from "lucide-react";
+import { DatabaseBackup, Eye, FileClock, RefreshCw, ScrollText, UserX } from "lucide-react";
 import "./privacy.css";
 import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
+import { SystemStatusPanel } from "../system/system-status";
 
 /** One read of personal data (GET /api/v1/privacy/access-log). */
 type AccessRow = { id: string; at: string; actor_id: string; actor_name: string | null; resource: string; subject_kind: string; subject_id: string; client_ip: string | null };
@@ -12,7 +13,8 @@ type AuditRow = { id: string; at: string; actor_id: string; actor_name: string |
 /** One erasure (GET /api/v1/privacy/erasures). */
 type ErasureRow = { id: string; at: string; actor_id: string | null; subject_kind: string; subject_ref: string; counts: Record<string, unknown> };
 type Page<T> = { items: T[]; next?: { before_at: string; before_id: string } };
-type Tab = "access" | "audit" | "erasures";
+export type PrivacyTab = "access" | "audit" | "erasures" | "system";
+type Tab = PrivacyTab;
 
 const RESOURCE_LABEL: Record<string, string> = {
   members: "รายชื่อสมาชิก",
@@ -39,10 +41,10 @@ const who = (name: string | null, id: string | null) => (id === null ? "ผู�
  * The owner's privacy view: who read personal data (the read-access log), who changed what (the audit trail) and
  * what was erased. Owner only; the server refuses everybody else and logs this view's own reads.
  */
-export default function PrivacyCenter({ getToken, refresh, onUnauthorized }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void }) {
+export default function PrivacyCenter({ getToken, refresh, onUnauthorized, initialTab = "access" }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; initialTab?: Tab }) {
   const handlers = useLatest({ getToken, refresh });
   const [client] = useState(() => createClientFrom(handlers));
-  const [tab, setTab] = useState<Tab>("access");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [resource, setResource] = useState("");
   const [action, setAction] = useState("");
   const [from, setFrom] = useState("");
@@ -89,7 +91,7 @@ export default function PrivacyCenter({ getToken, refresh, onUnauthorized }: { g
         } else if (tab === "audit") {
           const page = await client.raw<Page<AuditRow>>(`/privacy/audit?${query(more ? audit.next : undefined)}`);
           setAudit(more ? { items: [...audit.items, ...page.items], next: page.next } : page);
-        } else {
+        } else if (tab === "erasures") {
           setErasures((await client.raw<{ items: ErasureRow[] }>("/privacy/erasures")).items);
         }
         setError("");
@@ -128,9 +130,14 @@ export default function PrivacyCenter({ getToken, refresh, onUnauthorized }: { g
           <button type="button" className={tab === "erasures" ? "is-on" : ""} onClick={() => setTab("erasures")}>
             <UserX size={15} /> การลบข้อมูล
           </button>
-          <button type="button" className="pv-icon" onClick={() => void load(false)} disabled={busy} aria-label="โหลดใหม่" title="โหลดใหม่">
-            <RefreshCw size={15} />
+          <button type="button" className={tab === "system" ? "is-on" : ""} onClick={() => setTab("system")}>
+            <DatabaseBackup size={15} /> สถานะระบบ
           </button>
+          {tab !== "system" && (
+            <button type="button" className="pv-icon" onClick={() => void load(false)} disabled={busy} aria-label="โหลดใหม่" title="โหลดใหม่">
+              <RefreshCw size={15} />
+            </button>
+          )}
         </nav>
       </header>
       {error && (
@@ -139,11 +146,12 @@ export default function PrivacyCenter({ getToken, refresh, onUnauthorized }: { g
         </div>
       )}
       <div className="pv-body">
-        <p className="pv-note">
+        {tab === "system" && <SystemStatusPanel />}
+        {tab !== "system" && <p className="pv-note">
           <ScrollText size={14} /> ระบบบันทึกทุกครั้งที่มีคนเปิดดูข้อมูลส่วนบุคคล (รายชื่อสมาชิก ตำแหน่งและประวัติของแท็กที่มีคนสวม การแจ้งเตือน) · การอ่านซ้ำเรื่องเดิมภายใน 10 นาทีนับเป็นครั้งเดียว ·
           ถ้าบันทึกไม่ได้ ระบบจะไม่ส่งข้อมูลออกไป · เก็บไว้ตาม ACCESS_LOG_RETENTION_DAYS (ค่าเริ่มต้น 400 วัน)
-        </p>
-        {tab !== "erasures" && (
+        </p>}
+        {(tab === "access" || tab === "audit") && (
           <div className="pv-toolbar">
             {tab === "access" ? (
               <label>

@@ -41,6 +41,31 @@ func TestScript(t *testing.T) {
 	if strings.Contains(s, "__") {
 		t.Fatal("placeholder left in the script")
 	}
+	// The D-Bus rule allows exactly the BlueZ calls the agent makes, for its uid only; nothing that pairs,
+	// advertises or changes the adapter (Properties.Set would let it power it off or make it discoverable).
+	for _, want := range []string{`<policy user="10001">`, `send_member="SetDiscoveryFilter"`, `send_member="StartDiscovery"`, `send_member="StopDiscovery"`,
+		`send_interface="org.bluez.Device1" send_member="Connect"`, `send_interface="org.bluez.Device1" send_member="Disconnect"`,
+		`send_member="WriteValue"`, `send_member="StartNotify"`, `send_member="StopNotify"`, `send_member="GetManagedObjects"`,
+		`send_interface="org.freedesktop.DBus.Properties" send_member="Get"/>`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("D-Bus rule lacks %s", want)
+		}
+	}
+	policy := s[strings.Index(s, "<busconfig>"):strings.Index(s, "</busconfig>")]
+	for _, banned := range []string{"AgentManager1", "LEAdvertisingManager1", "GattManager1", `send_member="Set"`, `send_destination="org.bluez"/>`,
+		"context=\"default\"", "ReadValue", "Pair"} {
+		if strings.Contains(policy, banned) {
+			t.Fatalf("D-Bus rule allows %s", banned)
+		}
+	}
+	// XML forbids "--" inside a comment; dbus-daemon then ignores the whole file.
+	xml := s[strings.Index(s, "<!DOCTYPE busconfig"):strings.Index(s, "</busconfig>")]
+	if strings.Contains(strings.NewReplacer("<!--", "", "-->", "").Replace(xml), "--") {
+		t.Fatal("the D-Bus rule is not well-formed XML")
+	}
+	if strings.Count(policy, "<allow ") != 11 || strings.Contains(policy, "<deny") {
+		t.Fatalf("D-Bus rule:\n%s", policy)
+	}
 	digest := testImage + "@sha256:" + strings.Repeat("a", 64)
 	if _, e := Script("https://aether.example.com", digest, testZ2M); e != nil {
 		t.Fatalf("digest-pinned image refused: %v", e)
@@ -107,6 +132,8 @@ func TestScriptArguments(t *testing.T) {
 		"--dir /opt/../etc":                     "must not contain ..",
 		"--dir /boot/efi":                       "system directory",
 		"--dir /dev/shm":                        "system directory",
+		// --ble checks the host before anything is pulled or a code is spent: no bus, no bluetoothd, or blocked.
+		"--ble": "--ble: ",
 	}
 	for args, want := range cases {
 		if out := run(strings.Fields(args)...); !strings.Contains(out, want) {
@@ -184,5 +211,20 @@ exit 0
 	}
 	if strings.Contains(string(env), "old") {
 		t.Fatalf("old image kept:\n%s", env)
+	}
+	// --uninstall stops the stack and keeps the directory (credentials, Zigbee network key).
+	os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("name: x\n"), 0o600)
+	os.Truncate(log, 0)
+	cmd = exec.Command("sh", path, "--uninstall", "--dir", dir)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	out, e := cmd.CombinedOutput()
+	if e != nil || !strings.Contains(string(out), "is kept") {
+		t.Fatalf("uninstall: %v\n%s", e, out)
+	}
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "[down]") {
+		t.Fatalf("uninstall did not stop the stack:\n%s", b)
+	}
+	if _, e := os.Stat(filepath.Join(dir, ".env")); e != nil {
+		t.Fatal("uninstall removed the directory")
 	}
 }

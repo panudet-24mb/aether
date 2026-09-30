@@ -5955,7 +5955,7 @@
     ],
     "responses": {
      "200": {
-      "description": "EdgeStatus"
+      "description": "EdgeStatus (with ble_state, ble_seen, ble_connected, ble_devices, capabilities)"
      },
      "404": {
       "description": "not a live Aether Edge gateway in scope"
@@ -6117,7 +6117,7 @@
   },
   "/ingest/gateways/{id}/edge/config": {
    "get": {
-    "summary": "The Aether Edge agent's configuration: its registered Tuya devices with local keys, protocol version, address and refresh data points. ETag = revision; If-None-Match gives 304.",
+    "summary": "The Aether Edge agent's configuration: its registered Tuya devices with local keys, protocol version, address and refresh data points. BLE devices (transport \"ble\": address, uuid, sec_key, advertised protocol, mode, poll seconds, data-point types) only when the server has EDGE_BLE on and the agent sends X-Aether-Edge-Caps: ble. ETag = revision, plus \";ble\" when BLE devices are included; If-None-Match gives 304.",
     "operationId": "get__ingest_gateways_id_edge_config",
     "security": [
      {
@@ -6133,11 +6133,20 @@
        "type": "string",
        "format": "uuid"
       }
+     },
+     {
+      "name": "X-Aether-Edge-Caps",
+      "in": "header",
+      "required": false,
+      "description": "Comma-separated capabilities of the agent; only \"ble\" is known.",
+      "schema": {
+       "type": "string"
+      }
      }
     ],
     "responses": {
      "200": {
-      "description": "{revision, devices:[{id,key,version,ip,dev22,refresh_dps}]}",
+      "description": "{revision, devices:[{id,key,version,ip,dev22,refresh_dps, and for BLE: transport,mac,uuid,sec_key,product_id,protocol,mode,poll,dp_types}]}",
       "content": {
        "application/json": {
         "schema": {
@@ -7063,6 +7072,39 @@
       }
      }
     }
+   }
+  },
+  "/api/v1/system/status": {
+   "get": {
+    "summary": "Backup and point-in-time-recovery health of this deployment, from the pitr service's status file (owner; with OPS_STATUS_TENANT set, owners of that workspace only). configured=false without OPS_STATUS_FILE.",
+    "operationId": "get__api_v1_system_status",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SystemStatus"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
    }
   }
  },
@@ -8937,6 +8979,127 @@
      },
      "verdict": {
       "type": "string"
+     }
+    }
+   },
+   "OpsAlert": {
+    "type": "object",
+    "required": [
+     "key",
+     "severity",
+     "message"
+    ],
+    "properties": {
+     "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+     },
+     "severity": {
+      "type": "string",
+      "enum": [
+       "warn",
+       "alert"
+      ]
+     },
+     "since": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "message": {
+      "type": "string",
+      "maxLength": 301
+     }
+    }
+   },
+   "BackupStatus": {
+    "type": "object",
+    "required": [
+     "overall",
+     "stale",
+     "alerts",
+     "pitr"
+    ],
+    "properties": {
+     "overall": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "warn",
+       "alert"
+      ]
+     },
+     "checked_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "stale": {
+      "type": "boolean"
+     },
+     "alerts": {
+      "type": "array",
+      "maxItems": 33,
+      "items": {
+       "$ref": "#/components/schemas/OpsAlert"
+      }
+     },
+     "pitr": {
+      "type": "object",
+      "required": [
+       "backups",
+       "wal_waiting",
+       "pg_wal_mb",
+       "repo_free_percent"
+      ],
+      "properties": {
+       "restore_from": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "newest_backup": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "backups": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "last_archived_at": {
+        "type": "string",
+        "format": "date-time"
+       },
+       "wal_waiting": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "pg_wal_mb": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "repo_free_percent": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100
+       }
+      }
+     },
+     "dump_newest": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   },
+   "SystemStatus": {
+    "type": "object",
+    "required": [
+     "configured"
+    ],
+    "properties": {
+     "configured": {
+      "type": "boolean",
+      "description": "false: OPS_STATUS_FILE is not set on this deployment and backup is absent"
+     },
+     "backup": {
+      "$ref": "#/components/schemas/BackupStatus"
      }
     }
    }

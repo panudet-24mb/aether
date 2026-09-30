@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"aether/backend/internal/edge"
+	"aether/backend/internal/edge/ble"
 	"aether/backend/internal/tuyalocal"
 )
 
@@ -65,6 +66,10 @@ func run() int {
 	}
 	defer bus.Close()
 	agent = edge.NewAgent(cfg, bus, poller, tuyalocal.Listen, edge.Defaults, log)
+	if cfg.BLEEnabled {
+		// Tuya BLE through the host's Bluetooth (BlueZ over D-Bus; docs/platform/tuya-ble.md).
+		agent.WithBLE(ble.NewSystemRadio(cfg.BLEAdapter), cfg.BLEMaxConnections, ble.Defaults)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	log.Info("Aether Edge starting", "version", edge.Version, "config", cfg.String())
@@ -100,12 +105,13 @@ func install(args []string) int {
 	image := fs.String("image", "", "aether-edge image reference to pin")
 	z2mImage := fs.String("z2m-image", "", "Zigbee2MQTT image reference to pin")
 	webCA := fs.String("web-ca", "", "PEM file of a private CA for Aether's web front")
+	withBLE := fs.Bool("ble", false, "reach Tuya BLE devices with this host's Bluetooth (BlueZ over D-Bus)")
 	if e := fs.Parse(args); e != nil {
 		return 2
 	}
 	// The code comes from the environment only: never an argument, so it is not in any process list.
 	o := edge.InstallOptions{Server: *server, Code: os.Getenv("AETHER_INSTALL_CODE"), Dir: *dir, Zigbee: *zigbee, ZigbeeUI: *zigbeeUI,
-		Image: *image, Z2MImage: *z2mImage, WebCAFile: *webCA, Out: os.Stdout}
+		Image: *image, Z2MImage: *z2mImage, WebCAFile: *webCA, BLE: *withBLE, Out: os.Stdout}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if e := edge.Install(ctx, o); e != nil {

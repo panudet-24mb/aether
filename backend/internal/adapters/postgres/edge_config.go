@@ -39,9 +39,15 @@ func (r *Repository) EdgeStatus(ctx context.Context, p domain.Principal, gateway
 			DevicesConnected, LANSeen            int
 			ConfigRevision                       int64
 			LANDevices, Imported, Registered     int
+			BLEState                             string
+			BLESeen, BLEConnected, BLEDevices    int
+			Capabilities                         string
 		}
 		if e := tx.Raw(`SELECT coalesce(a.state,'') AS state,a.state_at,a.last_health_at,a.config_fetched_at AS config_fetched,coalesce(a.version,'') AS version,
       coalesce(a.devices_connected,0) AS devices_connected,coalesce(a.lan_seen,0) AS lan_seen,coalesce(a.config_revision,0) AS config_revision,
+      coalesce(a.ble_state,'') AS ble_state,coalesce(a.ble_seen,0) AS ble_seen,coalesce(a.ble_connected,0) AS ble_connected,
+      coalesce(array_to_string(a.capabilities,','),'') AS capabilities,
+      (SELECT count(*) FROM core.edge_ble_seen b WHERE b.gateway_id=g.id) AS ble_devices,
       (SELECT count(*) FROM core.edge_lan_devices l WHERE l.gateway_id=g.id) AS lan_devices,
       (SELECT count(*) FROM core.tuya_devices t WHERE t.gateway_id=g.id AND t.removed_at IS NULL) AS imported,
       (SELECT count(*) FROM core.tuya_devices t WHERE t.gateway_id=g.id AND t.removed_at IS NULL
@@ -57,6 +63,11 @@ func (r *Repository) EdgeStatus(ctx context.Context, p domain.Principal, gateway
 		out.State, out.StateAt, out.LastHealthAt, out.ConfigFetchedAt = row.State, row.StateAt, row.LastHealthAt, row.ConfigFetched
 		out.Version, out.DevicesConnected, out.LANSeen, out.ConfigRevision = row.Version, row.DevicesConnected, row.LANSeen, row.ConfigRevision
 		out.LANDevices, out.Imported, out.Registered = row.LANDevices, row.Imported, row.Registered
+		out.BLEState, out.BLESeen, out.BLEConnected, out.BLEDevices = row.BLEState, row.BLESeen, row.BLEConnected, row.BLEDevices
+		out.Capabilities = []string{}
+		if row.Capabilities != "" {
+			out.Capabilities = strings.Split(row.Capabilities, ",")
+		}
 		var keys []struct {
 			KeyStatus string
 			N         int
@@ -75,7 +86,7 @@ func (r *Repository) EdgeStatus(ctx context.Context, p domain.Principal, gateway
 // ForgetTuyaKey drops an imported device's local key. The agent stops connecting to it at its next config pull.
 func (r *Repository) ForgetTuyaKey(ctx context.Context, p domain.Principal, gateway, tuyaID string) error {
 	return classify(r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		res := tx.Exec(`UPDATE core.tuya_devices SET local_key_sealed=NULL,key_fingerprint='',key_status='missing',updated_at=now()
+		res := tx.Exec(`UPDATE core.tuya_devices SET local_key_sealed=NULL,sec_key_sealed=NULL,key_fingerprint='',key_status='missing',updated_at=now()
     WHERE gateway_id=? AND tuya_id=? AND removed_at IS NULL`, gateway, strings.ToLower(tuyaID))
 		if res.Error != nil {
 			return res.Error
@@ -248,8 +259,11 @@ func rotateGatewayToken(tx *gorm.DB, gateway, tokenDigest string) error {
 }
 
 // EdgeConfig is what an Aether Edge must connect to: the registered devices of its gateway that have an imported
-// key and can be reached locally, keys still sealed, and the configuration revision. The fetch is recorded.
-func (r *Repository) EdgeConfig(ctx context.Context, tenant, gateway string) (int64, []domain.EdgeSealedDevice, error) {
+// key and can be reached locally, keys still sealed, and the configuration revision. BLE devices are included only
+// when ble is set (the server's EDGE_BLE flag and the agent's announced capability); for them "reachable locally"
+// does not depend on the Wi-Fi verdict (battery sensors are reachable over BLE) but on an address or uuid to find
+// them by. The fetch is recorded with the capabilities the agent announced.
+func (r *Repository) EdgeConfig(ctx context.Context, tenant, gateway string, ble bool, capabilities []string) (int64, []domain.EdgeSealedDevice, error) {
 	var revision int64
 	out := []domain.EdgeSealedDevice{}
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
@@ -263,11 +277,13 @@ func (r *Repository) EdgeConfig(ctx context.Context, tenant, gateway string) (in
 		if models[0] != domain.EdgeGatewayModel {
 			return domain.ErrForbidden
 		}
-		if e := tx.Raw(`SELECT t.tuya_id AS id,t.local_key_sealed AS key_sealed,t.version,t.ip,t.device22,t.spec
+		if e := tx.Raw(`SELECT t.tuya_id AS id,t.local_key_sealed AS key_sealed,t.version,t.ip,t.device22,t.spec,t.transport,t.ble_mac AS mac,t.ble_uuid AS uuid,t.product_id,
+      t.ble_protocol AS protocol,t.ble_mode AS mode,t.ble_poll_seconds AS poll_seconds,t.tuya_category,coalesce(t.sec_key_sealed,'') AS sec_key_sealed
     FROM core.tuya_devices t
-    WHERE t.gateway_id=? AND t.removed_at IS NULL AND t.local_key_sealed IS NOT NULL AND t.local_capable
+    WHERE t.gateway_id=? AND t.removed_at IS NULL AND t.local_key_sealed IS NOT NULL
+      AND ((t.transport<>'ble' AND t.local_capable) OR (? AND t.transport='ble' AND (t.ble_mac<>'' OR t.ble_uuid<>'')))
       AND EXISTS(SELECT 1 FROM core.devices d WHERE d.gateway_id=t.gateway_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL)
-    ORDER BY t.tuya_id LIMIT 500`, gateway).Scan(&out).Error; e != nil {
+    ORDER BY t.tuya_id LIMIT 500`, gateway, ble).Scan(&out).Error; e != nil {
 			return e
 		}
 		var revs []int64
@@ -277,8 +293,11 @@ func (r *Repository) EdgeConfig(ctx context.Context, tenant, gateway string) (in
 		if len(revs) == 1 {
 			revision = revs[0]
 		}
-		return tx.Exec(`INSERT INTO core.edge_agents(tenant_id,gateway_id,config_fetched_at,updated_at) VALUES(?,?,now(),now())
-    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET config_fetched_at=now()`, tenant, gateway).Error
+		if capabilities == nil {
+			capabilities = []string{}
+		}
+		return tx.Exec(`INSERT INTO core.edge_agents(tenant_id,gateway_id,config_fetched_at,capabilities,updated_at) VALUES(?,?,now(),?::text[],now())
+    ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET config_fetched_at=now(),capabilities=EXCLUDED.capabilities`, tenant, gateway, pgArray(capabilities)).Error
 	})
 	return revision, out, classify(e)
 }

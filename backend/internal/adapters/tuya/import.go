@@ -3,6 +3,7 @@ package tuya
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 )
 
 // Import is one device of a key import from the Tuya cloud. The local key is already sealed: the repository
@@ -48,3 +49,25 @@ func RefreshDPs(spec []DP) []int {
 	}
 	return out
 }
+
+// DPTypes lists each data point's type by id ("1" -> "bool"), which a Tuya BLE agent needs to encode a command:
+// over BLE every value carries its type byte.
+func DPTypes(spec []DP) map[string]string {
+	out := make(map[string]string, len(spec))
+	for _, d := range spec {
+		switch d.Type {
+		case "bool", "value", "enum", "string", "bitmap", "raw":
+			out[strconv.Itoa(d.ID)] = d.Type
+		}
+	}
+	return out
+}
+
+// lockCategories are the Tuya product categories of locks and safes (door locks, residential and business locks,
+// hotel locks, lock-with-camera models, access control, safe boxes). Over BLE they are read-only in Aether: their
+// data points carry unlock requests and member keys, and actuating them waits for an explicit decision.
+var lockCategories = map[string]bool{"ms": true, "jtmspro": true, "jtmsbh": true, "gyms": true, "hotelms": true, "bxx": true,
+	"videolock": true, "photolock": true, "mk": true, "ms_category": true}
+
+// LockCategory reports a Tuya lock or safe category.
+func LockCategory(category string) bool { return lockCategories[category] }

@@ -7,6 +7,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -30,11 +31,19 @@ type Config struct {
 	SampleMinIntervalSec int // store at most one environment sample per stream per interval (0 = every uplink)
 	BLEHistoryHours      int // raw BLE advertisement archive for Studio decoders, dropped by daily partition: up to 24 h more (default 24)
 	// PrivacyNoticeURL is the deployment's own privacy notice; empty means the built-in Thai template at /privacy.
-	PrivacyNoticeURL   string
+	PrivacyNoticeURL string
+	// OpsStatusFile is the backup/PITR health file the pitr service writes (OPS_STATUS_FILE, an absolute path);
+	// empty turns GET /api/v1/system/status off (development).
+	OpsStatusFile string
+	// OpsStatusTenant is the one workspace whose owners may see OpsStatusFile (OPS_STATUS_TENANT, a uuid): the
+	// status is about the whole deployment, not a workspace. Empty: every workspace owner may (a single-workspace
+	// deployment, which is what setup.py and create-owner.sh produce).
+	OpsStatusTenant    string
 	DiscoveryLimit     int  // streams per gateway for tags that are NOT registered devices (default 100)
 	AlertsShadow       bool // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
 	AutomationCommands bool // automations may command devices (action.command); off by default, see docs/platform/automation.md
 	TuyaCloud          bool // Tuya Cloud mode (TUYA_CLOUD): the tuya-cloud gateway model and profile exist; off by default
+	EdgeBLE            bool // Tuya BLE through Aether Edge (EDGE_BLE): the BLE profile exists and agents are sent BLE devices; off by default
 	// TuyaCloudPublicKey is the tuya-cloud worker's X25519 public key (TUYA_CLOUD_PUBLIC_KEY): the API seals project
 	// credentials to it and can never open them. Nil means linking is unavailable (tuya_cloud_unconfigured).
 	TuyaCloudPublicKey *[32]byte
@@ -115,6 +124,18 @@ func Load() (Config, error) {
 		}
 		c.PrivacyNoticeURL = u.String()
 	}
+	if raw := strings.TrimSpace(os.Getenv("OPS_STATUS_FILE")); raw != "" {
+		if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+			return c, errors.New("OPS_STATUS_FILE must be a clean absolute path")
+		}
+		c.OpsStatusFile = raw
+	}
+	if raw := strings.ToLower(strings.TrimSpace(os.Getenv("OPS_STATUS_TENANT"))); raw != "" {
+		if !security.ValidID(raw) {
+			return c, errors.New("OPS_STATUS_TENANT must be a workspace (tenant) uuid")
+		}
+		c.OpsStatusTenant = raw
+	}
 	if c.DiscoveryLimit, e = intEnv("DISCOVERY_LIMIT", 100, 0, 5000); e != nil {
 		return c, e
 	}
@@ -138,6 +159,13 @@ func Load() (Config, error) {
 		c.TuyaCloud = true
 	default:
 		return c, errors.New("TUYA_CLOUD must be true or false")
+	}
+	switch os.Getenv("EDGE_BLE") {
+	case "", "false":
+	case "true":
+		c.EdgeBLE = true
+	default:
+		return c, errors.New("EDGE_BLE must be true or false")
 	}
 	if raw := os.Getenv("TUYA_CLOUD_PUBLIC_KEY"); raw != "" {
 		if c.TuyaCloudPublicKey, e = security.ParseTuyaCloudKey(raw); e != nil {

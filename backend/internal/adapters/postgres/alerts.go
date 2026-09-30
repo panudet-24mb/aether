@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -238,8 +239,9 @@ const (
 )
 
 // updateZone smooths this gateway's RSSI for the tag and moves the wearable's zone when alerts.DecideZone says so.
-// It returns the zone event to record, or nil. The caller holds the per-tenant roaming lock.
-func updateZone(tx *gorm.DB, tenant, gateway, external string, rssi int, at time.Time) (*domain.DeviceEvent, error) {
+// It returns the zone event to record, or nil, and adds the move to moves. The caller holds the per-tenant roaming
+// lock.
+func updateZone(tx *gorm.DB, tenant, gateway, external string, rssi int, at time.Time, moves *presenceRows) (*domain.DeviceEvent, error) {
 	var own []struct {
 		RssiAvg *float64
 		RssiAt  *time.Time
@@ -312,6 +314,12 @@ func updateZone(tx *gorm.DB, tenant, gateway, external string, rssi int, at time
 	if !changed {
 		return nil, nil
 	}
+	// The twin's replay reads movement from core.presence_history (00046), written with the zone event.
+	var from *string
+	if prev.Gateway != "" {
+		from = &prev.Gateway
+	}
+	moves.add(external, &gateway, from, at, &avg)
 	var named []struct{ ID, Name string }
 	ids := []string{gateway}
 	if prev.Gateway != "" { // the first assignment has no previous zone
@@ -325,6 +333,49 @@ func updateZone(tx *gorm.DB, tenant, gateway, external string, rssi int, at time
 		name[n.ID] = n.Name
 	}
 	return &domain.DeviceEvent{EventType: domain.EventZone, OccurredAt: at, Detail: map[string]any{"to_gateway_id": gateway, "to": name[gateway], "from_gateway_id": prev.Gateway, "from": name[prev.Gateway], "rssi_avg": math.Round(avg*10) / 10}}, nil
+}
+
+// presenceRows are the transitions of worn tags one transaction adds to core.presence_history: the gateway (zone)
+// a tag is near now, nil when no gateway hears it any more, and the one it came from. Movement history is personal
+// data: it is only read through the twin's replay (access-logged) and goes with an erasure of the tag (00047).
+type presenceRows []presenceRow
+
+type presenceRow struct {
+	external      string
+	gateway, from *string
+	at            time.Time
+	rssi          any
+}
+
+func (m *presenceRows) add(external string, gateway, from *string, at time.Time, rssi *float64) {
+	var avg any
+	if rssi != nil {
+		avg = math.Round(*rssi*10) / 10
+	}
+	*m = append(*m, presenceRow{external: strings.ToLower(external), gateway: gateway, from: from, at: at, rssi: avg})
+}
+
+// flush writes them in one INSERT under one savepoint (one subtransaction per uplink, whatever the number of tags):
+// the replay's history must never cost the zone event, an SOS or anything else of the uplink.
+func (m presenceRows) flush(tx *gorm.DB, tenant string) error {
+	if len(m) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(m))
+	args := make([]any, 0, 6*len(m))
+	for _, row := range m {
+		values = append(values, "(?::uuid,?,?::timestamptz,?::uuid,?::uuid,?::real)")
+		args = append(args, tenant, row.external, row.at, row.gateway, row.from, row.rssi)
+	}
+	if e := tx.SavePoint("presence_history").Error; e != nil {
+		return e
+	}
+	if e := tx.Exec(`INSERT INTO core.presence_history(tenant_id,external_id,at,gateway_id,from_gateway_id,rssi_avg) VALUES `+strings.Join(values, ",")+`
+    ON CONFLICT DO NOTHING`, args...).Error; e != nil {
+		slog.Warn("presence history not recorded; the zone changes themselves are kept", "rows", len(m), "error", e.Error())
+		return tx.RollbackTo("presence_history").Error
+	}
+	return nil
 }
 
 const roamingEventWindow = 15 * time.Second
@@ -348,6 +399,8 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 	}
 	// Events written during this uplink, handed to the automation studio at the end of the function.
 	inserted := []domain.DeviceEvent{}
+	// Worn tags' zone changes, written together after the loop (presenceRows.flush).
+	moves := presenceRows{}
 	// Lock order matters: the roaming lock comes BEFORE the row locks on stream_state. Taken the other way round,
 	// two gateways hearing one wearable deadlock, and the rollback would drop every event of the uplink.
 	// Several gateways hear the same wearable: record a button press or tamper once, not once per gateway.
@@ -445,12 +498,21 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 			events = append(events, signalEvs...)
 		}
 		if roaming[sensor.ID] && sensor.Latest.RSSI != nil {
-			zone, e := updateZone(tx, tenant, gateway, sensor.ID, *sensor.Latest.RSSI, at)
+			zone, e := updateZone(tx, tenant, gateway, sensor.ID, *sensor.Latest.RSSI, at, &moves)
 			if e != nil {
 				return e
 			}
 			if zone != nil {
 				events = append(events, *zone)
+			} else if slices.ContainsFunc(events, func(ev domain.DeviceEvent) bool { return ev.EventType == domain.EventOnline }) {
+				// Back after an offline episode (which recorded "nowhere"), in the zone it had: record it there again.
+				var here []struct{ GatewayID *string }
+				if e := tx.Raw(`SELECT gateway_id::text AS gateway_id FROM core.presence_state WHERE external_id=?`, sensor.ID).Scan(&here).Error; e != nil {
+					return e
+				}
+				if len(here) == 1 && here[0].GatewayID != nil {
+					moves.add(sensor.ID, here[0].GatewayID, nil, at, nil)
+				}
 			}
 		}
 		// A door state that came from a taught signal (applyLearnedDoors set the metric before the
@@ -510,6 +572,9 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 				return e
 			}
 		}
+	}
+	if e := moves.flush(tx, tenant); e != nil {
+		return e
 	}
 	if opts.AlertsShadow {
 		return nil
@@ -584,6 +649,15 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 		if len(rules) == 0 {
 			return nil // nothing subscribed: do not write events nobody asked for
 		}
+		var roamingIDs []string
+		if e := tx.Raw(`SELECT lower(external_id) FROM core.devices WHERE roaming AND removed_at IS NULL LIMIT 1000`).Scan(&roamingIDs).Error; e != nil {
+			return e
+		}
+		roaming := map[string]bool{}
+		for _, id := range roamingIDs {
+			roaming[id] = true
+		}
+		moves := presenceRows{}
 		var rows []struct {
 			GatewayID, ExternalID, Name string
 			LastSeen                    time.Time
@@ -621,6 +695,12 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 				if e := insertEvent(tx, tenant, &ev); e != nil {
 					return e
 				}
+				// A worn tag nobody hears is nowhere: the replay shows it leaving its zone (it goes offline only on the
+				// gateway that heard it last, see the query above).
+				if roaming[strings.ToLower(row.ExternalID)] {
+					from := row.GatewayID
+					moves.add(row.ExternalID, nil, &from, now, nil)
+				}
 				count++
 			} else {
 				var events []eventRow
@@ -653,7 +733,7 @@ func (r *Repository) ScanOffline(ctx context.Context, tenant string, now time.Ti
 				return e
 			}
 		}
-		return nil
+		return moves.flush(tx, tenant)
 	})
 	return count, e
 }

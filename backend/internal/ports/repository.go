@@ -52,6 +52,11 @@ type Repository interface {
 	ListSites(context.Context, domain.Principal) ([]domain.Site, error)
 	GetSite(context.Context, domain.Principal, string) (domain.Site, error)
 	TwinState(context.Context, domain.Principal, string, string) (domain.TwinState, error)
+	TwinSettings(context.Context, domain.Principal) (domain.TwinSettings, error)
+	SetTwinSettings(context.Context, domain.Principal, domain.TwinSettings) (domain.TwinSettings, error)
+	TwinTimeline(ctx context.Context, p domain.Principal, siteID string, from, to time.Time, people string) (domain.TwinTimeline, error)
+	TwinReplay(context.Context, domain.Principal, domain.TwinReplayQuery) ([]byte, string, string, error)
+	TwinTrail(ctx context.Context, p domain.Principal, external string, from, to time.Time) ([]domain.TwinTrailPoint, error)
 	CreateSite(context.Context, domain.Principal, domain.Site) (domain.Site, error)
 	UpdateSite(context.Context, domain.Principal, domain.Site) error
 	ArchiveSite(context.Context, domain.Principal, string) error

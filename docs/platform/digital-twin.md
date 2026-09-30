@@ -69,10 +69,14 @@ pseudonym links the person to their alert. Order (sorted by pseudonym) and minut
 does not hide that someone is in a zone, and a person alone in a zone can still be followed from zone counts over time;
 that is the nature of presence data, and why replay of people waits for an owner setting (P2).
 
-**Interim rule until `twin_settings` exists (P2):** `named` is granted only in a demo workspace (`core.tenants.demo`)
-and only to owner, admin and operator; everyone else gets `counts` whatever they ask for. The response says which mode it
-used. Every read is written to the access log (`twin_live`, subject the site), with the usual 10-minute dedupe; a read
-that returned names is logged as `twin_live_named`, so who looked at named people is its own line.
+**Who gets which mode.** What a principal gets is the mode asked for, capped by the workspace's **twin settings**
+(`core.twin_settings`, written only by an owner, audited as `twin.settings_changed:…`; a workspace with no saved settings
+gets `counts`, a demo workspace `named`), by role (`named` needs owner, admin or operator; everyone else gets at most
+`tracks`) and, for a wall display, by the settings' display cap (`display_people`, at most `tracks`). The live view never
+drops below `counts` (headcounts are not identity); with `people_replay = off` replay shows no people at all. The
+response says which mode it used (`domain.TwinPeopleFor`). Every read is written to the access log (`twin_live`,
+subject the site), with the usual 10-minute dedupe; a read that returned names is logged as `twin_live_named`, so who
+looked at named people is its own line.
 
 Scope follows row level security: a site outside the caller's projects, or in another workspace, is 404. The floor plan
 module set to `none` is 403 (`moduleFor`: `twin` maps to `floorplan`).
@@ -95,6 +99,113 @@ refetches the drawing when someone saves a floor), `devices`, `presence` and `al
 
 The page refetches on every realtime signal (alerts at once, others coalesced to one per 3 s) and polls every 20 s as a
 safety net (6 s while the socket is down).
+
+## History and replay (P2, P3)
+
+### Storage (migration 00046)
+
+| Table | What | Kept |
+|---|---|---|
+| `core.presence_history` | every zone transition of a worn tag: `at`, the gateway it moved to (NULL: heard by no gateway), the one it came from, the smoothed RSSI. Tag ids in lower case (a CHECK). Written in the same transaction as the zone events: the uplink collects its moves (`presenceRows`) and writes them in one INSERT under one savepoint, so it can never cost an event or an SOS and an uplink opens one subtransaction whatever the number of tags; a roaming tag going offline writes a NULL row, coming back where it was writes that zone again. Backfilled at migration from the zone events still in the (capped) event log. | `PRESENCE_HISTORY_DAYS` (default 30, 1–400), set only by the migration role like the access log's retention (`core.retention_policy.presence_days`); see Retention below |
+| `core.sample_rollup` | 5-minute buckets per stream of **fixed sensors only**: sample count, avg/min/max temperature and humidity, any motion, the last door state, the lowest battery. A tag is rolled up only when it is registered and none of its live registrations is roaming or has a worn / button profile (`domain.WornProfileIDs()`, passed in by the worker: the rule of `core.twin_impersonal_tags`), so no bucket follows a person; a recomputed range deletes the buckets of any other tag (a sensor re-registered as a wearable loses them). Tag ids in lower case. The same reading rules as `frontend/app/live/measurements.ts` (a Zigbee- or Tuya-shaped reading takes values from `metrics`; a BLE reading only from an environment frame). | sample retention + 30 days; monthly partitions |
+| `core.twin_settings` | per workspace, owner-written: `people_replay` (off/counts/tracks/named), `people_replay_days` (1–90, default 7), `display_people` (off/counts/tracks) | — |
+
+`core.rollup_samples` (the api's worker, every minute, `RunSampleRollup`) rolls every active workspace up to the last
+bucket that closed a minute ago, from the watermark minus one bucket (late arrivals are recomputed), at most 6 hours per
+step, 250 ms apart while behind; the first start backfills the sample retention. It never runs on the ingest path. One
+step is one pass over the time range for all workspaces (`core.rollup_range` reads the sample partitions it overlaps
+directly, grouped by workspace; only the fixed-sensor list is read per workspace, from `core.devices`). It runs only
+under a statement timeout (the worker sets 60 s; a function's own `SET statement_timeout` does not arm the timer of the
+statement that called it, so the function refuses to run without one); a step that times out is retried with half the
+span, down to 5 minutes. `core.rollup_samples_range` recomputes up to 7 days of the caller's own workspace at once (the
+demo backfill). Late samples older than the previous bucket are not picked up by the worker.
+
+Measured on PostgreSQL 18 with 8.7 M samples (20 workspaces × 150 tags, one sample a minute for 2 days, arrival
+order, BRIN summarised): a 6-hour catch-up step (1.1 M samples, 173 k buckets) takes 8.8 s, the steady one-minute step
+(two buckets) 0.15 s. The plan is a bitmap heap scan on the BRIN index of `received_at` (lossy, 32 k of 235 k blocks,
+8 k rows rechecked away), a hash join with the fixed-sensor list, a sort and a group aggregate. `core.twin_num` has no
+`SET` clause so it is inlined (with one it was called ten times per sample: 14.1 s for the same step).
+
+Row level security: both tables carry `tenant_scope` and a restrictive `project_scope`; a restricted member sees a
+movement when either end is one of their gateways, and rollup rows of their gateways. The runtime cannot write the rollup
+(definer functions only) and can only append movements. The partition functions (`maintain_partitions`, `prune_history`,
+`partition_health`, `partition_has_rows_between`) learned the two tables with every guard of 00037/00038 kept.
+
+Erasure (migration 00047): erasing a tag's history (`core.erase_identity_data`) deletes its movement rows whose either
+end is in scope (and the ones with neither) and counts them as `presence_history`, and its buckets on the gateways in
+scope (`sample_rollup`: none are written for a worn tag, but a tag erased as a person's may have been rolled up while it
+was registered as a fixed sensor). Both match the lower-case id, whatever case the registration uses. The tag export ZIP
+carries `presence_history.ndjson`; `admin reapply-erasures` after a restore calls the same function.
+
+Retention of the movement history: `core.prune_history` deletes rows older than `presence_days` in batches across every
+range (by key; every maintenance run, hourly), and `core.maintain_partitions` drops whole expired months. Unlike the
+other tables, a month holding rows is not held until a newer row of its own proves it expired (a month nobody moved in
+would then outlive its retention); the sanity bound for personal data is `core.clock_corroborated()`: some uplink
+(`sensor_samples` or `ble_history`) stored in the last 7 days. So a clock that jumped ahead on an idle system expires
+nothing, and after a week without any uplink expiry of movement history pauses until the next one (maintenance logs
+`drop_held`). Effective retention: `presence_days`, plus at most one maintenance interval, while the site is running.
+
+Backdating: only the demo backfill writes the past (`CapturePacketAt`, demo workspaces only). The database refuses it
+too: a trigger on `core.sensor_samples` rejects, for the runtime role, a sample received more than 15 minutes before its
+transaction began unless the workspace is a demo (the `WHEN` clause keeps it free for every live row). Live captures
+keep the api's clock, read under the gateway lock, like every other ingest path (Zigbee2MQTT, Tuya): switching only this
+path to the database's `clock_timestamp()` would mix two clocks in one workspace's history.
+
+### API
+
+| Route | What |
+|---|---|
+| `GET /twin/sites/:id/timeline?from&to&people` | what history exists (`available`: env, people, markers), SOS / hazard / serious-alert markers (labels name nobody outside `named`), per-bucket density of alerts, door changes and people moving |
+| `GET /twin/sites/:id/replay?from&to&bucket&layers&people` | the window as a keyframe at `from` plus changes: env per device and bucket (re-aggregated from the rollup), people (below), alerts open in the window |
+| `GET /twin/people/:external/trail?from&to` | one person's zone changes; only when the caller may see names; never a display |
+| `GET /twin/settings`, `POST /twin/settings` | the settings; POST owner only, audited |
+
+People in a replay: `counts` sends headcounts only: `key_counts` at `from`, then per gateway the **net** change of each
+bucket of the response (`bucket_sec`, at least 5 minutes), stamped at the bucket's end (`count_deltas`); zones whose
+moves cancel out in a bucket send nothing. So no identity and no single move's time leaves the server (a −1 in one zone
+and a +1 in the next at the same millisecond would be one person walking), and a headcount at T is the one at the end of
+the last closed bucket. Counts are not suppressed below 2: a zone with one person shows one. Replay exists to review
+incidents, where a lone worker is the case that matters, and a headcount of one carries no identity; the live view shows
+the same. `tracks` sends one pseudonym per person drawn for that response only, with change times cut to the minute;
+`named` sends tag ids, names and exact times. People are shown only back to `people_replay_days` (and the retention);
+the timeline shades what lies before.
+
+Tracks are linkable by design, and that is their privacy limit: within one response a pseudonym's moves are one person's
+path (that is what tracks means), so whoever knows where someone was at one moment (their desk, the ward they were
+called to) can follow that pseudonym through the rest of the window. Pseudonyms change per response, so two responses
+cannot be joined by the id, but they can by the path itself (the same moves at the same minutes). That is why tracks are
+logged on every request like names, never cached, capped for viewers and displays by the owner's setting, and why the
+default is `counts`.
+
+Limits: a window of at most 7 days and 288 buckets (auto picks 5 min, 15 min, 1 h, 3 h or 6 h), at most 1000 placed
+devices (400) and 150 000 devices × buckets (checked before anything is read); more than 20000 people changes on this
+site (only moves with an end at one of its gateways are read, so another site's crowd never makes a window dense) or a
+request that runs out of time → `413 {"error":"too_dense","hint_to":…}`; 5 s per statement and 8 s per request
+(`TwinReplayTimeout`); two timeline/replay/trail requests of one workspace at once (a third waits up to 3 s, then 429);
+30 requests a minute per member (or display). With people `off`, the movement history is not read at all. Windows
+wholly in the past (ending more than 10 minutes ago) are cached in the api (LRU, 64 MB counting keys and bodies, at most
+8 MB per entry, 10 minutes, expired entries swept once a minute) keyed by tenant, member, role, project scope, the
+workspace's erasure count (an erasure is never behind a cached window), the site's layout revision, when the settings
+last changed, the effective mode and the window; `tracks` is never cached (its pseudonyms are per response). Responses
+carry an ETag (`If-None-Match` → 304); `tracks` and `named` responses are `Cache-Control: no-store`, headcounts
+`private, max-age=60`. A trail names only zones in the caller's projects (a move out of them reads as null).
+
+Access log: `twin_timeline` and `twin_replay` are deduplicated like other reads; a replay with people (`tracks` or
+`named`) is logged as `twin_replay_people`, a timeline with names as `twin_timeline_named` and the live view with names
+as `twin_live_named`, each on **every** request, and every trail as `presence_history` with the person's tag as
+subject.
+
+### Replay in the page
+
+The toolbar's สด / ย้อนดู switch opens replay on the last hour (presets 1 h, 6 h, 24 h, 7 days). `replay/store.ts`
+indexes the window once and `stateAt(T)` rebuilds the state the live view draws (placements from the last live state,
+values interpolated between buckets, people by binary search over each person's changes, alerts open, acknowledged or
+resolved by T), so scrubbing and playing never call the server; the next window is fetched ahead past 70 % of playback.
+`replay/timeline.tsx` is a canvas track (density lanes, SOS/hazard markers, shaded ranges without history, the
+playhead) and a keyboard slider (`role="slider"`, Thai `aria-valuetext`): Space plays or pauses, ←/→ one bucket,
+Shift+←/→ one hour, `[` `]` speed (1×/10×/60×), Home/End the ends; clicking a marker jumps there and flies to it. In
+replay the camera never flies on its own; the data table shows the state at T; the time is announced politely every
+10 s while playing. The owner's settings are in the Privacy Center (tab Digital twin).
 
 ## Frontend
 
@@ -146,6 +257,10 @@ AETHER_ORIGIN=https://… DEMO_STATE=./demo-twin.json go run ./cmd/demo-twin run
 go run ./cmd/demo-twin trigger sos      # the scripted wearer presses the B10 in ward 3
 go run ./cmd/demo-twin trigger spike    # the cold store warms to 12 °C for 5 minutes (needs a running run)
 go run ./cmd/demo-twin trigger door     # someone at the cold-store door (PIR) for 3 minutes (needs a running run)
+# history for replay: plays the script over the last N hours straight into the database as if it had happened then
+# (CapturePacketAt, demo workspaces only, never in the future), resolves each loop's SOS three minutes later, and
+# recomputes the rollup of the range. Run it on a fresh demo workspace, before run.
+DATABASE_URL=… DEMO_STATE=./demo-twin.json go run ./cmd/demo-twin backfill --hours 24 [--every 30s]
 ```
 
 The building: 3 floors, 14 zones, 10 MG3-style gateways, 52 S1 environment sensors, 8 MSP01 PIR sensors and 40 people
@@ -168,10 +283,11 @@ the faint second gateway, so every tag's first zone is its real one.
 
 ## Roadmap
 
-| Phase | What | Notes |
+| Phase | What | Status |
 |---|---|---|
-| P2 | History storage | `core.presence_history` (zone transitions, monthly partitions, PDPA erasure), `core.sample_rollup` (5-minute buckets filled by a worker), `core.twin_settings` (people replay off/counts/tracks/named, retention, display cap); replaces the interim named rule |
-| P3 | Replay | `/twin/sites/:id/timeline` and `/replay` (keyframe + deltas), time scrubber with SOS/alert markers, 1×/10×/60×, people replay logged `always` |
+| P0, P1 | Engine, live view, demo workspace | done |
+| P2 | History storage: `presence_history`, `sample_rollup`, `twin_settings` | done (00046, 00047) |
+| P3 | Replay: timeline, replay, trail, settings; time scrubber | done |
 | P4 | Polish | bloom tuning, keyboard map, contrast audit, axe scan |
-| P5 | TV embed | `twin-embed` for the display playlist: keep-alive with `paused`, display principal clamped to counts |
-| P6 | Backfill | `CapturePacketAt` and `demo-twin backfill` (demo workspaces only) so replay has history at once |
+| P5 | TV embed | `twin-embed` for the display playlist: keep-alive with `paused`; a display is clamped to `display_people` (already in `TwinPeopleFor`) |
+| P6 | Backfill | done with P3: `CapturePacketAt` and `demo-twin backfill` |

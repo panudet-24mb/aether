@@ -28,3 +28,13 @@
   .pv-bar, .pv-body { padding-left: 16px; padding-right: 16px; }
   .pv-table { display: block; overflow-x: auto; }
 }
+/* Digital twin settings (twin/twin-settings.tsx). */
+.tws { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+.tws-group { border: 1px solid var(--color-border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.tws-group legend { padding: 0 6px; font-size: 13px; color: var(--color-muted); }
+.tws-option { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.tws-option span { display: flex; flex-direction: column; gap: 2px; }
+.tws-option small { color: var(--color-muted); }
+.tws-field { display: flex; gap: 10px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+.tws-field select { background: var(--color-panel-raised); color: var(--color-ink); border: 1px solid var(--color-border); border-radius: 7px; padding: 6px 8px; }
+.tws-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }

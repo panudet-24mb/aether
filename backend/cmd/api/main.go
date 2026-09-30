@@ -79,6 +79,8 @@ func main() {
 	go hub.Listen(workerCtx, cfg.DatabaseURL, postgres.SignalChannel)
 	// Sample and BLE history retention: partitions ahead, expired ones dropped (migration 00037).
 	go repo.RunPartitionMaintenance(workerCtx, time.Hour)
+	// The twin's replay reads 5-minute buckets (core.sample_rollup), kept up to date here, never on the ingest path.
+	go repo.RunSampleRollup(workerCtx, time.Minute)
 	go (&alerts.Worker{Store: repo, Sender: httpapi.NewSender(cfg), Secrets: service.Secrets, LegacySecrets: service.LegacySecrets, Interval: 15 * time.Second}).Run(workerCtx)
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)

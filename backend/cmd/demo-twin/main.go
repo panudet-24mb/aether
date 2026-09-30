@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +32,11 @@ const usage = `usage:
   demo-twin run [--insecure-http]
                               posts the 30-minute script through the ingest every 6 s (AETHER_ORIGIN, default
                               http://localhost:8080; DEMO_STATE)
+  demo-twin backfill [--hours N] [--every 30s]
+                              plays the script over the last N hours (default 24, at most 168) straight into the
+                              database as if it had happened then, so the twin's replay has history at once. Only a
+                              demo workspace (DATABASE_URL, DEMO_STATE; ALERTS_SHADOW=true like the API to open only
+                              SOS alerts). Run it on a fresh demo workspace, before run. 24 hours take ~25 minutes.
   demo-twin trigger [--insecure-http] sos|spike|door
                               fires an event now, on top of the script (sos posts the press; spike and door are read
                               by a running "run" for the next few minutes)
@@ -85,6 +91,8 @@ func run(args []string) error {
 			return e
 		}
 		return drive()
+	case "backfill":
+		return backfill(rest)
 	case "trigger":
 		if len(rest) != 1 {
 			return errors.New(usage)
@@ -244,6 +252,54 @@ func drive() error {
 		case <-time.After(time.Until(next)):
 		}
 	}
+}
+
+func backfill(args []string) error {
+	hours, every := 24, 30*time.Second
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--hours" && i+1 < len(args):
+			n, e := strconv.Atoi(args[i+1])
+			if e != nil || n < 1 || n > 168 {
+				return errors.New("--hours must be 1..168")
+			}
+			hours = n
+			i++
+		case args[i] == "--every" && i+1 < len(args):
+			d, e := time.ParseDuration(args[i+1])
+			if e != nil || d < simulation.TwinStepSec*time.Second || d > 5*time.Minute {
+				return errors.New("--every must be 6s..5m")
+			}
+			every = d
+			i++
+		default:
+			return errors.New(usage)
+		}
+	}
+	st, e := load()
+	if e != nil {
+		return e
+	}
+	fmt.Fprintf(os.Stderr, "demo-twin: database %s, workspace %s, last %d hours every %s\n", hostOf(os.Getenv("DATABASE_URL")), st.TenantID, hours, every)
+	repo, e := postgres.Open(os.Getenv("DATABASE_URL"))
+	if e != nil {
+		return e
+	}
+	defer repo.Close()
+	// The history should look like what the API would have made of it: ALERTS_SHADOW as the API has it (production
+	// runs with it on, so only the SOS opens alerts). Unset: off, every demo rule opens its alerts.
+	repo.Configure(postgres.Options{AlertsShadow: os.Getenv("ALERTS_SHADOW") == "true"})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	to := time.Now().Add(-time.Minute)
+	n, e := demotwin.Backfill(ctx, repo, st, to.Add(-time.Duration(hours)*time.Hour), to, every, func(at time.Time) {
+		fmt.Fprintf(os.Stderr, "  %s\n", at.Local().Format("2006-01-02 15:04"))
+	})
+	if e != nil {
+		return fmt.Errorf("after %d uplinks: %w", n, e)
+	}
+	fmt.Printf("Backfilled %d uplinks over %d hours; the twin's replay can show them now.\n", n, hours)
+	return nil
 }
 
 func trigger(kind string) error {

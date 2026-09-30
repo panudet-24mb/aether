@@ -141,6 +141,7 @@ type twinSample struct {
 type twinRaw struct {
 	serverTime time.Time
 	demo       bool
+	settings   domain.TwinSettings
 	revisions  map[string]int
 	devices    []domain.TwinDevice
 	worn       []twinWorn
@@ -183,7 +184,40 @@ func (r *Repository) TwinState(ctx context.Context, p domain.Principal, siteID, 
 		}
 		twinStates.put(key, raw, now)
 	}
-	return renderTwin(raw, siteID, domain.TwinPeopleFor(p, people, raw.demo)), nil
+	return renderTwin(raw, siteID, domain.TwinPeopleFor(p, people, raw.settings, display != "", true)), nil
+}
+
+// loadTwinSettings reads the workspace's twin settings, or the defaults when its owner saved none.
+func loadTwinSettings(tx *gorm.DB) (domain.TwinSettings, error) {
+	var rows []struct {
+		Demo             bool
+		PeopleReplay     *string
+		DisplayPeople    *string
+		PeopleReplayDays *int
+		UpdatedAt        *time.Time
+		HistoryDays      int
+	}
+	if e := tx.Raw(`SELECT coalesce((SELECT demo FROM core.tenants WHERE id=core.tenant_id()),false) AS demo,
+       s.people_replay, s.display_people, s.people_replay_days, s.updated_at, core.presence_history_days() AS history_days
+     FROM (SELECT 1) one LEFT JOIN core.twin_settings s ON s.tenant_id=core.tenant_id()`).Scan(&rows).Error; e != nil {
+		return domain.TwinSettings{}, e
+	}
+	if len(rows) != 1 {
+		return domain.DefaultTwinSettings(false), nil
+	}
+	r := rows[0]
+	out := domain.DefaultTwinSettings(r.Demo)
+	out.HistoryDays = r.HistoryDays
+	if r.PeopleReplay != nil {
+		out.PeopleReplay, out.Stored, out.UpdatedAt = *r.PeopleReplay, true, r.UpdatedAt
+	}
+	if r.DisplayPeople != nil {
+		out.DisplayPeople = *r.DisplayPeople
+	}
+	if r.PeopleReplayDays != nil {
+		out.PeopleReplayDays = *r.PeopleReplayDays
+	}
+	return out, nil
 }
 
 func (r *Repository) twinRaw(ctx context.Context, p domain.Principal, siteID string) (twinRaw, error) {
@@ -203,6 +237,11 @@ func (r *Repository) twinRaw(ctx context.Context, p domain.Principal, siteID str
 			return domain.ErrNotFound
 		}
 		out.serverTime, out.demo = head[0].ServerTime, head[0].Demo
+		settings, e := loadTwinSettings(tx)
+		if e != nil {
+			return e
+		}
+		out.settings = settings
 
 		var floors []struct {
 			ID       string

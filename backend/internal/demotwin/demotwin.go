@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -266,4 +267,67 @@ func PostSOS(ctx context.Context, client *http.Client, origin string, st State, 
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Backfiller is what Backfill needs of the repository: capture at a past time (demo workspaces only), recompute the
+// twin's 5-minute buckets, and close the alerts the script raised so the next loop's SOS opens a new one.
+type Backfiller interface {
+	CapturePacketAt(ctx context.Context, tenant, gateway string, payload json.RawMessage, at time.Time) (string, error)
+	RollupRange(ctx context.Context, tenant string, lo, hi time.Time) (int64, error)
+	ResolveDemoAlertsBefore(ctx context.Context, tenant string, at time.Time) (int64, error)
+}
+
+// Backfill plays the script over [from, to) into the demo workspace as if it had happened then, so the twin's
+// replay has history at once. It captures every `every` (the steps around the scripted SOS at the real 6 s rate,
+// so the press is seen), resolves the script's alerts a few minutes after each SOS, and finally recomputes the
+// rollup buckets of the whole range. Returns the number of uplinks stored.
+func Backfill(ctx context.Context, repo Backfiller, st State, from, to time.Time, every time.Duration, progress func(at time.Time)) (int, error) {
+	if !to.After(from) || to.After(time.Now()) || to.Sub(from) > 7*24*time.Hour {
+		return 0, fmt.Errorf("backfill window must be in the past and at most 7 days")
+	}
+	stride := max(1, int(every/(simulation.TwinStepSec*time.Second)))
+	step0 := from.Truncate(simulation.TwinStepSec * time.Second)
+	n, first := 0, true
+	lastSOS := -1
+	for at := step0; at.Before(to); at = at.Add(simulation.TwinStepSec * time.Second) {
+		if ctx.Err() != nil {
+			return n, ctx.Err()
+		}
+		step := simulation.TwinStep(at)
+		nearSOS := step >= simulation.TwinSOSStep-2 && step <= simulation.TwinSOSStep+2
+		k := int(at.Sub(step0) / (simulation.TwinStepSec * time.Second))
+		if !nearSOS && k%stride != 0 {
+			continue
+		}
+		up := Uplinks(st, step, at, simulation.TwinOverrides{Warmup: first})
+		ids := make([]string, 0, len(up))
+		for id := range up {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if _, e := repo.CapturePacketAt(ctx, st.TenantID, id, up[id], at); e != nil {
+				return n, fmt.Errorf("capture at %s: %w", at.Format(time.RFC3339), e)
+			}
+			n++
+		}
+		first = false
+		if step == simulation.TwinSOSStep {
+			lastSOS = k
+		}
+		// Three minutes after the press someone has dealt with it: resolve, so the next loop's press rings again.
+		if lastSOS >= 0 && k-lastSOS >= 180/simulation.TwinStepSec {
+			if _, e := repo.ResolveDemoAlertsBefore(ctx, st.TenantID, at); e != nil {
+				return n, e
+			}
+			lastSOS = -1
+		}
+		if progress != nil && k%(600/simulation.TwinStepSec) == 0 {
+			progress(at)
+		}
+	}
+	if _, e := repo.RollupRange(ctx, st.TenantID, from, to); e != nil {
+		return n, fmt.Errorf("rollup: %w", e)
+	}
+	return n, nil
 }

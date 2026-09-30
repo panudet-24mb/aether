@@ -1,10 +1,11 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DatabaseBackup, Eye, FileClock, RefreshCw, ScrollText, UserX } from "lucide-react";
+import { Box, DatabaseBackup, Eye, FileClock, RefreshCw, ScrollText, UserX } from "lucide-react";
 import "./privacy.css";
 import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
 import { SystemStatusPanel } from "../system/system-status";
+import { TwinSettingsPanel } from "../twin/twin-settings";
 
 /** One read of personal data (GET /api/v1/privacy/access-log). */
 type AccessRow = { id: string; at: string; actor_id: string; actor_name: string | null; resource: string; subject_kind: string; subject_id: string; client_ip: string | null };
@@ -13,7 +14,7 @@ type AuditRow = { id: string; at: string; actor_id: string; actor_name: string |
 /** One erasure (GET /api/v1/privacy/erasures). */
 type ErasureRow = { id: string; at: string; actor_id: string | null; subject_kind: string; subject_ref: string; counts: Record<string, unknown> };
 type Page<T> = { items: T[]; next?: { before_at: string; before_id: string } };
-export type PrivacyTab = "access" | "audit" | "erasures" | "system";
+export type PrivacyTab = "access" | "audit" | "erasures" | "twin" | "system";
 type Tab = PrivacyTab;
 
 const RESOURCE_LABEL: Record<string, string> = {
@@ -23,6 +24,13 @@ const RESOURCE_LABEL: Record<string, string> = {
   alerts: "การแจ้งเตือน",
   events: "เหตุการณ์",
   live: "ภาพรวม (ค่าจากเซนเซอร์)",
+  twin_live: "Digital twin (สด)",
+  twin_live_named: "Digital twin (สด · แสดงชื่อ)",
+  twin_timeline: "Digital twin (ไทม์ไลน์)",
+  twin_timeline_named: "Digital twin (ไทม์ไลน์ · แสดงชื่อ)",
+  twin_replay: "Digital twin (ย้อนดู)",
+  twin_replay_people: "Digital twin (ย้อนดูคน)",
+  presence_history: "เส้นทางของแท็ก",
   studio_render: "Dashboard Studio",
   realtime: "สัญญาณเรียลไทม์",
   access_log: "บันทึกการเข้าถึง",
@@ -130,10 +138,13 @@ export default function PrivacyCenter({ getToken, refresh, onUnauthorized, initi
           <button type="button" className={tab === "erasures" ? "is-on" : ""} onClick={() => setTab("erasures")}>
             <UserX size={15} /> การลบข้อมูล
           </button>
+          <button type="button" className={tab === "twin" ? "is-on" : ""} onClick={() => setTab("twin")}>
+            <Box size={15} /> Digital twin
+          </button>
           <button type="button" className={tab === "system" ? "is-on" : ""} onClick={() => setTab("system")}>
             <DatabaseBackup size={15} /> สถานะระบบ
           </button>
-          {tab !== "system" && (
+          {tab !== "system" && tab !== "twin" && (
             <button type="button" className="pv-icon" onClick={() => void load(false)} disabled={busy} aria-label="โหลดใหม่" title="โหลดใหม่">
               <RefreshCw size={15} />
             </button>
@@ -147,7 +158,8 @@ export default function PrivacyCenter({ getToken, refresh, onUnauthorized, initi
       )}
       <div className="pv-body">
         {tab === "system" && <SystemStatusPanel />}
-        {tab !== "system" && <p className="pv-note">
+        {tab === "twin" && <TwinSettingsPanel client={client} />}
+        {tab !== "system" && tab !== "twin" && <p className="pv-note">
           <ScrollText size={14} /> ระบบบันทึกทุกครั้งที่มีคนเปิดดูข้อมูลส่วนบุคคล (รายชื่อสมาชิก ตำแหน่งและประวัติของแท็กที่มีคนสวม การแจ้งเตือน) · การอ่านซ้ำเรื่องเดิมภายใน 10 นาทีนับเป็นครั้งเดียว ·
           ถ้าบันทึกไม่ได้ ระบบจะไม่ส่งข้อมูลออกไป · เก็บไว้ตาม ACCESS_LOG_RETENTION_DAYS (ค่าเริ่มต้น 400 วัน)
         </p>}

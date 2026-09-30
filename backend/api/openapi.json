@@ -7217,7 +7217,7 @@
       "name": "people",
       "in": "query",
       "required": false,
-      "description": "counts (default: headcount per gateway, no identity), tracks (per person a pseudonym drawn per response, so it never matches across responses; zone; times rounded to the minute; sorted by pseudonym) or named (device names and exact times; demo workspaces and owner/admin/operator only until twin settings exist). The server may clamp the mode; the response says which one it used. Outside named, a personal tag (roaming, worn or button profile, or unknown) placed on the plan has a generic name and no ext, and alerts about personal tags have titles that name nobody.",
+      "description": "counts (default: headcount per gateway, no identity), tracks (per person a pseudonym drawn per response, so it never matches across responses; zone; times rounded to the minute; sorted by pseudonym) or named (device names and exact times; only when the workspace's twin settings allow names, and only for owner/admin/operator (a demo workspace allows names by default)). The server may clamp the mode; the response says which one it used. Outside named, a personal tag (roaming, worn or button profile, or unknown) placed on the plan has a generic name and no ext, and alerts about personal tags have titles that name nobody.",
       "schema": {
        "type": "string",
        "enum": [
@@ -8079,6 +8079,343 @@
       }
      }
     ]
+   }
+  },
+  "/api/v1/twin/sites/{id}/timeline": {
+   "get": {
+    "summary": "Digital twin replay: the time track of a window: what history exists (available), SOS / hazard / serious alerts as markers (labels name nobody outside named mode), and per-bucket density of alerts, door changes and people moving zone. In the access log.",
+    "operationId": "get__api_v1_twin_sites_id_timeline",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": true,
+      "description": "At most 7 days after from, not in the future.",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "people",
+      "in": "query",
+      "required": false,
+      "description": "counts (default), tracks or named, clamped by the workspace's twin settings (owner-written), the role (named: owner/admin/operator; viewer at most tracks) and, for a wall display, its cap. The response says which mode it used (off: no people).",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "counts",
+        "tracks",
+        "named"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Timeline",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid window, bucket or layers"
+     },
+     "403": {
+      "description": "No floor plan access"
+     },
+     "404": {
+      "description": "Site not found or outside the caller's projects"
+     },
+     "429": {
+      "description": "More than 30 replay requests a minute"
+     }
+    }
+   }
+  },
+  "/api/v1/twin/sites/{id}/replay": {
+   "get": {
+    "summary": "Digital twin replay of a window (at most 7 days, 288 buckets, 1000 devices): env values per device and bucket from the 5-minute rollup, people as a keyframe at from plus changes (counts: headcount per gateway and ±1 changes folded on the server, no identity; tracks: pseudonyms drawn per response, times to the minute; named: tag ids and names), alerts open during the window. Windows wholly in the past are cached (never tracks) and carry an ETag. Replays with people (tracks, named) are logged on every request.",
+    "operationId": "get__api_v1_twin_sites_id_replay",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": true,
+      "description": "At most 7 days after from, not in the future.",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "people",
+      "in": "query",
+      "required": false,
+      "description": "counts (default), tracks or named, clamped by the workspace's twin settings (owner-written), the role (named: owner/admin/operator; viewer at most tracks) and, for a wall display, its cap. The response says which mode it used (off: no people).",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "counts",
+        "tracks",
+        "named"
+       ]
+      }
+     },
+     {
+      "name": "bucket",
+      "in": "query",
+      "required": false,
+      "description": "auto (default) or seconds, a multiple of 300.",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "layers",
+      "in": "query",
+      "required": false,
+      "description": "Comma list of env, people, alerts (default all).",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "If-None-Match",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Replay",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid window, bucket or layers"
+     },
+     "403": {
+      "description": "No floor plan access"
+     },
+     "404": {
+      "description": "Site not found or outside the caller's projects"
+     },
+     "429": {
+      "description": "More than 30 replay requests a minute"
+     },
+     "304": {
+      "description": "Not modified (ETag)"
+     },
+     "413": {
+      "description": "More than 20000 people changes in the window: {error: too_dense, hint_to} names a shorter end"
+     }
+    }
+   }
+  },
+  "/api/v1/twin/people/{external}/trail": {
+   "get": {
+    "summary": "One named person's zone changes in a window (at most 5000). Only when the caller may see names (settings and role); never for a display. Every request is in the access log.",
+    "operationId": "get__api_v1_twin_people_external_trail",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "external",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": true,
+      "description": "At most 7 days after from, not in the future.",
+      "schema": {
+       "type": "string",
+       "format": "date-time"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Trail",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid window"
+     },
+     "403": {
+      "description": "Names not allowed"
+     }
+    }
+   }
+  },
+  "/api/v1/twin/settings": {
+   "get": {
+    "summary": "The workspace's digital twin privacy settings (defaults when none were saved): people_replay (off|counts|tracks|named), people_replay_days (1-90), display_people (off|counts|tracks), history_days (movement history retention).",
+    "operationId": "get__api_v1_twin_settings",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Settings",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Change the twin settings. Owner only; audited (twin.settings_changed).",
+    "operationId": "post__api_v1_twin_settings",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "people_replay",
+         "people_replay_days",
+         "display_people"
+        ],
+        "properties": {
+         "people_replay": {
+          "type": "string",
+          "enum": [
+           "off",
+           "counts",
+           "tracks",
+           "named"
+          ]
+         },
+         "people_replay_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 90
+         },
+         "display_people": {
+          "type": "string",
+          "enum": [
+           "off",
+           "counts",
+           "tracks"
+          ]
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Stored settings",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid settings"
+     },
+     "403": {
+      "description": "Not an owner"
+     }
+    }
    }
   }
  },

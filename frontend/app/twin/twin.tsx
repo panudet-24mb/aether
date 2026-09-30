@@ -1,13 +1,15 @@
 "use client";
 // Digital twin page (docs/platform/digital-twin.md): one building, live, in 3D. A thin toolbar over TwinView.
 
-import { Box, Building2, Camera, Crosshair, Expand, Grid3x3, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Table2, Users } from "lucide-react";
+import { Box, Building2, Camera, Crosshair, Expand, Grid3x3, History, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Radio, Table2, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
 import type { Site } from "../floorplan/model";
-import { LAYERS, type Layer, type PeopleMode, type TwinAlert, type TwinDevice, type TwinState } from "./api";
+import { LAYERS, type Layer, type PeopleMode, type TwinAlert, type TwinDevice, type TwinMarker, type TwinReplay, type TwinState, type TwinTimeline } from "./api";
+import { ReplayStore, stateAt, type ReplayIndex } from "./replay/store";
+import ReplayTimeline, { RANGES, thaiTime, type RangeId } from "./replay/timeline";
 import { RAMPS, type HeatKind } from "./engine/heat";
 import type { EngineStats, Preset } from "./engine/engine";
 import TwinView, { type TwinSource, type TwinViewHandle } from "./twin-view";
@@ -56,6 +58,19 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [locked, setLocked] = useState(false);
   const [stats, setStats] = useState<EngineStats | null>(null);
   const [sosIndex, setSosIndex] = useState(0);
+  // Replay: a window of history drawn at time t (stateAt) instead of the live state.
+  const [mode, setMode] = useState<"live" | "replay">("live");
+  const [replayRange, setReplayRange] = useState<RangeId>("1h");
+  const [win, setWin] = useState<{ from: number; to: number } | null>(null);
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(10);
+  const [timeline, setTimeline] = useState<TwinTimeline | null>(null);
+  const [ix, setIx] = useState<ReplayIndex | null>(null);
+  const [replayBusy, setReplayBusy] = useState(false);
+  const [spoken, setSpoken] = useState("");
+  // The live state replay draws its placements from (positions, names, kinds), taken when replay opens.
+  const [base, setBase] = useState<TwinState | null>(null);
   const handle = useRef<TwinViewHandle | null>(null);
   const shell = useRef<HTMLElement | null>(null);
   const debug = useMemo(() => typeof location !== "undefined" && new URLSearchParams(location.search).has("twinDebug"), []);
@@ -97,6 +112,84 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
     setFloorId((cur) => (s.floors.some((f) => f.id === cur) ? cur : s.floors[0]?.id ?? ""));
   }, []);
   const onState = useCallback((s: TwinState) => { setState(s); setError(""); }, []);
+
+  const replayFail = useCallback((e: unknown) => {
+    if (e instanceof ApiError && e.status === 413) { setError("ช่วงนี้มีข้อมูลมากเกินจะแสดงในครั้งเดียว · เลือกช่วงที่สั้นลง"); return; }
+    if (e instanceof ApiError && e.status === 429) { setError("ขอข้อมูลย้อนหลังถี่เกินไป · รอสักครู่"); return; }
+    fail(e);
+  }, [fail]);
+  const replays = useMemo(() => new ReplayStore((from, to) =>
+    client.raw<TwinReplay>(`/twin/sites/${siteId}/replay?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&people=${people}`)), [client, siteId, people]);
+
+  const enterReplay = useCallback((r: RangeId) => {
+    if (mode === "live" && state) setBase(state);
+    const to = Math.floor((Date.now() - 60e3) / 60e3) * 60e3;
+    const from = to - (RANGES.find((x) => x.id === r)?.ms ?? 3600e3);
+    setReplayRange(r);
+    setWin({ from, to });
+    setT((cur) => (cur >= from && cur <= to ? cur : to - Math.min(15 * 60e3, (to - from) / 4)));
+    setMode("replay");
+    setTour(false);
+  }, [mode, state]);
+
+  // A window: its timeline and its replay (cached by the store; a window is at most 288 buckets).
+  useEffect(() => {
+    if (mode !== "replay" || !win || !siteId) return;
+    let active = true;
+    const from = new Date(win.from).toISOString(), to = new Date(win.to).toISOString();
+    const id = requestAnimationFrame(() => setReplayBusy(true));
+    Promise.all([
+      client.raw<TwinTimeline>(`/twin/sites/${siteId}/timeline?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&people=${people}`),
+      replays.get(from, to),
+    ]).then(([tl, index]) => {
+      if (!active) return;
+      setTimeline(tl);
+      setIx(index);
+      setError("");
+    }).catch((e) => { if (active) replayFail(e); }).finally(() => { if (active) setReplayBusy(false); });
+    return () => { active = false; cancelAnimationFrame(id); };
+  }, [mode, win, siteId, people, client, replays, replayFail]);
+
+  // Playing: t moves at the chosen speed; past 70 % of the window the following window is fetched ahead.
+  useEffect(() => {
+    if (mode !== "replay" || !playing || !win) return;
+    let last = performance.now(), frame = 0;
+    const tick = (now: number) => {
+      const dt = now - last;
+      last = now;
+      setT((cur) => {
+        const next = Math.min(win.to, cur + dt * speed);
+        if (next >= win.to) setPlaying(false);
+        if (next > win.from + 0.7 * (win.to - win.from) && win.to + (win.to - win.from) < Date.now()) {
+          replays.prefetch(new Date(win.to).toISOString(), new Date(win.to + (win.to - win.from)).toISOString());
+        }
+        return next;
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [mode, playing, speed, win, replays]);
+
+  // While playing, the time is announced politely every 10 s (the slider itself says it on focus).
+  const tRef = useLatest(t);
+  useEffect(() => {
+    if (mode !== "replay" || !playing) return;
+    const id = setInterval(() => setSpoken(`ย้อนดู ${thaiTime(tRef.current)}`), 10000);
+    return () => clearInterval(id);
+  }, [mode, playing, tRef]);
+
+  const frozen = useMemo(() => (mode === "replay" && ix && base ? stateAt(ix, base, t) : null), [mode, ix, base, t]);
+  const onMarker = useCallback((m: TwinMarker) => {
+    setPlaying(false);
+    setT(Date.parse(m.at) + 1000);
+    const a = ix?.replay.alerts?.items.find((x) => x.id === m.alert_id);
+    if (a) {
+      const z = handle.current?.engine()?.zoneName(a.gateway_id);
+      if (z) setFloorId(z.floorId);
+      requestAnimationFrame(() => handle.current?.focusAlert({ id: a.id, severity: a.severity, status: "open", event: a.event, sos: a.sos, hazard: a.hazard, title: a.title, device_id: a.device_id, opened_at: a.opened_at, gateway_id: a.gateway_id }));
+    }
+  }, [ix]);
 
   // Minimap and debug overlay follow the camera a few times a second (the canvas renders on its own).
   useEffect(() => {
@@ -161,6 +254,10 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         <h1 className="topo-bar-title">Digital twin</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบ"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
         {state?.demo && <span className="twin-demo-badge" title="workspace สาธิต · ข้อมูลทั้งหมดเป็นข้อมูลจำลอง">DEMO DATA</span>}
+        <div className="twin-seg" role="group" aria-label="สดหรือย้อนดู">
+          <button type="button" className={mode === "live" ? "is-on" : ""} aria-pressed={mode === "live"} onClick={() => { setMode("live"); setPlaying(false); }}><Radio size={13} />สด</button>
+          <button type="button" className={mode === "replay" ? "is-on" : ""} aria-pressed={mode === "replay"} disabled={!state} onClick={() => enterReplay(replayRange)} title="ย้อนดูเหตุการณ์"><History size={13} />ย้อนดู</button>
+        </div>
         <label className="fp-site twin-site">
           <Building2 size={14} />
           <select aria-label="เลือกอาคาร" value={siteId} onChange={(e) => { setSiteId(e.target.value); setState(null); setSite(null); }}>
@@ -190,7 +287,8 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
       {error && <p className="twin-error" role="alert">{error}</p>}
       <div className="twin-stage">
         {siteId ? (
-          <TwinView siteId={siteId} source={source} floorId={floorId} layers={layers} people={people} tour={tour} explode={explode} isolate={isolate}
+          <TwinView siteId={siteId} source={source} floorId={floorId} layers={layers} people={people} tour={tour && mode === "live"} explode={explode} isolate={isolate}
+            mode={mode} frozen={frozen} autoFocus={mode === "live"}
             refreshKey={refreshKey} pollMs={connected ? 20000 : 6000} handleRef={handle} onReady={onReady} onState={onState} onSelect={setSelected} onError={fail}
             onAlertFocus={(a) => { const z = handle.current?.engine()?.zoneName(a.gateway_id); if (z) setFloorId(z.floorId); setTour(false); }} />
         ) : sites && <div className="twin-empty"><Building2 size={28} /><p>ยังไม่มีอาคาร · วาดผังในหน้า &ldquo;ผังอาคาร&rdquo; ก่อน แล้วกลับมาดูแบบ digital twin</p></div>}
@@ -238,10 +336,16 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         )}
         {debug && stats && <div className="twin-debug" aria-hidden="true">{stats.fps} fps · {stats.calls} draw · {Math.round(stats.triangles / 1000)}k tri · {stats.tier} · tex {stats.textures}</div>}
       </div>
+      {mode === "replay" && win && (
+        <ReplayTimeline timeline={timeline} from={win.from} to={win.to} t={t} playing={playing} speed={speed} range={replayRange} busy={replayBusy}
+          onSeek={(v) => setT(v)} onPlay={(v) => { if (v && t >= win.to) setT(win.from); setPlaying(v); }} onSpeed={setSpeed}
+          onRange={(r) => { setPlaying(false); enterReplay(r); }} onMarker={onMarker} onLive={() => { setMode("live"); setPlaying(false); }} />
+      )}
+      <div className="twin-sr" aria-live="polite">{spoken}</div>
       {showData && (
         <div className="twin-data" role="region" aria-label="ข้อมูลรายโซน">
           <table>
-            <caption>ข้อมูลรายโซน · {site?.name}</caption>
+            <caption>ข้อมูลรายโซน · {site?.name}{mode === "replay" ? ` · ณ ${thaiTime(t)}` : ""}</caption>
             <thead><tr><th scope="col">โซน</th><th scope="col">ชั้น</th><th scope="col">อุณหภูมิ</th><th scope="col">ช่วงเหมาะสม</th><th scope="col">ความชื้น</th><th scope="col">คน</th><th scope="col">เหตุเปิดอยู่</th></tr></thead>
             <tbody>
               {summaries.map((z) => (

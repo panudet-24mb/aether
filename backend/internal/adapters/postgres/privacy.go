@@ -364,7 +364,7 @@ func (r *Repository) IdentityExportSummary(ctx context.Context, p domain.Princip
 	return out, e
 }
 
-// StreamIdentityHistory streams one history of a tag ("samples" or "ble_history") as JSON lines, oldest first, at
+// StreamIdentityHistory streams one history of a tag ("samples", "ble_history" or "presence_history") as JSON lines, oldest first, at
 // most limit rows, in its own transaction; emit gets each line. truncated reports that the cap was reached.
 func (r *Repository) StreamIdentityHistory(ctx context.Context, p domain.Principal, external, kind string, limit int, emit func([]byte) error) (bool, error) {
 	var query string
@@ -375,6 +375,11 @@ func (r *Repository) StreamIdentityHistory(ctx context.Context, p domain.Princip
 	case "ble_history":
 		query = `SELECT row_to_json(t)::text FROM (SELECT b.gateway_id,b.received_at,b.source,b.raw FROM core.ble_history b
       WHERE b.tenant_id=core.tenant_id() AND b.external_id=? ORDER BY b.received_at LIMIT ?) t`
+	case "presence_history":
+		// The digital twin's movement history (migration 00046): which zone (gateway) the tag moved to, and when.
+		// Stored in lower case (00046), whatever case the registration uses.
+		query = `SELECT row_to_json(t)::text FROM (SELECT h.at,h.gateway_id,h.from_gateway_id,h.rssi_avg FROM core.presence_history h
+      WHERE h.tenant_id=core.tenant_id() AND h.external_id=lower(?) ORDER BY h.at LIMIT ?) t`
 	default:
 		return false, domain.ErrInvalid
 	}

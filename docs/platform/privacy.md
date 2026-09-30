@@ -3,7 +3,7 @@
 Aether is usually operated by an organisation (a hospital, a building owner) that is the **data controller** under the
 Thai Personal Data Protection Act B.E. 2562; the Aether deployment, and whoever runs it on the controller's behalf, is
 the **processor**. This page lists what the product records, the tools it gives the controller for data-subject
-requests, and what it deliberately keeps. Migrations `00038` (read-access log) and `00039` (export, erasure, notice).
+requests, and what it deliberately keeps. Migrations `00038` (read-access log), `00039` (export, erasure, notice) and `00047` (the digital twin's movement history in erasure).
 
 ## 1. What is personal data here
 
@@ -13,6 +13,7 @@ requests, and what it deliberately keeps. Migrations `00038` (read-access log) a
 | What a member did | `core.audit_logs` (actor uuid), `core.alerts.acked_by/resolved_by/note`, `core.device_commands.actor_id`, `core.automations.enabled_by` | members |
 | Who read personal data | `core.access_log` (actor uuid, client IP) | members |
 | A worn tag's history: samples (RSSI per gateway = a location trace), raw advertisements, zone presence, events, alerts naming the wearer | `core.sensor_samples`, `core.ble_history`, `core.presence_state`, `core.device_events`, `core.alerts`, and the registration name in `core.devices` | wearers |
+| A worn tag's movement history: every zone change, for the digital twin's replay | `core.presence_history` (kept `PRESENCE_HISTORY_DAYS`, default 30, deleted row by row once older, while an uplink in the last 7 days corroborates the clock; shown back only `people_replay_days`, owner setting). The twin's 5-minute summaries (`core.sample_rollup`) hold fixed sensors only, never a roaming or worn / button tag | wearers |
 | IP addresses in the reverse proxy's access log | Caddy log volume, 90 days | everybody |
 
 ## 2. Read-access log (PDPA §37(1); PDPC 2022 security measures)
@@ -26,7 +27,8 @@ still names a registered route):
 |---|---|
 | Members | `GET /members`, `GET /members/:id/access` (the member) |
 | Devices and readings | `GET /devices`, `GET /devices/:id/state` and `/controls` (the device), `GET /gateways/:id/packets` (the gateway), `GET /discovery`, `GET /live`, `POST /studio/render`, `GET /studio/sources`, `GET /presence/:external` (the tag) |
-| Assets and plans | `GET /assets`, `GET /assets/:kind/:id`, `GET /assets/export.csv`, `GET /sites/:id`, `GET /twin/sites/:id/state` (digital twin; people as counts, pseudonyms or names, see `digital-twin.md`) |
+| Assets and plans | `GET /assets`, `GET /assets/:kind/:id`, `GET /assets/export.csv`, `GET /sites/:id`, `GET /twin/sites/:id/state` (digital twin; people as counts, pseudonyms or names, see `digital-twin.md`; with names `twin_live_named`, logged on every request) |
+| Digital twin history | `GET /twin/sites/:id/timeline` (with names `twin_timeline_named`, every request), `GET /twin/sites/:id/replay` (the site; a replay with pseudonyms or names is `twin_replay_people`, logged on every request), `GET /twin/people/:external/trail` (the tag, every request) |
 | Learned signals | `GET /signals`, `GET /signals/sessions/:id` |
 | Events and alerts | `GET /events` (`?external_id=` → the tag), `GET /alerts`, `GET /alerts/summary`, `GET /notifications` |
 | What flows and people did | `GET /automations/:id/runs`, `GET /commands` (`?device_id=` → the device), `GET /commands/:id` |
@@ -102,7 +104,8 @@ panel only for roaming tags.
 
 - **Export.** `POST /devices/:id/privacy-export` streams a ZIP straight from the database:
   - `summary.json`: the registration, presence, events and alerts;
-  - `samples.ndjson` and `ble_history.ndjson`: at most 100,000 rows each;
+  - `samples.ndjson`, `ble_history.ndjson` and `presence_history.ndjson` (the digital twin's zone changes): at most
+    100,000 rows each;
   - `manifest.json`: written last. `"complete": true` marks a whole archive, and `truncated` says whether a cap was
     hit. An archive without it was cut off mid-stream.
 
@@ -124,6 +127,8 @@ panel only for roaming tags.
     - samples;
     - raw advertisements;
     - zone presence, when the tag's zone, or the zone it is moving to, is in scope;
+    - movement history (the digital twin's zone changes), when either end is in scope or neither is known, and the
+      tag's 5-minute summaries on gateways in scope (matched in lower case, whatever case the registration uses);
     - events no alert points at.
   - **Kept but scrubbed:**
     - Alerts stay as incident records under a generic title that names only the kind of event ("กดปุ่มฉุกเฉิน SOS ·

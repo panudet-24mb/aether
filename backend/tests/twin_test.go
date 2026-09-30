@@ -209,15 +209,15 @@ func TestTwinStateIsScoped(t *testing.T) {
 	if code, _, _ := req(t, api, "GET", path, "Bearer "+blind.AccessToken, "", "", nil); code != 403 {
 		t.Fatalf("floorplan none still reads the twin: %d", code)
 	}
-	// A viewer asking for names gets counts: named needs owner, admin or operator.
+	// A viewer asking for names gets at most tracks: named needs owner, admin or operator (the demo's settings allow names).
 	viewerEmail := memberEmail()
 	addMember(t, api, owner.AccessToken, viewerEmail, "viewer", nil)
 	viewer, _ := changeInitialPassword(t, f, api, viewerEmail, st.TenantID)
 	code, out, _ := req(t, api, "GET", path+"?people=named", "Bearer "+viewer.AccessToken, "", "", nil)
-	if code != 200 || out["presence"].(map[string]any)["mode"] != "counts" {
+	if code != 200 || out["presence"].(map[string]any)["mode"] != "tracks" {
 		t.Fatalf("viewer names: %d %v", code, out["presence"])
 	}
-	// Outside a demo workspace nobody gets names yet (until twin_settings, P2).
+	// Outside a demo workspace the default settings (counts) give nobody names until an owner allows them.
 	code, site, _ := req(t, api, "POST", "/api/v1/sites", "Bearer "+other.AccessToken, "", "", map[string]any{"name": "อาคารจริง", "description": ""})
 	if code != 201 {
 		t.Fatalf("site: %d", code)

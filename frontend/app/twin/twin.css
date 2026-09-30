@@ -93,3 +93,20 @@
 @media (prefers-reduced-motion: reduce) {
   .twin-sos-chip, .twin-minimap-sos { animation: none; }
 }
+
+/* Replay (replay/timeline.tsx): a strip under the stage. */
+.twin-replay { border-top: 1px solid var(--color-border); background: var(--color-panel); padding: 8px 14px 6px; display: flex; flex-direction: column; gap: 6px; }
+.twin-replay-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.twin-replay-time { font-variant-numeric: tabular-nums; color: var(--color-ink); margin-left: 4px; }
+.twin-replay-busy { color: var(--color-muted); }
+.twin-replay-live { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
+.twin-replay-track { position: relative; height: 58px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); cursor: pointer; touch-action: none; }
+.twin-replay-track:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.twin-replay-track canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.twin-replay-lanes { position: absolute; left: 6px; top: 2px; bottom: 14px; display: flex; flex-direction: column; justify-content: space-around; font-size: 9px; color: var(--color-muted); pointer-events: none; }
+.twin-replay-ends { display: flex; justify-content: space-between; font-size: 10px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.twin-seg button svg { margin-right: 3px; vertical-align: -2px; }
+@media (max-width: 560px) {
+  .twin-replay-live { margin-left: 0; }
+  .twin-replay-lanes { display: none; }
+}

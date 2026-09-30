@@ -60,8 +60,13 @@ var readRules = map[string]readRule{
 	"GET /api/v1/assets/export.csv":    {resource: "assets_export", kind: "device_list", subject: everything},
 	"GET /api/v1/sites/:id":            {resource: "site", kind: "site", subject: param("id")},
 	"GET /api/v1/twin/sites/:id/state": {resource: "twin_live", kind: "site", subject: param("id")},
-	"GET /api/v1/signals":              {resource: "signals", kind: "signal_list", subject: everything},
-	"GET /api/v1/signals/sessions/:id": {resource: "signal_session", kind: "signal_session", subject: param("id")},
+	// The twin's history: where people were (replay with pseudonyms or names is logged on every request, see twin.go),
+	// and one named person's trail, always.
+	"GET /api/v1/twin/sites/:id/timeline":     {resource: "twin_timeline", kind: "site", subject: param("id")},
+	"GET /api/v1/twin/sites/:id/replay":       {resource: "twin_replay", kind: "site", subject: param("id")},
+	"GET /api/v1/twin/people/:external/trail": {resource: "presence_history", kind: "device_identity", subject: param("external"), always: true},
+	"GET /api/v1/signals":                     {resource: "signals", kind: "signal_list", subject: everything},
+	"GET /api/v1/signals/sessions/:id":        {resource: "signal_session", kind: "signal_session", subject: param("id")},
 	// Events, alerts and what was sent about them.
 	"GET /api/v1/events":         {resource: "events", kind: "event_list", subject: everything, byQuery: [2]string{"external_id", "device_identity"}},
 	"GET /api/v1/alerts":         {resource: "alerts", kind: "alert_list", subject: everything},
@@ -82,6 +87,10 @@ var readRules = map[string]readRule{
 
 // readResourceLocal is the Locals key a handler sets to log a narrower resource than its rule names.
 const readResourceLocal = "read_resource"
+
+// readAlwaysLocal is the Locals key a handler sets when this response must be logged on its own row, never folded
+// into the dedupe window (the twin's replay with people in it).
+const readAlwaysLocal = "read_always"
 
 // readDedupe is how long the same actor reading the same subject is one log row (screens poll).
 const readDedupe = 10 * time.Minute
@@ -203,7 +212,8 @@ func (l *readLog) middleware(c fiber.Ctx) error {
 		resource = r
 	}
 	in := domain.AccessRead{Resource: resource, SubjectKind: kind, SubjectID: subject, RequestID: requestID(c), ClientIP: c.IP()}
-	if e := l.write(c.Context(), p, in, rule.always); e != nil {
+	always, _ := c.Locals(readAlwaysLocal).(bool)
+	if e := l.write(c.Context(), p, in, rule.always || always); e != nil {
 		// The handler already produced the body; the error handler replaces it, and nothing names a download.
 		c.Response().Header.Del(fiber.HeaderContentDisposition)
 		c.Response().Header.SetContentType(fiber.MIMEApplicationJSON)
@@ -464,7 +474,7 @@ func privacyRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 		return c.JSON(out)
 	})
 
-	// A tag's history streams as a ZIP (summary.json, samples.ndjson, ble_history.ndjson, manifest.json), so the
+	// A tag's history streams as a ZIP (summary.json, samples.ndjson, ble_history.ndjson, presence_history.ndjson, manifest.json), so the
 	// server never holds it whole. Everything that must hold before data leaves happens first: the owner check, the
 	// audit row and the read-access log row (fail closed, 503). A failure while streaming cannot change the status any
 	// more: the archive then lacks manifest.json, whose "complete": true marks a whole export.
@@ -563,7 +573,7 @@ func streamIdentityZip(ctx context.Context, s *app.Service, p domain.Principal, 
 		return e
 	}
 	truncated := map[string]bool{}
-	for _, kind := range []string{"samples", "ble_history"} {
+	for _, kind := range []string{"samples", "ble_history", "presence_history"} {
 		refresh()
 		f, e := z.Create(kind + ".ndjson")
 		if e != nil {

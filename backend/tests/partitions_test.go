@@ -592,7 +592,7 @@ func TestPartitionHealthAndLegacyPruning(t *testing.T) {
 		t.Fatal(e)
 	}
 	health, e := f.repo.PartitionHealth(ctx)
-	if e != nil || len(health) != 3 { // ble_history, sensor_samples, access_log (00038)
+	if e != nil || len(health) != 5 { // ble_history, sensor_samples, access_log (00038), presence_history, sample_rollup (00046)
 		t.Fatalf("health: %+v %v", health, e)
 	}
 	for _, h := range health {

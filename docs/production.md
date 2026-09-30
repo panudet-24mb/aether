@@ -466,6 +466,18 @@ curl -s https://aether.hospital.local/health/ready
 - `restore.sh` ตั้งรหัสของ `aether_auth` จาก `.env.prod` ด้วยถ้ามี · รหัสทั้งสาม role ถูกอ่านใน psql ด้วย `\getenv` จาก environment จึงไม่อยู่ใน argument ของ process ใด
 - ตรวจหลังอัปเกรด: login ผ่านหน้าเว็บ · `docker compose ... logs migrate | grep 'auth role'`
 
+### Migration `00046`/`00047`: ประวัติของ Digital twin (ย้อนดูเหตุการณ์)
+
+ไม่ต้องหยุดระบบ: `00046` สร้าง `core.presence_history` (การย้ายโซนของแท็กที่มีคนสวม, แบ่งรายเดือน), `core.sample_rollup` (ค่าสรุปราย 5 นาที, แบ่งรายเดือน), `core.twin_settings` และขยาย `core.maintain_partitions` / `core.prune_history` / `core.partition_health` ให้ดูแลสองตารางใหม่ (การ์ดเดิมครบ: UTC, ทิ้งตามข้อมูลจริง, ครั้งละขั้น) · ตอน migrate เติม `presence_history` จากเหตุการณ์ zone ที่ยังอยู่ใน log · `00047` ให้การลบประวัติแท็กลบ `presence_history` ด้วย
+
+- ค่าใหม่ใน `.env.prod`: `PRESENCE_HISTORY_DAYS` (ค่าเริ่มต้น 30, 1–400, `setup.py --presence-history-days`) ส่งให้ **`migrate`** เหมือน `ACCESS_LOG_RETENTION_DAYS` (log `presence history retention: N days`) API เปลี่ยนค่านี้ไม่ได้
+- API มี worker ใหม่ทำค่าสรุปราย 5 นาทีทุกนาที · ครั้งแรกไล่ย้อนหลังตาม `SAMPLE_RETENTION_DAYS` ทีละ 6 ชั่วโมงต่อขั้น (ไม่แตะเส้นทาง ingest)
+- `partition_health` รายงาน 5 ตาราง (เพิ่ม `presence_history`, `sample_rollup`) · `PARTITION ALERT` ใช้กับสองตารางนี้ด้วย
+- การแสดงคนในการย้อนดูตั้งโดย owner ใน “ความเป็นส่วนตัว → Digital twin” (ค่าเริ่มต้น: จำนวนคนต่อโซน, ย้อนได้ 7 วัน) · ทุกการย้อนดูคนแบบไม่ระบุชื่อหรือระบุชื่อถูกบันทึกใน access log ทุกครั้ง
+- ประวัติการย้ายโซนถูกลบทีละแถวเมื่อเก่ากว่า `PRESENCE_HISTORY_DAYS` (ทุกรอบ maintenance) โดยไม่รอแถวใหม่กว่าของตัวเอง แต่จะหยุดลบถ้าไม่มี uplink ใดเข้ามาเลยใน 7 วัน (กันนาฬิกากระโดด) · ถ้าเห็น `drop_held core.presence_history_…` ใน log แปลว่าระบบไม่ได้รับข้อมูลมาเกินสัปดาห์
+- ค่าสรุปราย 5 นาทีเก็บเฉพาะเซนเซอร์ติดตั้งประจำ (ไม่มีแท็กที่คนสวม) · worker ต้องมี statement timeout (ตั้งเอง 60 วินาที) ถ้าขั้นใดเกินเวลาจะลดช่วงลงครึ่งหนึ่งเอง
+- ฐานข้อมูลปฏิเสธ sample ที่ย้อนเวลาเกิน 15 นาทีจาก runtime role ยกเว้น workspace สาธิต (trigger `sensor_samples_not_backdated`) · นาฬิกาของเครื่อง API และฐานข้อมูลต้องตรงกันภายใน 15 นาที (ใน compose เดียวกันตรงกันอยู่แล้ว)
+
 ### Migration `00038`/`00039`: บันทึกการเข้าถึงข้อมูลส่วนบุคคล, ส่งออกและลบ (PDPA)
 
 ไม่ต้องหยุดระบบ: `00038` สร้างตาราง `core.access_log` (แบ่งรายเดือน) และขยาย `core.maintain_partitions` / `core.prune_history` ให้ดูแลตารางนี้ด้วย ส่วน `00039` เพิ่มคอลัมน์ `erased_at` / `notice_ack_version` ใน `identity.users` (metadata อย่างเดียว) ตาราง `core.erasure_log` และฟังก์ชันลบข้อมูล หลังอัปเกรด:

@@ -34,6 +34,9 @@ func main() {
 		e = applyAccessLogRetention(db, os.Getenv("ACCESS_LOG_RETENTION_DAYS"))
 	}
 	if e == nil {
+		e = applyPresenceRetention(db, os.Getenv("PRESENCE_HISTORY_DAYS"))
+	}
+	if e == nil {
 		e = applyAuthPassword(db, os.Getenv("AUTH_DB_PASSWORD"))
 	}
 	if e == nil {
@@ -60,6 +63,25 @@ func applyAccessLogRetention(db *sql.DB, raw string) error {
 		return e
 	}
 	fmt.Printf("access log retention: %d days\n", stored)
+	return nil
+}
+
+// applyPresenceRetention sets how long the twin's movement history (core.presence_history, migration 00046) is
+// kept, 1..400 days. Like the access log's, only this role may: the API cannot lengthen how long people are tracked.
+// Unset leaves the stored value (default 30 days).
+func applyPresenceRetention(db *sql.DB, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	days, e := strconv.Atoi(raw)
+	if e != nil || days < 1 || days > 400 {
+		return fmt.Errorf("PRESENCE_HISTORY_DAYS must be 1..400")
+	}
+	var stored int
+	if e := db.QueryRow(`SELECT core.set_presence_history_retention($1)`, days).Scan(&stored); e != nil {
+		return e
+	}
+	fmt.Printf("presence history retention: %d days\n", stored)
 	return nil
 }
 

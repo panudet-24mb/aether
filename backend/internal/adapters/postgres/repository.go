@@ -692,8 +692,31 @@ func (r *Repository) DeviceState(ctx context.Context, p domain.Principal, id str
 	return s, e
 }
 func (r *Repository) CapturePacket(ctx context.Context, tenant, gateway string, payload json.RawMessage) (string, error) {
+	return r.capturePacket(ctx, tenant, gateway, payload, time.Time{}, false)
+}
+
+// CapturePacketAt stores a packet as if it had arrived at `at`: the demo backfill (cmd/demo-twin backfill) gives a
+// fresh demo workspace a day of history for the twin's replay. Only a demo workspace, and never a time in the future:
+// a real workspace's history is what really arrived.
+func (r *Repository) CapturePacketAt(ctx context.Context, tenant, gateway string, payload json.RawMessage, at time.Time) (string, error) {
+	if at.IsZero() || at.After(time.Now()) {
+		return "", domain.ErrInvalid
+	}
+	return r.capturePacket(ctx, tenant, gateway, payload, at.UTC(), true)
+}
+
+func (r *Repository) capturePacket(ctx context.Context, tenant, gateway string, payload json.RawMessage, at time.Time, backdated bool) (string, error) {
 	id := uuid.NewString()
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
+		if backdated {
+			var demo []bool
+			if e := tx.Raw(`SELECT demo FROM core.tenants WHERE id=core.tenant_id()`).Scan(&demo).Error; e != nil {
+				return e
+			}
+			if len(demo) != 1 || !demo[0] {
+				return domain.ErrForbidden
+			}
+		}
 		// Serialize capture/pruning per gateway; keep at most 100 diagnostic packets.
 		var models []string
 		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, gateway).Scan(&models).Error; e != nil {
@@ -706,10 +729,17 @@ func (r *Repository) CapturePacket(ctx context.Context, tenant, gateway string, 
 		if models[0] == domain.TuyaCloudGatewayModel {
 			return domain.ErrForbidden
 		}
-		if e := tx.Exec(`INSERT INTO core.gateway_packets(id,tenant_id,gateway_id,payload) VALUES(?,?,?,?::jsonb)`, id, tenant, gateway, string(payload)).Error; e != nil {
+		// A live packet's time is read under the gateway lock, so concurrent deliveries through one gateway are in
+		// time order (the redelivery check below compares against the rows before this one).
+		if !backdated {
+			at = time.Now().UTC()
+		}
+		if e := tx.Exec(`INSERT INTO core.gateway_packets(id,tenant_id,gateway_id,payload,received_at) VALUES(?,?,?,?::jsonb,?)`, id, tenant, gateway, string(payload), at).Error; e != nil {
 			return e
 		}
-		now := time.Now().UTC()
+		// Every time on the path below is `now` (samples, streams, events, alerts, zones), so a backdated packet
+		// lands where it belongs in the history.
+		now := at
 		// raws is this packet's distinct advertisements per advertiser, built while they are archived.
 		// Learned signals are matched against it inside saveEvents, so nothing re-parses the payload.
 		raws, e := saveBLEHistory(tx, tenant, gateway, payload, now)

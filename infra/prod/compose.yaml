@@ -243,6 +243,9 @@ services:
       # must not be able to shorten the trail it writes (core.retention_policy, migration 00038).
       # Unset or empty leaves the stored value (setup.py always writes one).
       ACCESS_LOG_RETENTION_DAYS: ${ACCESS_LOG_RETENTION_DAYS:-}
+      # How long the digital twin keeps where worn tags (people) were (core.presence_history, migration 00046); set
+      # here for the same reason. Unset or empty leaves the stored value (default 30 days).
+      PRESENCE_HISTORY_DAYS: ${PRESENCE_HISTORY_DAYS:-}
       # The API's login role (aether_auth, migration 00040): created by the migration, given LOGIN and this password
       # (as a SCRAM verifier) on every migrate run, which is also how it is rotated.
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?run infra/prod/setup.py}

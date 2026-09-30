@@ -254,6 +254,9 @@ def main() -> int:
     p.add_argument("--access-log-days", type=int, default=None,
                    help="ACCESS_LOG_RETENTION_DAYS: how long the read-access log of personal data is kept (30-3650, "
                         "default 400); a re-run without this flag keeps the value already set")
+    p.add_argument("--presence-history-days", type=int, default=None,
+                   help="PRESENCE_HISTORY_DAYS: how long the digital twin keeps where worn tags (people) were (1-400, "
+                        "default 30); a re-run without this flag keeps the value already set")
     p.add_argument("--ops-status-tenant", default=None,
                    help="OPS_STATUS_TENANT: the workspace (tenant uuid) whose owners see backup/PITR health on the web. "
                         "create-owner.sh records the first workspace here itself; a re-run without this flag keeps the "
@@ -291,6 +294,8 @@ def main() -> int:
         return fail("--privacy-notice-url must be an https:// URL (or 'off')")
     if a.ops_status_tenant not in (None, "all") and not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", a.ops_status_tenant.lower()):
         return fail("--ops-status-tenant must be a tenant uuid (or 'all')")
+    if a.presence_history_days is not None and not 1 <= a.presence_history_days <= 400:
+        return fail("--presence-history-days must be 1..400")
     if a.access_log_days is not None and not 30 <= a.access_log_days <= 3650:
         return fail("--access-log-days must be between 30 and 3650")
     if a.offsite and a.offsite != "off" and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}:[A-Za-z0-9_./\-]{0,500}", a.offsite):
@@ -645,6 +650,7 @@ pg1-database=aether
         "BLE_HISTORY_HOURS": "24",
         # Personal data (docs/platform/privacy.md): the read-access log's retention and the privacy notice link.
         "ACCESS_LOG_RETENTION_DAYS": str(a.access_log_days) if a.access_log_days is not None else old.get("ACCESS_LOG_RETENTION_DAYS", "400"),
+        "PRESENCE_HISTORY_DAYS": str(a.presence_history_days) if a.presence_history_days is not None else old.get("PRESENCE_HISTORY_DAYS", "30"),
         "PRIVACY_NOTICE_URL": ("" if a.privacy_notice_url == "off" else a.privacy_notice_url) if a.privacy_notice_url is not None else old.get("PRIVACY_NOTICE_URL", ""),
         # Whose owners see the deployment's backup health (GET /api/v1/system/status); empty: every owner.
         "OPS_STATUS_TENANT": ("" if a.ops_status_tenant == "all" else a.ops_status_tenant.lower()) if a.ops_status_tenant is not None else old.get("OPS_STATUS_TENANT", ""),

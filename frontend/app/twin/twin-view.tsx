@@ -30,8 +30,12 @@ export type TwinViewProps = {
   siteId: string;
   source: TwinSource;
   floorId?: string;
-  /** Live only for now; replay arrives with phase P3. */
-  mode?: "live";
+  /** live polls the state; replay draws `frozen` (the state at the replay's time) and never polls. */
+  mode?: "live" | "replay";
+  /** The state to draw instead of polling (replay: stateAt the scrubbed time). */
+  frozen?: TwinState | null;
+  /** Fly to a new SOS on its own (live); replay flies only when asked (a marker). */
+  autoFocus?: boolean;
   layers: Layer[];
   people: PeopleMode;
   quality?: Quality | "auto";
@@ -104,15 +108,24 @@ export default function TwinView(props: TwinViewProps) {
     return () => { active = false; };
   }, [siteId, source, cb, revisions]);
 
+  // Replay: the page hands the state at the scrubbed time.
+  const replaying = props.mode === "replay";
+  const frozen = replaying ? props.frozen ?? null : null;
+  useEffect(() => {
+    if (!frozen) return;
+    const id = requestAnimationFrame(() => { setState(frozen); cb.current.onState?.(frozen); });
+    return () => cancelAnimationFrame(id);
+  }, [frozen, cb]);
+
   // Live state: now, on every refreshKey, and on the safety-net poll.
   useEffect(() => {
-    if (!siteId || paused) return;
+    if (!siteId || paused || replaying) return;
     let active = true;
     const load = () => source.state(siteId, people).then((s) => { if (active) { setState(s); cb.current.onState?.(s); } }).catch((e) => { if (active) cb.current.onError?.(e); });
     void load();
     const t = setInterval(load, Math.max(3000, pollMs));
     return () => { active = false; clearInterval(t); };
-  }, [siteId, source, people, paused, pollMs, refreshKey, cb]);
+  }, [siteId, source, people, paused, pollMs, refreshKey, cb, replaying]);
 
   // The engine: created once per mount (WebGL contexts are capped: never one per render).
   useEffect(() => {
@@ -195,7 +208,7 @@ export default function TwinView(props: TwinViewProps) {
     const known = seenAlerts.current ?? new Set<string>();
     const fresh = urgent.filter((a) => !known.has(a.id));
     seenAlerts.current = new Set(urgent.map((a) => a.id));
-    if (!fresh.length) return;
+    if (!fresh.length || props.autoFocus === false) return;
     const a = fresh[0];
     const e = engineRef.current;
     const zone = e?.zoneName(a.gateway_id) ?? null;
@@ -205,7 +218,7 @@ export default function TwinView(props: TwinViewProps) {
     e?.focusAlert(a);
     cb.current.onAlertFocus?.(a, zone?.name ?? null);
     return () => cancelAnimationFrame(id);
-  }, [state, site, cb]);
+  }, [state, site, cb, props.autoFocus]);
 
   // Labels: zone names with headcounts on the active floor, alerting devices, the selected device.
   useEffect(() => {

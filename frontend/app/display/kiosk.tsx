@@ -1,11 +1,14 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BatteryLow, Bell, Building2, CheckCircle2, Cpu, LayoutDashboard, Radio, Siren, Users, Volume2, VolumeX, Wifi, WifiOff } from "lucide-react";
+import { BatteryLow, Bell, Boxes, Building2, CheckCircle2, Cpu, DoorOpen, Flame, LayoutDashboard, Radio, Siren, Users, Volume2, VolumeX, Wifi, WifiOff, Wind, Zap } from "lucide-react";
 import "../aether.css";
 import "./kiosk.css";
+import "../twin/twin.css";
 import View3D, { type Floor3D } from "../floorplan/view3d";
 import { draftOf, type AssetView, type Floor, type Site, type Zone } from "../floorplan/model";
 import { WidgetFrame } from "../studio";
+import TwinView, { type TwinSource } from "../twin/twin-view";
+import type { TwinState } from "../twin/api";
 
 /**
  * The wall display (docs/platform/display.md): paired once with a code, then a full-screen rotation of read-only
@@ -17,7 +20,7 @@ const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 const TOKEN_KEY = "aether.display.token";
 const BOARD_POLL_MS = 15000, BOARD_POLL_LIVE_MS = 60000, SESSION_POLL_MS = 60000, STALE_MS = 60000;
 
-type ViewKind = "overview" | "alerts" | "floorplan" | "devices" | "presence" | "studio";
+type ViewKind = "overview" | "alerts" | "floorplan" | "devices" | "presence" | "studio" | "twin";
 type PlaylistItem = { kind: ViewKind; seconds: number; ref?: string };
 type Session = { id: string; name: string; tenant_name: string; project_ids: string[]; playlist: PlaylistItem[]; show_names: boolean; allow_ack: boolean };
 type BoardGateway = { id: string; name: string; model: string; project_id: string | null; last_seen: string | null; online: boolean };
@@ -30,6 +33,8 @@ type Board = {
   gateways: BoardGateway[];
   devices: BoardDevice[];
   alerts: BoardAlert[];
+  /** The last day's resolved alerts, shown under the all-clear. */
+  recent?: BoardAlert[];
   counts: { open: number; acknowledged: number; critical: number; gateways: number; gateways_online: number; devices: number; devices_online: number; low_battery: number };
   presence: Presence[];
 };
@@ -53,8 +58,8 @@ async function kiosk<T>(token: string, path: string, method: "GET" | "POST" = "G
   return (await r.json()) as T;
 }
 
-const VIEW_LABEL: Record<ViewKind, string> = { overview: "ภาพรวม", alerts: "การแจ้งเตือน", floorplan: "ผังอาคาร", devices: "สถานะอุปกรณ์", presence: "ผู้สวมอุปกรณ์ในแต่ละพื้นที่", studio: "Dashboard" };
-const VIEW_ICON: Record<ViewKind, typeof Bell> = { overview: Radio, alerts: Bell, floorplan: Building2, devices: Cpu, presence: Users, studio: LayoutDashboard };
+const VIEW_LABEL: Record<ViewKind, string> = { overview: "ภาพรวม", alerts: "การแจ้งเตือน", floorplan: "ผังอาคาร", devices: "สถานะอุปกรณ์", presence: "คนในแต่ละพื้นที่", studio: "Dashboard", twin: "Digital twin" };
+const VIEW_ICON: Record<ViewKind, typeof Bell> = { overview: Radio, alerts: Bell, floorplan: Building2, devices: Cpu, presence: Users, studio: LayoutDashboard, twin: Boxes };
 const SEVERITY_LABEL: Record<string, string> = { critical: "วิกฤต", warning: "เฝ้าระวัง", info: "ข้อมูล" };
 
 const two = (n: number) => String(n).padStart(2, "0");
@@ -243,6 +248,15 @@ function Wall({ token, onUnpaired }: { token: string; onUnpaired: () => void }) 
     return () => { active = false; clearInterval(id); };
   }, [token, siteRef, fail]);
 
+  // The digital twin (a playlist "twin" view): kept mounted for the whole rotation and paused while another view is
+  // on screen, because browsers cap WebGL contexts and a remount per rotation would soon run out of them.
+  const twinRef = session?.playlist.find((v) => v.kind === "twin");
+  const twinSite = twinRef ? (twinRef.ref || site?.id || "") : "";
+  const twinSource = useMemo<TwinSource>(() => ({
+    site: async (id) => { const out = await kiosk<{ site: Site | null }>(token, `/floorplan?site=${id}`); if (!out.site) throw new Error("no site"); return out.site; },
+    state: (id, people) => kiosk<TwinState>(token, `/twin/sites/${id}/state?people=${people}`),
+  }), [token]);
+
   // Rotation: pauses while an emergency holds the screen.
   const playlist = useMemo<PlaylistItem[]>(() => (session?.playlist?.length ? session.playlist : [{ kind: "overview", seconds: 30 }]), [session]);
   const [step, setStep] = useState(0);
@@ -290,7 +304,10 @@ function Wall({ token, onUnpaired }: { token: string; onUnpaired: () => void }) 
     </header>
     {stale && <div className="ks-stale" role="status">ข้อมูลอาจไม่เป็นปัจจุบัน · อัปเดตล่าสุด {clock(lastOk)} · กำลังเชื่อมต่อใหม่อัตโนมัติ</div>}
     {!alarm.unlocked && <div className="ks-unlock" role="note">แตะหน้าจอหนึ่งครั้งเพื่อเปิดเสียงเตือนฉุกเฉิน</div>}
-    <section key={`${step}-${current.kind}`} className="ks-stage" aria-live="polite">
+    {twinSite && <section className={`ks-stage ks-twin ${current.kind === "twin" ? "" : "is-hidden"}`} aria-hidden={current.kind !== "twin"}>
+      <TwinView siteId={twinSite} source={twinSource} layers={["temperature", "people"]} people="counts" quality="auto" tour autoFocus paused={current.kind !== "twin" && takeovers.length === 0} large pollMs={20000} />
+    </section>}
+    {current.kind !== "twin" && <section key={`${step}-${current.kind}`} className="ks-stage" aria-live="polite">
       {!board ? <p className="ks-loading">กำลังโหลดข้อมูล…</p>
         : current.kind === "overview" ? <OverviewView board={board} now={now} />
         : current.kind === "alerts" ? <AlertsView board={board} now={now} />
@@ -298,7 +315,7 @@ function Wall({ token, onUnpaired }: { token: string; onUnpaired: () => void }) 
         : current.kind === "devices" ? <DevicesView board={board} now={now} />
         : current.kind === "presence" ? <PresenceView board={board} zoneOf={zoneOf} showNames={!!session?.show_names} />
         : <StudioView token={token} dashboard={current.ref ?? ""} onFail={fail} />}
-    </section>
+    </section>}
     {takeovers.length > 0 && <Takeover alert={takeovers[0]} others={takeovers.length - 1} now={now} site={site} zoneOf={zoneOf} canAck={!!session?.allow_ack} acking={acking === takeovers[0].id} onAck={() => void acknowledge(takeovers[0].id)} soundOff={muted || !alarm.unlocked} />}
   </main>;
 }
@@ -313,7 +330,7 @@ function zoneIndex(site: Site | null): Map<string, ZoneHit> {
 
 function OverviewView({ board, now }: { board: Board; now: number }) {
   const c = board.counts;
-  const env = board.devices.filter((d) => typeof d.reading.temperature === "number").slice(0, 12);
+  const env = board.devices.filter((d) => typeof d.reading.temperature === "number" && !d.wearable).slice(0, 8);
   return <div className="ks-overview">
     <div className="ks-kpis">
       <Kpi label="แจ้งเตือนเปิดอยู่" value={c.open} tone={c.critical > 0 ? "danger" : c.open > 0 ? "warn" : "ok"} sub={c.critical > 0 ? `วิกฤต ${c.critical}` : c.acknowledged > 0 ? `รับทราบแล้ว ${c.acknowledged}` : "ไม่มีเรื่องค้าง"} />
@@ -321,6 +338,7 @@ function OverviewView({ board, now }: { board: Board; now: number }) {
       <Kpi label="อุปกรณ์ออนไลน์" value={`${c.devices_online}/${c.devices}`} tone={c.devices_online < c.devices ? "warn" : "ok"} sub="ได้ยินภายใน 10 นาที" />
       <Kpi label="แบตเตอรี่ต่ำ" value={c.low_battery} tone={c.low_battery > 0 ? "warn" : "ok"} sub="ต่ำกว่า 20%" />
     </div>
+    <OverviewStrip board={board} />
     {env.length > 0 ? <div className="ks-env">{env.map((d) => <article key={d.id} className={`ks-env-card ${d.online ? "" : "is-off"}`}>
       <p>{d.name}</p>
       <strong>{d.reading.temperature.toFixed(1)}<span>°C</span></strong>
@@ -329,12 +347,43 @@ function OverviewView({ board, now }: { board: Board; now: number }) {
   </div>;
 }
 
+/** Energy, doors, air and life-safety at a glance, from every device family's latest reading. */
+function OverviewStrip({ board }: { board: Board }) {
+  const has = (k: string) => board.devices.filter((d) => typeof d.reading[k] === "number");
+  const power = has("power"), doors = has("door"), air = has("co2"), pm = has("pm25");
+  const hazards = board.devices.filter((d) => ["smoke", "gas", "carbon_monoxide", "leak"].some((k) => typeof d.reading[k] === "number"));
+  const alarming = hazards.filter((d) => ["smoke", "gas", "carbon_monoxide", "leak"].some((k) => d.reading[k] === 1));
+  const open = doors.filter((d) => d.reading.door === 1);
+  const watts = power.reduce((n, d) => n + (d.reading.power ?? 0), 0);
+  const kwh = power.reduce((n, d) => n + (d.reading.energy ?? 0), 0);
+  const co2 = air.length ? Math.max(...air.map((d) => d.reading.co2)) : null;
+  const pm25 = pm.length ? Math.max(...pm.map((d) => d.reading.pm25)) : null;
+  const lights = board.devices.reduce((n, d) => n + ["sw1", "sw2", "sw3", "sw4"].filter((k) => d.reading[k] === 1).length, 0);
+  if (!power.length && !doors.length && !air.length && !hazards.length) return null;
+  const top = [...power].sort((a, b) => (b.reading.power ?? 0) - (a.reading.power ?? 0)).slice(0, 3);
+  return <div className="ks-strip">
+    {power.length > 0 && <article><p><Zap aria-hidden="true" />พลังงาน</p><strong>{watts >= 1000 ? `${(watts / 1000).toFixed(2)} kW` : `${watts.toFixed(0)} W`}</strong><small>{power.length} เต้ารับวัดไฟ · สะสม {kwh.toFixed(1)} kWh{top.length ? ` · สูงสุด ${top[0].name}` : ""}</small></article>}
+    {hazards.length > 0 && <article className={alarming.length ? "is-danger" : ""}><p><Flame aria-hidden="true" />ความปลอดภัย</p><strong>{alarming.length ? `พบ ${alarming.length} จุด` : "ปกติ"}</strong><small>{alarming.length ? alarming.map((d) => d.name).slice(0, 2).join(" · ") : `ควัน แก๊ส CO น้ำรั่ว · ${hazards.length} ตัวตรวจจับ`}</small></article>}
+    {doors.length > 0 && <article className={open.length ? "is-warn" : ""}><p><DoorOpen aria-hidden="true" />ประตู</p><strong>{open.length ? `เปิด ${open.length}` : "ปิดทั้งหมด"}</strong><small>{open.length ? open.map((d) => d.name).slice(0, 2).join(" · ") : `${doors.length} จุดที่เฝ้าดู`}</small></article>}
+    {(co2 != null || pm25 != null) && <article className={(co2 ?? 0) > 1000 || (pm25 ?? 0) > 35 ? "is-warn" : ""}><p><Wind aria-hidden="true" />คุณภาพอากาศ</p><strong>{co2 != null ? `CO₂ ${Math.round(co2)}` : `PM2.5 ${Math.round(pm25!)}`}</strong><small>{co2 != null ? "ppm สูงสุด" : "µg/m³ สูงสุด"}{pm25 != null && co2 != null ? ` · PM2.5 ${Math.round(pm25)} µg/m³` : ""}{lights ? ` · ไฟเปิด ${lights} วงจร` : ""}</small></article>}
+  </div>;
+}
+
 function Kpi({ label, value, sub, tone }: { label: string; value: number | string; sub: string; tone: "ok" | "warn" | "danger" }) {
   return <div className={`ks-kpi is-${tone}`}><p>{label}</p><strong>{value}</strong><small>{sub}</small></div>;
 }
 
 function AlertsView({ board, now }: { board: Board; now: number }) {
-  if (board.alerts.length === 0) return <div className="ks-allclear"><CheckCircle2 aria-hidden="true" /><h2>ไม่มีการแจ้งเตือนค้าง</h2><p>ทุกอย่างปกติ · อัปเดต {clock(Date.parse(board.server_time))}</p></div>;
+  if (board.alerts.length === 0) {
+    const recent = board.recent ?? [];
+    return <div className={`ks-allclear ${recent.length ? "has-recent" : ""}`}><CheckCircle2 aria-hidden="true" /><h2>ไม่มีการแจ้งเตือนค้าง</h2><p>ทุกอย่างปกติ · อัปเดต {clock(Date.parse(board.server_time))}</p>
+      {recent.length > 0 && <section className="ks-recent"><h3>จัดการแล้วใน 24 ชั่วโมง</h3><ul className="ks-alerts is-recent">{recent.slice(0, 4).map((a) => <li key={a.id} className={`is-${a.severity}`}>
+        <span className="ks-sev">{SEVERITY_LABEL[a.severity] ?? a.severity}</span>
+        <div><strong>{a.title}</strong><small>{a.device_name} · {a.gateway_name || "ไม่ทราบ gateway"}</small></div>
+        <span className="ks-alert-time">{clock(Date.parse(a.opened_at))} · ปิดแล้ว</span>
+      </li>)}</ul></section>}
+    </div>;
+  }
   return <ul className="ks-alerts">{board.alerts.slice(0, 8).map((a) => <li key={a.id} className={`is-${a.severity} ${a.status === "acknowledged" ? "is-acked" : ""}`}>
     <span className="ks-sev">{SEVERITY_LABEL[a.severity] ?? a.severity}</span>
     <div><strong>{a.title}</strong><small>{a.device_name} · {a.gateway_name || "ไม่ทราบ gateway"}</small></div>
@@ -362,11 +411,28 @@ function FloorplanView({ site, board, takeovers }: { site: Site | null; board: B
   </div>;
 }
 
+const hasAny = (d: BoardDevice, keys: string[]) => keys.some((k) => typeof d.reading[k] === "number");
+/** Device families for the status wall, first match wins. */
+const FAMILIES: { label: string; match: (d: BoardDevice) => boolean }[] = [
+  { label: "อุปกรณ์สวมใส่", match: (d) => d.wearable },
+  { label: "ความปลอดภัย (ควัน แก๊ส น้ำรั่ว)", match: (d) => hasAny(d, ["smoke", "gas", "carbon_monoxide", "co", "leak"]) },
+  { label: "เต้ารับวัดไฟ", match: (d) => hasAny(d, ["power", "energy"]) && !hasAny(d, ["smoke", "gas", "carbon_monoxide", "co", "leak"]) },
+  { label: "สวิตช์ไฟ", match: (d) => hasAny(d, ["sw1", "sw2", "sw3", "sw4"]) && !hasAny(d, ["power"]) },
+  { label: "ประตูและตู้", match: (d) => hasAny(d, ["door", "contact"]) && !d.wearable },
+  { label: "ตรวจจับการเคลื่อนไหว", match: (d) => hasAny(d, ["motion", "occupancy"]) && !hasAny(d, ["door"]) },
+  { label: "คุณภาพอากาศ", match: (d) => hasAny(d, ["co2", "pm25", "voc"]) },
+  { label: "อุณหภูมิและความชื้น", match: (d) => !d.wearable && hasAny(d, ["temperature", "local_temperature"]) && !hasAny(d, ["co2", "pm25", "smoke", "leak", "door", "motion", "power"]) },
+];
+
 function DevicesView({ board, now }: { board: Board; now: number }) {
   const offline = board.devices.filter((d) => !d.online).slice(0, 10);
   const low = board.devices.filter((d) => typeof d.reading.battery === "number" && d.reading.battery > 0 && d.reading.battery <= 20).slice(0, 6);
+  const perGateway = new Map<string, number>();
+  for (const d of board.devices) perGateway.set(d.gateway_id, (perGateway.get(d.gateway_id) ?? 0) + 1);
+  const families = FAMILIES.map((f) => { const all = board.devices.filter(f.match); return { ...f, total: all.length, online: all.filter((d) => d.online).length }; }).filter((f) => f.total > 0);
   return <div className="ks-devices">
-    <div className="ks-gw">{board.gateways.map((g) => <span key={g.id} className={g.online ? "is-on" : "is-off"}><Radio aria-hidden="true" />{g.name}</span>)}</div>
+    <div className="ks-gw">{board.gateways.map((g) => <span key={g.id} className={g.online ? "is-on" : "is-off"}><Radio aria-hidden="true" />{g.name}{perGateway.get(g.id) ? <small>{perGateway.get(g.id)}</small> : null}</span>)}</div>
+    {families.length > 0 && <div className="ks-families">{families.map((f) => <article key={f.label} className={f.online < f.total ? "is-warn" : ""}><p>{f.label}</p><strong>{f.online}<small>/{f.total}</small></strong><small>ออนไลน์</small></article>)}</div>}
     <div className="ks-dev-cols">
       <section><h2>ขาดการติดต่อ <b>{board.devices.filter((d) => !d.online).length}</b></h2>{offline.length === 0 ? <p className="ks-good"><CheckCircle2 aria-hidden="true" />อุปกรณ์ทุกตัวส่งข้อมูลปกติ</p> : <ul>{offline.map((d) => <li key={d.id}><strong>{d.name}</strong><small>{ago(d.last_seen, now)}</small></li>)}</ul>}</section>
       <section><h2>แบตเตอรี่ต่ำ <b>{board.counts.low_battery}</b></h2>{low.length === 0 ? <p className="ks-good"><CheckCircle2 aria-hidden="true" />ไม่มีอุปกรณ์แบตต่ำ</p> : <ul>{low.map((d) => <li key={d.id}><strong>{d.name}</strong><small><BatteryLow aria-hidden="true" /> {d.reading.battery}%</small></li>)}</ul>}</section>

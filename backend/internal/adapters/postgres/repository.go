@@ -673,7 +673,7 @@ func (r *Repository) ListDevices(ctx context.Context, p domain.Principal) ([]dom
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		return tx.Raw(`SELECT d.id,d.tenant_id,d.gateway_id,d.name,d.external_id,d.profile_id,d.roaming,d.created_at,
       (SELECT ps.gateway_id FROM core.presence_state ps WHERE d.roaming AND ps.tenant_id=d.tenant_id AND ps.external_id=lower(d.external_id)) AS zone_gateway_id
-      FROM core.devices d WHERE d.removed_at IS NULL ORDER BY d.created_at DESC LIMIT 100`).Scan(&out).Error
+      FROM core.devices d WHERE d.removed_at IS NULL ORDER BY d.created_at DESC LIMIT 2000`).Scan(&out).Error
 	})
 	return out, e
 }

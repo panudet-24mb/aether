@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Activity, Bell, BellRing, Check, CheckCheck, DoorOpen, Droplets, ListChecks, Mail, MessageSquare, PersonStanding, Plus, RefreshCw, Send, ShieldAlert, Trash2, Webhook, WifiOff, Zap } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -8,6 +8,7 @@ import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
 import { formatMAC } from "../topology/catalog";
+import { WorkspaceMode } from "../demo-mode";
 
 type Alert = { id: string; rule_id: string | null; event_id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; severity: string; title: string; status: string; opened_at: string; acked_at: string | null; resolved_at: string | null; note: string | null };
 type Event = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
@@ -54,6 +55,7 @@ const when = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("
 const utf8 = (s: string) => new TextEncoder().encode(s).length;
 
 export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpenDevice, onSummary }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; onOpenDevice?: (external: string) => void; /** Keeps the sidebar badge in step with this page instead of waiting for its own slower poll. */ onSummary?: (open: number) => void }) {
+  const mode = useContext(WorkspaceMode);
   const handlers = useLatest({ getToken, refresh });
   const [client] = useState(() => createClientFrom(handlers));
   const [tab, setTab] = useState<Tab>("alerts");
@@ -409,6 +411,7 @@ export default function AlertsCenter({ getToken, refresh, onUnauthorized, onOpen
             {projects.length > 0 && projectPicker}
             <span className="ac-note">Webhook: POST JSON พร้อม HMAC ใน X-Aether-Signature · LINE: Messaging API push (ต้องมี channel access token และ user/group id) · อีเมล{emailAvailable ? " พร้อมใช้" : ": server ยังไม่ตั้งค่า SMTP"}</span>
           </div>
+          {mode.demo && mode.owner && <p className="ac-note ac-quiet-note">workspace นี้ไม่ส่งแจ้งเตือนออก (LINE / อีเมล / webhook) · ปุ่มทดสอบช่องทางยังส่งได้</p>}
           {channels.length === 0 && <div className="ac-empty"><Send size={30} /><h2>ยังไม่มีช่องทาง</h2><p>เพิ่ม webhook เพื่อทดสอบได้ทันที (เช่น webhook.site หรือ endpoint ในเครื่องขณะพัฒนา)</p></div>}
           <ul className="ac-list">
             {channels.filter((c) => inFilter(c.project_id, projectFilter)).map((c) => (

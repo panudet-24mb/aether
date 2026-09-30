@@ -4,6 +4,7 @@ import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Activity, Blinds, Bluetooth, Cloud, CloudOff, Cpu, DoorOpen, Droplets, Fan, Flame, FlaskConical, Gamepad2, Heater, Lightbulb, Lock, PersonStanding, Radio, RadioTower, Router, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Zap } from "lucide-react";
 import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, TUYA_CLOUD_GATEWAY_MODEL } from "./catalog";
 import type { GatewayHealth } from "./model";
+import { useShowSimulated } from "../demo-mode";
 
 export type BrokerData = { configured: boolean; host: string; port: number | null; scheme: string; receiving: number; total: number };
 export type GatewayData = {
@@ -107,6 +108,7 @@ const KIND_ICON: Record<string, typeof Thermometer> = { environment: Thermometer
   occupancy: PersonStanding, switch: ToggleRight, lighting: Lightbulb, cover: Blinds, lock: Lock, climate: Heater, fan: Fan, remote: Gamepad2, sos: Siren, hazard: Flame, metering: Zap, info: Cpu };
 
 const Device = memo(function Device({ data, selected }: NodeProps<DeviceNode>) {
+  const showSim = useShowSimulated();
   const profile = data.profile ? deviceProfile(data.profile) : undefined;
   const state = data.adopted ? (data.fresh ? "online" : data.decoded ? "stale" : "registered") : data.decoded ? "seen" : "raw";
   const Icon = (data.kind && KIND_ICON[data.kind]) || (data.decoded ? Thermometer : Bluetooth);
@@ -116,7 +118,7 @@ const Device = memo(function Device({ data, selected }: NodeProps<DeviceNode>) {
       <div className="topo-node-icon">
         {data.image ? <img className="topo-photo" src={data.image} alt="" /> : <Icon size={24} />}
         <span className="topo-node-dot" aria-hidden="true" />
-        {data.simulated && <span className="topo-node-tag">SIM</span>}
+        {showSim && data.simulated && <span className="topo-node-tag">SIM</span>}
         {data.alert && <span className="topo-node-tag is-alert">EVENT</span>}
         {data.roaming && <span className="topo-node-tag is-roam" title="ใช้ได้หลาย gateway">ROAM</span>}
       </div>

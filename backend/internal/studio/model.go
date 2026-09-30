@@ -1,10 +1,10 @@
 package studio
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -44,7 +44,39 @@ type Panel struct {
 	ExternalID string `json:"external_id"`
 	Width      int    `json:"width"`
 	Height     int    `json:"height"`
+	// Devices are the registered devices (core.devices ids) of a controls panel (WidgetID ControlsWidget).
+	Devices []string `json:"devices,omitempty"`
 }
+
+// ControlsWidget is the first-party controls panel: switches for the chosen devices, drawn natively by the app
+// (never in the widget sandbox, which runs no script in the browser) through the ordinary command API; a wall
+// display gets a static, read-only rendering of their state.
+const ControlsWidget = "aether:controls"
+
+// MaxControls bounds the devices of one controls panel.
+const MaxControls = 12
+
+// validControls reports a controls panel's device list: 1..MaxControls distinct uuids.
+func validControls(ids []string) bool {
+	if len(ids) == 0 || len(ids) > MaxControls {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if _, e := uuid.Parse(id); e != nil || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
+}
+
+// sourcePattern is a panel's device: a BLE MAC (12 hex digits), a Zigbee IEEE address (0x + 16 hex digits) or a Tuya
+// device id (16 to 32 lower-case letters and digits), as each ingest stores it.
+var sourcePattern = regexp.MustCompile(`^(?:[0-9a-fA-F]{12}|0x[0-9a-fA-F]{16}|[a-z0-9]{16,32})$`)
+
+// ValidSource reports a panel's device id.
+func ValidSource(s string) bool { return sourcePattern.MatchString(s) }
 
 func Text(s string, max int) bool {
 	return len(strings.TrimSpace(s)) > 0 && len(s) <= max && utf8.ValidString(s) && !strings.ContainsAny(s, "\x00\r\n")
@@ -77,11 +109,14 @@ func Validate(i Item) error {
 		}
 		seen := map[string]bool{}
 		for _, p := range d.Panels {
-			mac, err := hex.DecodeString(p.ExternalID)
-			if _, e := uuid.Parse(p.GatewayID); e != nil || err != nil || len(mac) != 6 {
+			if p.WidgetID == ControlsWidget {
+				if !validControls(p.Devices) || p.GatewayID != "" || p.ExternalID != "" {
+					return fmt.Errorf("invalid controls panel")
+				}
+			} else if _, e := uuid.Parse(p.GatewayID); e != nil || !ValidSource(p.ExternalID) || len(p.Devices) > 0 {
 				return fmt.Errorf("invalid source")
 			}
-			if !Text(p.ID, 64) || seen[p.ID] || !Text(p.Title, 128) || p.Width < 1 || p.Width > 4 || p.Height < 1 || p.Height > 4 || !Text(p.WidgetID, 80) || !Text(p.GatewayID, 40) || len(p.ExternalID) != 12 {
+			if !Text(p.ID, 64) || seen[p.ID] || !Text(p.Title, 128) || p.Width < 1 || p.Width > 4 || p.Height < 1 || p.Height > 4 || !Text(p.WidgetID, 80) || (p.WidgetID != ControlsWidget && !Text(p.GatewayID, 40)) {
 				return fmt.Errorf("invalid panel")
 			}
 			seen[p.ID] = true

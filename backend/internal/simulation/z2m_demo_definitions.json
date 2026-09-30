@@ -1,0 +1,2637 @@
+{
+ "source": "zigbee-herdsman-converters",
+ "version": "26.112.0",
+ "license": "MIT",
+ "definitions": [
+  {
+   "vendor": "Tuya",
+   "model": "TS0001",
+   "description": "1 gang switch",
+   "zigbee_model": [
+    "TS0001"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "property": "state",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0002",
+   "description": "2-Gang switch with backlight, countdown and inching",
+   "zigbee_model": [
+    "TS0002"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "switch",
+     "endpoint": "l1",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l1",
+       "property": "state_l1",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "l2",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l2",
+       "property": "state_l2",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "name": "countdown",
+     "label": "Countdown",
+     "access": 7,
+     "type": "numeric",
+     "endpoint": "l1",
+     "property": "countdown_l1",
+     "description": "Toggle the device after a set duration (one time action)",
+     "unit": "s",
+     "value_max": 43200,
+     "value_min": 0,
+     "value_step": 1
+    },
+    {
+     "name": "countdown",
+     "label": "Countdown",
+     "access": 7,
+     "type": "numeric",
+     "endpoint": "l2",
+     "property": "countdown_l2",
+     "description": "Toggle the device after a set duration (one time action)",
+     "unit": "s",
+     "value_max": 43200,
+     "value_min": 0,
+     "value_step": 1
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l1",
+     "property": "power_on_behavior_l1",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l2",
+     "property": "power_on_behavior_l2",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "switch_type",
+     "label": "Switch type",
+     "access": 7,
+     "type": "enum",
+     "property": "switch_type",
+     "description": "Type of the switch",
+     "category": "config",
+     "values": [
+      "toggle",
+      "state",
+      "momentary"
+     ]
+    },
+    {
+     "name": "backlight_mode",
+     "label": "Backlight mode",
+     "access": 7,
+     "type": "binary",
+     "property": "backlight_mode",
+     "description": "Mode of the backlight",
+     "category": "config",
+     "value_on": "ON",
+     "value_off": "OFF"
+    },
+    {
+     "name": "indicator_mode",
+     "label": "Indicator mode",
+     "access": 7,
+     "type": "enum",
+     "property": "indicator_mode",
+     "description": "LED indicator mode",
+     "category": "config",
+     "values": [
+      "off",
+      "off/on",
+      "on/off",
+      "on"
+     ]
+    },
+    {
+     "name": "inching_control_set",
+     "label": "Inching control set",
+     "access": 2,
+     "type": "composite",
+     "property": "inching_control_set",
+     "description": "Device Inching function Settings. The device will automatically turn off after each turn on for a specified period of time.",
+     "features": [
+      {
+       "name": "inching_control",
+       "label": "Inching for Endpoint 1",
+       "access": 2,
+       "type": "binary",
+       "property": "inching_control_1",
+       "description": "Enable/disable inching function for endpoint 1.",
+       "value_on": "ENABLE",
+       "value_off": "DISABLE"
+      },
+      {
+       "name": "inching_time",
+       "label": "Inching time for endpoint 1",
+       "access": 2,
+       "type": "numeric",
+       "property": "inching_time_1",
+       "description": "Delay time for executing a inching action for endpoint 1.",
+       "unit": "seconds",
+       "value_max": 65535,
+       "value_min": 1,
+       "value_step": 1
+      },
+      {
+       "name": "inching_control",
+       "label": "Inching for Endpoint 2",
+       "access": 2,
+       "type": "binary",
+       "property": "inching_control_2",
+       "description": "Enable/disable inching function for endpoint 2.",
+       "value_on": "ENABLE",
+       "value_off": "DISABLE"
+      },
+      {
+       "name": "inching_time",
+       "label": "Inching time for endpoint 2",
+       "access": 2,
+       "type": "numeric",
+       "property": "inching_time_2",
+       "description": "Delay time for executing a inching action for endpoint 2.",
+       "unit": "seconds",
+       "value_max": 65535,
+       "value_min": 1,
+       "value_step": 1
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0003",
+   "description": "3 gang switch",
+   "zigbee_model": [
+    "TS0003"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "switch",
+     "endpoint": "left",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "left",
+       "property": "state_left",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "center",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "center",
+       "property": "state_center",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "right",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "right",
+       "property": "state_right",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0004",
+   "description": "Smart light switch - 4 gang with neutral wire",
+   "zigbee_model": [
+    "TS0004"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "switch",
+     "endpoint": "l1",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l1",
+       "property": "state_l1",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "l2",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l2",
+       "property": "state_l2",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "l3",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l3",
+       "property": "state_l3",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "type": "switch",
+     "endpoint": "l4",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "endpoint": "l4",
+       "property": "state_l4",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l1",
+     "property": "power_on_behavior_l1",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l2",
+     "property": "power_on_behavior_l2",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l3",
+     "property": "power_on_behavior_l3",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "endpoint": "l4",
+     "property": "power_on_behavior_l4",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "previous",
+      "on"
+     ]
+    },
+    {
+     "name": "backlight_mode",
+     "label": "Backlight mode",
+     "access": 7,
+     "type": "binary",
+     "property": "backlight_mode",
+     "description": "Mode of the backlight",
+     "category": "config",
+     "value_on": "ON",
+     "value_off": "OFF"
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS011F_plug_1",
+   "description": "Smart plug (with power monitoring)",
+   "zigbee_model": [
+    "TS011F"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "TS011F",
+     "manufacturer": "_TZ3008_tary5dvv"
+    },
+    {
+     "model_id": "TS011F",
+     "manufacturer": "_TZ3210_iooniers"
+    }
+   ],
+   "exposes": [
+    {
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "property": "state",
+       "description": "On/off state of the switch",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "name": "countdown",
+     "label": "Countdown",
+     "access": 3,
+     "type": "numeric",
+     "property": "countdown",
+     "description": "Toggle the device after a set duration (one time action)",
+     "unit": "s",
+     "value_max": 43200,
+     "value_min": 0,
+     "value_step": 1
+    },
+    {
+     "name": "power_outage_memory",
+     "label": "Power outage memory",
+     "access": 7,
+     "type": "enum",
+     "property": "power_outage_memory",
+     "description": "Recover state after power outage",
+     "category": "config",
+     "values": [
+      "on",
+      "off",
+      "restore"
+     ]
+    },
+    {
+     "name": "switch_type_button",
+     "label": "Switch type button",
+     "access": 7,
+     "type": "enum",
+     "property": "switch_type_button",
+     "description": "Determines when the button actuates",
+     "category": "config",
+     "values": [
+      "release",
+      "press"
+     ]
+    },
+    {
+     "name": "indicator_mode",
+     "label": "Indicator mode",
+     "access": 7,
+     "type": "enum",
+     "property": "indicator_mode",
+     "description": "LED indicator mode",
+     "category": "config",
+     "values": [
+      "off",
+      "off/on",
+      "on/off",
+      "on"
+     ]
+    },
+    {
+     "name": "power",
+     "label": "Power",
+     "access": 1,
+     "type": "numeric",
+     "property": "power",
+     "description": "Instantaneous measured power",
+     "unit": "W"
+    },
+    {
+     "name": "current",
+     "label": "Current",
+     "access": 1,
+     "type": "numeric",
+     "property": "current",
+     "description": "Instantaneous measured electrical current",
+     "unit": "A"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Measured electrical potential value",
+     "unit": "V"
+    },
+    {
+     "name": "energy",
+     "label": "Energy",
+     "access": 1,
+     "type": "numeric",
+     "property": "energy",
+     "description": "Sum of consumed energy",
+     "unit": "kWh"
+    },
+    {
+     "name": "child_lock",
+     "label": "Child lock",
+     "access": 3,
+     "type": "binary",
+     "property": "child_lock",
+     "description": "Enables/disables physical input on the device",
+     "value_on": "LOCK",
+     "value_off": "UNLOCK"
+    },
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0601_thermostat",
+   "description": "Radiator valve with thermostat",
+   "zigbee_model": [
+    "kud7u2l"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_ckud7u2l"
+    },
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_ywdxldoj"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "child_lock",
+     "label": "Child lock",
+     "access": 3,
+     "type": "binary",
+     "property": "child_lock",
+     "description": "Enables/disables physical input on the device",
+     "value_on": "LOCK",
+     "value_off": "UNLOCK"
+    },
+    {
+     "label": "Window detection",
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 3,
+       "type": "binary",
+       "property": "window_detection",
+       "description": "Enables/disables window detection on the device",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "name": "window_open",
+     "label": "Window open",
+     "access": 1,
+     "type": "binary",
+     "property": "window_open",
+     "description": "Window open?",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "label": "Valve detection",
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 3,
+       "type": "binary",
+       "property": "valve_detection",
+       "description": "Valve detection",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      }
+     ]
+    },
+    {
+     "name": "position",
+     "label": "Position",
+     "access": 1,
+     "type": "numeric",
+     "property": "position",
+     "description": "Position",
+     "unit": "%"
+    },
+    {
+     "type": "climate",
+     "features": [
+      {
+       "name": "current_heating_setpoint",
+       "label": "Current heating setpoint",
+       "access": 3,
+       "type": "numeric",
+       "property": "current_heating_setpoint",
+       "description": "Temperature setpoint",
+       "unit": "°C",
+       "value_max": 35,
+       "value_min": 5,
+       "value_step": 0.5
+      },
+      {
+       "name": "local_temperature",
+       "label": "Local temperature",
+       "access": 1,
+       "type": "numeric",
+       "property": "local_temperature",
+       "description": "Current temperature measured on the device",
+       "unit": "°C"
+      },
+      {
+       "name": "system_mode",
+       "label": "System mode",
+       "access": 3,
+       "type": "enum",
+       "property": "system_mode",
+       "description": "Mode of this device, in the `heat` mode the TS0601 will remain continuously heating, i.e. it does not regulate to the desired temperature. If you want TRV to properly regulate the temperature you need to use mode `auto` instead setting the desired temperature.",
+       "values": [
+        "heat",
+        "auto",
+        "off"
+       ]
+      },
+      {
+       "name": "local_temperature_calibration",
+       "label": "Local temperature calibration",
+       "access": 3,
+       "type": "numeric",
+       "property": "local_temperature_calibration",
+       "description": "Offset to add/subtract to the local temperature",
+       "unit": "°C",
+       "value_max": 9,
+       "value_min": -9,
+       "value_step": 0.5
+      },
+      {
+       "name": "preset",
+       "label": "Preset",
+       "access": 3,
+       "type": "enum",
+       "property": "preset",
+       "description": "Mode of this device (similar to system_mode)",
+       "values": [
+        "schedule",
+        "manual",
+        "boost",
+        "complex",
+        "comfort",
+        "eco",
+        "away"
+       ]
+      },
+      {
+       "name": "running_state",
+       "label": "Running state",
+       "access": 1,
+       "type": "enum",
+       "property": "running_state",
+       "description": "The current running state",
+       "values": [
+        "idle",
+        "heat"
+       ]
+      }
+     ]
+    },
+    {
+     "label": "Auto lock",
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 3,
+       "type": "binary",
+       "property": "auto_lock",
+       "description": "Enable/disable auto lock",
+       "value_on": "AUTO",
+       "value_off": "MANUAL"
+      }
+     ]
+    },
+    {
+     "label": "Away mode",
+     "type": "switch",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 3,
+       "type": "binary",
+       "property": "away_mode",
+       "description": "Enable/disable away mode",
+       "value_on": "ON",
+       "value_off": "OFF"
+      }
+     ]
+    },
+    {
+     "name": "away_preset_days",
+     "label": "Away preset days",
+     "access": 3,
+     "type": "numeric",
+     "property": "away_preset_days",
+     "description": "Away preset days",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "boost_time",
+     "label": "Boost time",
+     "access": 3,
+     "type": "numeric",
+     "property": "boost_time",
+     "description": "Boost time",
+     "unit": "s",
+     "value_max": 900,
+     "value_min": 0
+    },
+    {
+     "name": "comfort_temperature",
+     "label": "Comfort temperature",
+     "access": 3,
+     "type": "numeric",
+     "property": "comfort_temperature",
+     "description": "Comfort temperature",
+     "unit": "°C",
+     "value_max": 30,
+     "value_min": 0
+    },
+    {
+     "name": "eco_temperature",
+     "label": "Eco temperature",
+     "access": 3,
+     "type": "numeric",
+     "property": "eco_temperature",
+     "description": "Eco temperature",
+     "unit": "°C",
+     "value_max": 35,
+     "value_min": 0
+    },
+    {
+     "name": "force",
+     "label": "Force",
+     "access": 3,
+     "type": "enum",
+     "property": "force",
+     "description": "Force the valve position",
+     "values": [
+      "normal",
+      "open",
+      "close"
+     ]
+    },
+    {
+     "name": "max_temperature",
+     "label": "Max temperature",
+     "access": 3,
+     "type": "numeric",
+     "property": "max_temperature",
+     "description": "Maximum temperature",
+     "unit": "°C",
+     "value_max": 70,
+     "value_min": 16
+    },
+    {
+     "name": "min_temperature",
+     "label": "Min temperature",
+     "access": 3,
+     "type": "numeric",
+     "property": "min_temperature",
+     "description": "Minimum temperature",
+     "unit": "°C",
+     "value_max": 15,
+     "value_min": 1
+    },
+    {
+     "name": "away_preset_temperature",
+     "label": "Away preset temperature",
+     "access": 3,
+     "type": "numeric",
+     "property": "away_preset_temperature",
+     "description": "Away preset temperature",
+     "category": "config",
+     "unit": "°C",
+     "value_max": 35,
+     "value_min": -10
+    },
+    {
+     "name": "week",
+     "label": "Week",
+     "access": 3,
+     "type": "enum",
+     "property": "week",
+     "description": "Week format user for schedule",
+     "values": [
+      "5+2",
+      "6+1",
+      "7"
+     ]
+    },
+    {
+     "name": "workdays_schedule",
+     "label": "Workdays schedule",
+     "access": 3,
+     "type": "text",
+     "property": "workdays_schedule",
+     "description": "Workdays schedule, 6 entries max, example: \"00:20/5°C 01:20/5°C 6:59/15°C 18:00/5°C 20:00/5°C 23:30/5°C\""
+    },
+    {
+     "name": "holidays_schedule",
+     "label": "Holidays schedule",
+     "access": 3,
+     "type": "text",
+     "property": "holidays_schedule",
+     "description": "Holidays schedule, 6 entries max, example: \"00:20/5°C 01:20/5°C 6:59/15°C 18:00/5°C 20:00/5°C 23:30/5°C\""
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0601_cover_1",
+   "description": "Curtain motor/roller blind motor/window pusher/tubular motor",
+   "zigbee_model": [
+    "owvfni3",
+    "u1rkty3",
+    "aabybja",
+    "mcdj3aq"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_5zbp6j0u"
+    },
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_nkoabg8w"
+    }
+   ],
+   "exposes": [
+    {
+     "type": "cover",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 3,
+       "type": "enum",
+       "property": "state",
+       "values": [
+        "OPEN",
+        "CLOSE",
+        "STOP"
+       ]
+      },
+      {
+       "name": "position",
+       "label": "Position",
+       "access": 3,
+       "type": "numeric",
+       "property": "position",
+       "description": "Position of this cover",
+       "unit": "%",
+       "value_max": 100,
+       "value_min": 0
+      }
+     ]
+    },
+    {
+     "name": "options",
+     "label": "Options",
+     "access": 3,
+     "type": "composite",
+     "property": "options",
+     "features": [
+      {
+       "name": "motor_speed",
+       "label": "Motor speed",
+       "access": 3,
+       "type": "numeric",
+       "property": "motor_speed",
+       "description": "Motor speed",
+       "value_max": 255,
+       "value_min": 0
+      },
+      {
+       "name": "reverse_direction",
+       "label": "Reverse direction",
+       "access": 3,
+       "type": "binary",
+       "property": "reverse_direction",
+       "description": "Reverse the motor direction",
+       "value_on": true,
+       "value_off": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0601_human_presence_sensor",
+   "description": "Human presence sensor Zigbee",
+   "zigbee_model": [],
+   "fingerprint": [
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_0u3bj3rc"
+    },
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_v6ossqfy"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "presence",
+     "label": "Presence",
+     "access": 1,
+     "type": "binary",
+     "property": "presence",
+     "description": "Indicates whether the device detected presence",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "duration_of_attendance",
+     "label": "Duration of attendance",
+     "access": 1,
+     "type": "numeric",
+     "property": "duration_of_attendance",
+     "description": "Shows the presence duration in minutes",
+     "unit": "min"
+    },
+    {
+     "name": "duration_of_absence",
+     "label": "Duration of absence",
+     "access": 1,
+     "type": "numeric",
+     "property": "duration_of_absence",
+     "description": "Shows the duration of the absence in minutes",
+     "unit": "min"
+    },
+    {
+     "name": "led_state",
+     "label": "Led state",
+     "access": 3,
+     "type": "binary",
+     "property": "led_state",
+     "description": "Turns the onboard LED on or off",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0601_air_quality_sensor",
+   "description": "Air quality sensor",
+   "zigbee_model": [],
+   "fingerprint": [
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_8ygsuhe1"
+    },
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_yvx5lh6k"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "humidity",
+     "label": "Humidity",
+     "access": 1,
+     "type": "numeric",
+     "property": "humidity",
+     "description": "Measured relative humidity",
+     "unit": "%"
+    },
+    {
+     "name": "co2",
+     "label": "CO2",
+     "access": 1,
+     "type": "numeric",
+     "property": "co2",
+     "description": "The measured CO2 (carbon dioxide) value",
+     "unit": "ppm"
+    },
+    {
+     "name": "voc",
+     "label": "VOC",
+     "access": 1,
+     "type": "numeric",
+     "property": "voc",
+     "description": "Measured VOC value",
+     "unit": "ppb"
+    },
+    {
+     "name": "formaldehyd",
+     "label": "Formaldehyd",
+     "access": 1,
+     "type": "numeric",
+     "property": "formaldehyd",
+     "description": "The measured formaldehyd value",
+     "unit": "µg/m³"
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0601_smoke_1",
+   "description": "Smoke sensor",
+   "zigbee_model": [],
+   "fingerprint": [
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE200_0zaf1cr8"
+    },
+    {
+     "model_id": "TS0601",
+     "manufacturer": "_TZE204_ntcy3xu1"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "smoke",
+     "label": "Smoke",
+     "access": 1,
+     "type": "binary",
+     "property": "smoke",
+     "description": "Indicates whether the device detected smoke",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "tamper",
+     "label": "Tamper",
+     "access": 1,
+     "type": "binary",
+     "property": "tamper",
+     "description": "Indicates whether the device is tampered",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0207_water_leak_detector",
+   "description": "Water leak detector",
+   "zigbee_model": [
+    "TS0207",
+    "FNB54-WTS08ML1.0",
+    "ZG-222Z",
+    "AY222Z"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "water_leak",
+     "label": "Water leak",
+     "access": 1,
+     "type": "binary",
+     "property": "water_leak",
+     "description": "Indicates whether the device detected a water leak",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "tamper",
+     "label": "Tamper",
+     "access": 1,
+     "type": "binary",
+     "property": "tamper",
+     "description": "Indicates whether the device is tampered",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0201",
+   "description": "Temperature & humidity sensor with display",
+   "zigbee_model": [
+    "TS0201",
+    "SNTZ003",
+    "TY0201"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "humidity",
+     "label": "Humidity",
+     "access": 1,
+     "type": "numeric",
+     "property": "humidity",
+     "description": "Measured relative humidity",
+     "unit": "%"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "WSD500A",
+   "description": "Temperature & humidity sensor",
+   "zigbee_model": [],
+   "fingerprint": [
+    {
+     "model_id": "TS0201",
+     "manufacturer": "_TZ3000_bguser20"
+    },
+    {
+     "model_id": "TS0201",
+     "manufacturer": "_TZ3000_yd2e749y"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "humidity",
+     "label": "Humidity",
+     "access": 1,
+     "type": "numeric",
+     "property": "humidity",
+     "description": "Measured relative humidity",
+     "unit": "%"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0203",
+   "description": "Door/window sensor",
+   "zigbee_model": [
+    "TS0203",
+    "ZG-102Z",
+    "AY-101Z"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "contact",
+     "label": "Contact",
+     "access": 1,
+     "type": "binary",
+     "property": "contact",
+     "description": "Indicates if the contact is closed (= true) or open (= false)",
+     "homeassistant": {
+      "name": null
+     },
+     "value_on": false,
+     "value_off": true
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "tamper",
+     "label": "Tamper",
+     "access": 1,
+     "type": "binary",
+     "property": "tamper",
+     "description": "Indicates whether the device is tampered",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Tuya",
+   "model": "TS0202",
+   "description": "Motion sensor",
+   "zigbee_model": [
+    "TS0202"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "WHD02",
+     "manufacturer": "_TZ3000_hktqahrq"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "occupancy",
+     "label": "Occupancy",
+     "access": 1,
+     "type": "binary",
+     "property": "occupancy",
+     "description": "Indicates whether the device detected occupancy",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "tamper",
+     "label": "Tamper",
+     "access": 1,
+     "type": "binary",
+     "property": "tamper",
+     "description": "Indicates whether the device is tampered",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Aqara",
+   "model": "WSDCGQ11LM",
+   "description": "Temperature and humidity sensor",
+   "zigbee_model": [
+    "lumi.weather"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "humidity",
+     "label": "Humidity",
+     "access": 1,
+     "type": "numeric",
+     "property": "humidity",
+     "description": "Measured relative humidity",
+     "unit": "%"
+    },
+    {
+     "name": "pressure",
+     "label": "Pressure",
+     "access": 1,
+     "type": "numeric",
+     "property": "pressure",
+     "description": "The measured atmospheric pressure",
+     "unit": "hPa"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    }
+   ]
+  },
+  {
+   "vendor": "Aqara",
+   "model": "MCCGQ11LM",
+   "description": "Door and window sensor",
+   "zigbee_model": [
+    "lumi.sensor_magnet.aq2"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "contact",
+     "label": "Contact",
+     "access": 1,
+     "type": "binary",
+     "property": "contact",
+     "description": "Indicates if the contact is closed (= true) or open (= false)",
+     "homeassistant": {
+      "name": null
+     },
+     "value_on": false,
+     "value_off": true
+    },
+    {
+     "name": "device_temperature",
+     "label": "Device temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "device_temperature",
+     "description": "Temperature of the device",
+     "category": "diagnostic",
+     "unit": "°C"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "power_outage_count",
+     "label": "Power outage count",
+     "access": 1,
+     "type": "numeric",
+     "property": "power_outage_count",
+     "description": "Number of power outages",
+     "category": "diagnostic"
+    },
+    {
+     "name": "trigger_count",
+     "label": "Trigger count",
+     "access": 1,
+     "type": "numeric",
+     "property": "trigger_count",
+     "description": "Indicates how many times the sensor was triggered (since last scheduled report)",
+     "category": "diagnostic"
+    },
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification. This device is asleep by default.You may need to wake it up first before sending the identify command.",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Aqara",
+   "model": "RTCGQ11LM",
+   "description": "Motion sensor",
+   "zigbee_model": [
+    "lumi.sensor_motion.aq2"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "occupancy",
+     "label": "Occupancy",
+     "access": 1,
+     "type": "binary",
+     "property": "occupancy",
+     "description": "Indicates whether the device detected occupancy",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "device_temperature",
+     "label": "Device temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "device_temperature",
+     "description": "Temperature of the device",
+     "category": "diagnostic",
+     "unit": "°C"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "illuminance",
+     "label": "Illuminance",
+     "access": 1,
+     "type": "numeric",
+     "property": "illuminance",
+     "description": "Measured illuminance",
+     "unit": "lx"
+    },
+    {
+     "name": "power_outage_count",
+     "label": "Power outage count",
+     "access": 1,
+     "type": "numeric",
+     "property": "power_outage_count",
+     "description": "Number of power outages",
+     "category": "diagnostic"
+    }
+   ]
+  },
+  {
+   "vendor": "Aqara",
+   "model": "SJCGQ11LM",
+   "description": "Water leak sensor",
+   "zigbee_model": [
+    "lumi.sensor_wleak.aq1"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "device_temperature",
+     "label": "Device temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "device_temperature",
+     "description": "Temperature of the device",
+     "category": "diagnostic",
+     "unit": "°C"
+    },
+    {
+     "name": "power_outage_count",
+     "label": "Power outage count",
+     "access": 1,
+     "type": "numeric",
+     "property": "power_outage_count",
+     "description": "Number of power outages",
+     "category": "diagnostic"
+    },
+    {
+     "name": "trigger_count",
+     "label": "Trigger count",
+     "access": 1,
+     "type": "numeric",
+     "property": "trigger_count",
+     "description": "Indicates how many times the sensor was triggered (since last scheduled report)",
+     "category": "diagnostic"
+    },
+    {
+     "name": "water_leak",
+     "label": "Water leak",
+     "access": 1,
+     "type": "binary",
+     "property": "water_leak",
+     "description": "Indicates whether the device detected a water leak",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates whether the battery of the device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "IKEA",
+   "model": "LED1623G12",
+   "description": "TRADFRI bulb E27, white, globe, opal, 1000 lm",
+   "zigbee_model": [
+    "TRADFRI bulb E27 opal 1000lm",
+    "TRADFRI bulb E27 W opal 1000lm"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "light",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "property": "state",
+       "description": "On/off state of this light",
+       "value_on": "ON",
+       "value_off": "OFF",
+       "value_toggle": "TOGGLE"
+      },
+      {
+       "name": "brightness",
+       "label": "Brightness",
+       "access": 7,
+       "type": "numeric",
+       "property": "brightness",
+       "description": "Brightness of this light",
+       "value_max": 254,
+       "value_min": 0
+      },
+      {
+       "name": "level_config",
+       "label": "Level config",
+       "access": 7,
+       "type": "composite",
+       "property": "level_config",
+       "description": "Configure genLevelCtrl",
+       "features": [
+        {
+         "name": "execute_if_off",
+         "label": "Execute if off",
+         "access": 7,
+         "type": "binary",
+         "property": "execute_if_off",
+         "description": "this setting can affect the \"on_level\", \"current_level_startup\" or \"brightness\" setting",
+         "value_on": true,
+         "value_off": false
+        },
+        {
+         "name": "current_level_startup",
+         "label": "Current level startup",
+         "access": 7,
+         "type": "numeric",
+         "property": "current_level_startup",
+         "description": "Defines the desired startup level for a device when it is supplied with power",
+         "value_max": 254,
+         "value_min": 1,
+         "presets": [
+          {
+           "name": "minimum",
+           "value": "minimum",
+           "description": "Use minimum permitted value"
+          },
+          {
+           "name": "previous",
+           "value": "previous",
+           "description": "Use previous value"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "name": "effect",
+     "label": "Effect",
+     "access": 2,
+     "type": "enum",
+     "property": "effect",
+     "description": "Triggers an effect on the light (e.g. make light blink for a few seconds)",
+     "values": [
+      "blink",
+      "breathe",
+      "okay",
+      "channel_change",
+      "finish_effect",
+      "stop_effect"
+     ]
+    },
+    {
+     "name": "power_on_behavior",
+     "label": "Power-on behavior",
+     "access": 7,
+     "type": "enum",
+     "property": "power_on_behavior",
+     "description": "Controls the behavior when the device is powered on after power loss",
+     "category": "config",
+     "values": [
+      "off",
+      "on",
+      "toggle",
+      "previous"
+     ]
+    },
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "IKEA",
+   "model": "ICTC-G-1",
+   "description": "TRADFRI wireless dimmer",
+   "zigbee_model": [
+    "TRADFRI wireless dimmer"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification. This device is asleep by default.You may need to wake it up first before sending the identify command.",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 5,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "action",
+     "label": "Action",
+     "access": 1,
+     "type": "enum",
+     "property": "action",
+     "description": "Triggered action (e.g. a button click)",
+     "category": "diagnostic",
+     "values": [
+      "brightness_move_up",
+      "brightness_move_down",
+      "brightness_stop",
+      "brightness_move_to_level"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "IKEA",
+   "model": "E2001/E2002/E2313",
+   "description": "STYRBAR remote control",
+   "zigbee_model": [
+    "Remote Control N2"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification. This device is asleep by default.You may need to wake it up first before sending the identify command.",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 5,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "action",
+     "label": "Action",
+     "access": 1,
+     "type": "enum",
+     "property": "action",
+     "description": "Triggered action (e.g. a button click)",
+     "category": "diagnostic",
+     "values": [
+      "on",
+      "off",
+      "brightness_move_up",
+      "brightness_move_down",
+      "brightness_stop",
+      "arrow_left_click",
+      "arrow_left_hold",
+      "arrow_left_release",
+      "arrow_right_click",
+      "arrow_right_hold",
+      "arrow_right_release"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "IKEA",
+   "model": "E2007",
+   "description": "STARKVIND air purifier",
+   "zigbee_model": [
+    "STARKVIND Air purifier",
+    "STARKVIND Air purifier table"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "type": "fan",
+     "features": [
+      {
+       "name": "state",
+       "label": "State",
+       "access": 7,
+       "type": "binary",
+       "property": "fan_state",
+       "description": "On/off state of this fan",
+       "value_on": "ON",
+       "value_off": "OFF"
+      },
+      {
+       "name": "mode",
+       "label": "Mode",
+       "access": 7,
+       "type": "enum",
+       "property": "fan_mode",
+       "description": "Mode of this fan",
+       "values": [
+        "off",
+        "auto",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "fan_speed",
+     "label": "Fan speed",
+     "access": 5,
+     "type": "numeric",
+     "property": "fan_speed",
+     "description": "Current fan speed",
+     "value_max": 9,
+     "value_min": 0
+    },
+    {
+     "name": "pm25",
+     "label": "PM25",
+     "access": 5,
+     "type": "numeric",
+     "property": "pm25",
+     "description": "Measured PM2.5 (particulate matter) concentration",
+     "unit": "µg/m³"
+    },
+    {
+     "name": "air_quality",
+     "label": "Air quality",
+     "access": 5,
+     "type": "enum",
+     "property": "air_quality",
+     "description": "Calculated air quality",
+     "values": [
+      "excellent",
+      "good",
+      "moderate",
+      "poor",
+      "unhealthy",
+      "hazardous",
+      "out_of_range",
+      "unknown"
+     ]
+    },
+    {
+     "name": "led_enable",
+     "label": "Led enable",
+     "access": 7,
+     "type": "binary",
+     "property": "led_enable",
+     "description": "Controls the LED",
+     "category": "config",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "child_lock",
+     "label": "Child lock",
+     "access": 7,
+     "type": "binary",
+     "property": "child_lock",
+     "description": "Controls physical input on the device",
+     "category": "config",
+     "value_on": "LOCK",
+     "value_off": "UNLOCK"
+    },
+    {
+     "name": "replace_filter",
+     "label": "Replace filter",
+     "access": 5,
+     "type": "binary",
+     "property": "replace_filter",
+     "description": "Indicates if the filter is older than 6 months and needs replacing",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "filter_age",
+     "label": "Filter age",
+     "access": 5,
+     "type": "numeric",
+     "property": "filter_age",
+     "description": "Duration the filter has been used",
+     "category": "diagnostic",
+     "unit": "minutes"
+    },
+    {
+     "name": "device_age",
+     "label": "Device age",
+     "access": 5,
+     "type": "numeric",
+     "property": "device_age",
+     "description": "Duration the air purifier has been used",
+     "category": "diagnostic",
+     "unit": "minutes"
+    },
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "Philips",
+   "model": "9290012607",
+   "description": "Hue motion sensor",
+   "zigbee_model": [
+    "SML001"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "occupancy",
+     "label": "Occupancy",
+     "access": 1,
+     "type": "binary",
+     "property": "occupancy",
+     "description": "Indicates whether the device detected occupancy",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "motion_sensitivity",
+     "label": "Motion sensitivity",
+     "access": 7,
+     "type": "enum",
+     "property": "motion_sensitivity",
+     "description": "Select motion sensitivity to use",
+     "category": "config",
+     "values": [
+      "low",
+      "medium",
+      "high"
+     ]
+    },
+    {
+     "name": "led_indication",
+     "label": "Led indication",
+     "access": 7,
+     "type": "binary",
+     "property": "led_indication",
+     "description": "Blink green LED on motion detection",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "occupancy_timeout",
+     "label": "Occupancy timeout",
+     "access": 7,
+     "type": "numeric",
+     "property": "occupancy_timeout",
+     "unit": "s",
+     "value_max": 65535,
+     "value_min": 0
+    },
+    {
+     "name": "illuminance",
+     "label": "Illuminance",
+     "access": 5,
+     "type": "numeric",
+     "property": "illuminance",
+     "description": "Measured illuminance. 0 = too low to be measured",
+     "unit": "lx"
+    },
+    {
+     "name": "identify",
+     "label": "Identify",
+     "access": 2,
+     "type": "enum",
+     "property": "identify",
+     "description": "Initiate device identification. This device is asleep by default.You may need to wake it up first before sending the identify command.",
+     "category": "config",
+     "values": [
+      "identify"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "SONOFF",
+   "model": "SNZB-01",
+   "description": "Wireless button",
+   "zigbee_model": [
+    "WB01",
+    "WB-01",
+    "SNZB-01",
+    "CK-TLSR8656-SS5-01(7000)"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 5,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 5,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Reported battery voltage in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "action",
+     "label": "Action",
+     "access": 1,
+     "type": "enum",
+     "property": "action",
+     "description": "Triggered action (e.g. a button click)",
+     "category": "diagnostic",
+     "values": [
+      "single",
+      "double",
+      "long"
+     ]
+    }
+   ]
+  },
+  {
+   "vendor": "SONOFF",
+   "model": "SNZB-02",
+   "description": "Temperature and humidity sensor",
+   "zigbee_model": [
+    "TH01",
+    "SNZB-02",
+    "CK-TLSR8656-SS5-01(7014)"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "WB01",
+     "manufacturer": "eWeLink"
+    },
+    {
+     "model_id": "66666",
+     "manufacturer": "eWeLink"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "temperature",
+     "label": "Temperature",
+     "access": 1,
+     "type": "numeric",
+     "property": "temperature",
+     "description": "Measured temperature value",
+     "unit": "°C"
+    },
+    {
+     "name": "humidity",
+     "label": "Humidity",
+     "access": 1,
+     "type": "numeric",
+     "property": "humidity",
+     "description": "Measured relative humidity",
+     "unit": "%"
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 1,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Voltage of the battery in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    }
+   ]
+  },
+  {
+   "vendor": "SONOFF",
+   "model": "SNZB-03",
+   "description": "Motion sensor",
+   "zigbee_model": [
+    "MS01",
+    "MSO1",
+    "SNZB-03",
+    "CK-TLSR8656-SS5-01(7002)"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "66666",
+     "manufacturer": "eWeLink"
+    },
+    {
+     "model_id": "SNZB-03",
+     "manufacturer": "eWeLink"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 5,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 5,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Reported battery voltage in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "occupancy",
+     "label": "Occupancy",
+     "access": 1,
+     "type": "binary",
+     "property": "occupancy",
+     "description": "Indicates whether the device detected occupancy",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates whether the battery of the device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "SONOFF",
+   "model": "SNZB-04",
+   "description": "Contact sensor",
+   "zigbee_model": [
+    "DS01",
+    "SNZB-04",
+    "CK-TLSR8656-SS5-01(7003)"
+   ],
+   "fingerprint": [
+    {
+     "model_id": "TH01",
+     "manufacturer": "eWeLink"
+    }
+   ],
+   "exposes": [
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 5,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "voltage",
+     "label": "Voltage",
+     "access": 5,
+     "type": "numeric",
+     "property": "voltage",
+     "description": "Reported battery voltage in millivolts",
+     "category": "diagnostic",
+     "unit": "mV"
+    },
+    {
+     "name": "contact",
+     "label": "Contact",
+     "access": 1,
+     "type": "binary",
+     "property": "contact",
+     "description": "Indicates whether the device is opened or closed",
+     "value_on": false,
+     "value_off": true
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates whether the battery of the device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Heiman",
+   "model": "HS1SA-E",
+   "description": "Smart smoke alarm",
+   "zigbee_model": [
+    "SMOK_V16",
+    "SMOK_V15",
+    "b5db59bfd81e4f1f95dc57fdbba17931",
+    "98293058552c49f38ad0748541ee96ba"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "smoke",
+     "label": "Smoke",
+     "access": 1,
+     "type": "binary",
+     "property": "smoke",
+     "description": "Indicates whether the device detected smoke",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    },
+    {
+     "name": "test",
+     "label": "Test",
+     "access": 1,
+     "type": "binary",
+     "property": "test",
+     "description": "Indicates whether the device is being tested",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Heiman",
+   "model": "HS1CG",
+   "description": "Smart combustible gas sensor",
+   "zigbee_model": [
+    "RH3070"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "gas",
+     "label": "Gas",
+     "access": 1,
+     "type": "binary",
+     "property": "gas",
+     "description": "Indicates whether the device detected gas",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "tamper",
+     "label": "Tamper",
+     "access": 1,
+     "type": "binary",
+     "property": "tamper",
+     "description": "Indicates whether the device is tampered",
+     "value_on": true,
+     "value_off": false
+    }
+   ]
+  },
+  {
+   "vendor": "Heiman",
+   "model": "HS1CA-E",
+   "description": "Smart carbon monoxide alarm",
+   "zigbee_model": [
+    "COSensor-EM",
+    "COSensor-N",
+    "COSensor-EF-3.0"
+   ],
+   "fingerprint": [],
+   "exposes": [
+    {
+     "name": "carbon_monoxide",
+     "label": "Carbon monoxide",
+     "access": 1,
+     "type": "binary",
+     "property": "carbon_monoxide",
+     "description": "Indicates if CO (carbon monoxide) is detected",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery_low",
+     "label": "Battery low",
+     "access": 1,
+     "type": "binary",
+     "property": "battery_low",
+     "description": "Indicates if the battery of this device is almost empty",
+     "category": "diagnostic",
+     "value_on": true,
+     "value_off": false
+    },
+    {
+     "name": "battery",
+     "label": "Battery",
+     "access": 1,
+     "type": "numeric",
+     "property": "battery",
+     "description": "Remaining battery in %, can take up to 24 hours before reported",
+     "category": "diagnostic",
+     "unit": "%",
+     "value_max": 100,
+     "value_min": 0
+    }
+   ]
+  }
+ ]
+}

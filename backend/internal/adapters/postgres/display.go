@@ -321,7 +321,8 @@ const (
 )
 
 var readingKeys = []string{"temperature", "humidity", "battery", "rssi"}
-var metricKeys = []string{"tamper", "leak", "motion", "occupancy", "contact", "door", "smoke", "gas", "co", "vibration", "co2", "power"}
+var metricKeys = []string{"tamper", "leak", "motion", "occupancy", "contact", "door", "smoke", "gas", "co", "carbon_monoxide", "vibration", "co2", "pm25", "voc", "power", "energy",
+	"illuminance", "sw1", "sw2", "sw3", "sw4", "position", "brightness", "local_temperature"}
 
 // readingSummary keeps the handful of numbers a TV draws from a stored reading.
 func readingSummary(raw string) (map[string]float64, string) {
@@ -393,7 +394,7 @@ func (r *Repository) DisplayBoard(ctx context.Context, s domain.DisplaySession) 
 	if d, ok := domain.DisplayFrom(ctx); !ok || d.ID != s.ID {
 		return domain.DisplayBoard{}, false, domain.ErrForbidden
 	}
-	out := domain.DisplayBoard{Projects: []domain.DisplayProject{}, Gateways: []domain.DisplayGateway{}, Devices: []domain.DisplayDevice{}, Alerts: []domain.DisplayAlert{}, Presence: []domain.DisplayPresence{}}
+	out := domain.DisplayBoard{Projects: []domain.DisplayProject{}, Gateways: []domain.DisplayGateway{}, Devices: []domain.DisplayDevice{}, Alerts: []domain.DisplayAlert{}, Recent: []domain.DisplayAlert{}, Presence: []domain.DisplayPresence{}}
 	namesShown := false
 	e := r.tx(ctx, "", s.TenantID, func(tx *gorm.DB) error {
 		if e := tx.Raw(`SELECT now()`).Scan(&out.ServerTime).Error; e != nil {
@@ -503,7 +504,15 @@ func (r *Repository) DisplayBoard(ctx context.Context, s domain.DisplaySession) 
       FROM core.alerts a WHERE a.status<>'resolved' ORDER BY (a.status='open') DESC,a.opened_at DESC,a.id DESC LIMIT 30`).Scan(&alerts).Error; e != nil {
 			return e
 		}
-		for _, a := range alerts {
+		open := len(alerts)
+		// What was handled today, so a calm wall still shows the day's work (never a takeover).
+		resolved := alerts[:0:0]
+		if e := tx.Raw(`SELECT a.id::text AS id,a.gateway_id::text AS gateway_id,lower(a.external_id) AS external_id,a.device_name,a.event_type,a.severity,a.title,a.status,a.opened_at,a.acked_at
+      FROM core.alerts a WHERE a.status='resolved' AND a.opened_at>now()-interval '24 hours' ORDER BY a.opened_at DESC,a.id DESC LIMIT 8`).Scan(&resolved).Error; e != nil {
+			return e
+		}
+		alerts = append(alerts, resolved...)
+		for i, a := range alerts {
 			item := domain.DisplayAlert{ID: a.ID, GatewayID: a.GatewayID, ExternalID: tag(a.ExternalID), DeviceName: a.DeviceName, EventType: a.EventType, Severity: a.Severity,
 				Title: a.Title, Status: a.Status, OpenedAt: a.OpenedAt, AckedAt: a.AckedAt, Takeover: domain.DisplayTakeover(a.EventType, a.Severity, a.Status), GatewayName: gatewayName[a.GatewayID]}
 			// Personal unless the tag is known to be nobody's (fails closed: removed, unregistered, worn anywhere). An
@@ -514,6 +523,11 @@ func (r *Repository) DisplayBoard(ctx context.Context, s domain.DisplaySession) 
 				} else {
 					namesShown = true
 				}
+			}
+			if i >= open {
+				item.Takeover = false
+				out.Recent = append(out.Recent, item)
+				continue
 			}
 			out.Alerts = append(out.Alerts, item)
 		}

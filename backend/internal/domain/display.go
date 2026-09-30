@@ -14,7 +14,7 @@ import (
 // takes over the screen on an SOS or hazard alert. A display is its own principal, never a member.
 
 // DisplayViewKinds are the views a playlist may rotate through.
-var DisplayViewKinds = []string{"overview", "alerts", "floorplan", "devices", "presence", "studio"}
+var DisplayViewKinds = []string{"overview", "alerts", "floorplan", "devices", "presence", "studio", "twin"}
 
 const (
 	MaxDisplays        = 50
@@ -26,7 +26,7 @@ const (
 )
 
 // DisplayView is one step of a display's playlist. Ref names the studio dashboard (studio) or the site
-// (floorplan, optional: the first site otherwise).
+// (floorplan and twin, optional: the first site otherwise).
 type DisplayView struct {
 	Kind    string `json:"kind"`
 	Seconds int    `json:"seconds"`
@@ -45,9 +45,9 @@ func ValidPlaylist(views []DisplayView) bool {
 		switch {
 		case v.Kind == "studio" && !uuidShape.MatchString(v.Ref):
 			return false
-		case v.Kind == "floorplan" && v.Ref != "" && !uuidShape.MatchString(v.Ref):
+		case (v.Kind == "floorplan" || v.Kind == "twin") && v.Ref != "" && !uuidShape.MatchString(v.Ref):
 			return false
-		case v.Kind != "studio" && v.Kind != "floorplan" && v.Ref != "":
+		case v.Kind != "studio" && v.Kind != "floorplan" && v.Kind != "twin" && v.Ref != "":
 			return false
 		}
 	}
@@ -141,13 +141,15 @@ func DisplayFrom(ctx context.Context) (DisplayCtx, bool) {
 // DisplayBoard is everything the rotating views of a TV draw, narrowed to the display's projects. Wearer names
 // are replaced by a neutral label unless the owner allowed names on this display.
 type DisplayBoard struct {
-	ServerTime time.Time         `json:"server_time"`
-	Projects   []DisplayProject  `json:"projects"`
-	Gateways   []DisplayGateway  `json:"gateways"`
-	Devices    []DisplayDevice   `json:"devices"`
-	Alerts     []DisplayAlert    `json:"alerts"`
-	Counts     DisplayCounts     `json:"counts"`
-	Presence   []DisplayPresence `json:"presence"`
+	ServerTime time.Time        `json:"server_time"`
+	Projects   []DisplayProject `json:"projects"`
+	Gateways   []DisplayGateway `json:"gateways"`
+	Devices    []DisplayDevice  `json:"devices"`
+	Alerts     []DisplayAlert   `json:"alerts"`
+	// Recent are the last day's resolved alerts (at most 8), shown when nothing is open.
+	Recent   []DisplayAlert    `json:"recent"`
+	Counts   DisplayCounts     `json:"counts"`
+	Presence []DisplayPresence `json:"presence"`
 }
 
 type DisplayProject struct {

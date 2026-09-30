@@ -127,6 +127,8 @@ type Repository interface {
 	GatewayTenant(context.Context, string, string) (string, error)
 	CreateDevice(context.Context, domain.Principal, domain.Device) error
 	ListDevices(context.Context, domain.Principal) ([]domain.Device, error)
+	// TenantDemo reports a demo workspace (core.tenants.demo): its simulated data is shown as a real site's.
+	TenantDemo(context.Context, domain.Principal) (bool, error)
 	ListRemovedDevices(context.Context, domain.Principal) ([]domain.Device, error)
 	UpdateDevice(context.Context, domain.Principal, string, *string, *string) (domain.Device, error)
 	RemoveDevice(context.Context, domain.Principal, string) error

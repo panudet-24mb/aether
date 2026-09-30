@@ -86,5 +86,27 @@ func kitWidgets() []Item {
 		make("official-alerts-v1", "Open alerts (workspace)", "Any / alerts", nil, `function render(input){var a=(input.alerts||[]).slice(0,8),now=input.now;
  if(!a.length)return {html:'<div class="eyebrow">ALERTS</div><div class="state ok">ไม่มีเรื่องเปิดอยู่</div><div class="muted">แสดงการแจ้งเตือนที่ยังไม่ปิดของทั้ง workspace</div>'};
  return {html:'<div class="eyebrow">OPEN ALERTS · '+a.length+'</div><ul>'+a.map(function(x){return '<li class="'+(x.severity==='critical'?'bad':x.severity==='warning'?'warn':'ok')+'"><span>'+esc(x.title)+'</span><small>'+ago(x.opened_at,now)+'</small></li>';}).join('')+'</ul>'};}`),
+		make("official-metrics-v1", "Readings (any device)", "Zigbee · Tuya · BLE / metrics", nil, `function render(input){var d=input.data||{},m=d.metrics||{},v=d.values||{},now=input.now;
+ var U={temperature:['อุณหภูมิ','°C',1],humidity:['ความชื้น','%',0],co2:['CO₂','ppm',0],pm25:['PM2.5','µg/m³',0],pm10:['PM10','µg/m³',0],voc:['VOC','',2],formaldehyd:['ฟอร์มาลดีไฮด์','',0],pressure:['ความกดอากาศ','hPa',0],illuminance:['แสง','lx',0],power:['กำลังไฟ','W',1],energy:['พลังงานสะสม','kWh',2],current:['กระแส','A',2],voltage:['แรงดัน','V',1],brightness:['ความสว่าง','',0],position:['ตำแหน่ง','%',0],local_temperature:['อุณหภูมิห้อง','°C',1],current_heating_setpoint:['ตั้งไว้','°C',1],occupied_heating_setpoint:['ตั้งไว้','°C',1],fan_speed:['ระดับพัดลม','',0],battery:['แบตเตอรี่','%',0],duration_of_attendance:['มีคนมาแล้ว','นาที',0]};
+ var F={door:['ประตูเปิด','ประตูปิด'],motion:['มีการเคลื่อนไหว','ไม่มีการเคลื่อนไหว'],leak:['พบน้ำรั่ว','ไม่พบน้ำรั่ว'],smoke:['พบควัน','ไม่พบควัน'],gas:['พบแก๊สรั่ว','ไม่พบแก๊ส'],carbon_monoxide:['พบ CO','ไม่พบ CO'],tamper:['ถูกงัด / ถอด','ปกติ'],vibration:['มีแรงสั่น','นิ่ง']};
+ var BAD={door:'warn',motion:'warn',leak:'bad',smoke:'bad',gas:'bad',carbon_monoxide:'bad',tamper:'bad',vibration:'warn'};
+ var keys=Object.keys(m);
+ if(!keys.length&&!Object.keys(v).length&&!(d.temperature>0))return {html:'<div class="eyebrow">READINGS</div><div class="state warn">รอข้อมูล</div><div class="muted">อุปกรณ์นี้ยังไม่ส่งค่าเข้ามา</div>'+foot(d,input.source,now)};
+ var head='',tone='ok',eyebrow=(d.model?esc(d.model):'READINGS');
+ ['smoke','gas','carbon_monoxide','leak','tamper','door','motion','vibration'].some(function(k){if(m[k]==null)return false;var on=m[k]===1;head=F[k][on?0:1];tone=on?BAD[k]:'ok';return true;});
+ var gangs=keys.filter(function(k){return /^sw[1-6]$/.test(k);}).sort();
+ if(!head&&gangs.length){head=gangs.map(function(k){return (gangs.length>1?k.replace('sw','ช่อง ')+' ':'')+(m[k]===1?'เปิด':'ปิด');}).join(' · ');tone=gangs.some(function(k){return m[k]===1;})?'ok':'';}
+ if(!head&&m.power!=null){head=Number(m.power).toFixed(1)+' W';}
+ if(!head&&m.co2!=null){head=Math.round(m.co2)+' ppm';tone=m.co2>1000?'warn':'ok';}
+ if(!head&&m.pm25!=null){head='PM2.5 '+Math.round(m.pm25);tone=m.pm25>35?'warn':'ok';}
+ var t=m.temperature!=null?m.temperature:m.local_temperature!=null?m.local_temperature:(d.temperature>0?d.temperature:null);
+ if(!head&&t!=null){head=Number(t).toFixed(1)+' °C';}
+ if(!head&&v.state){head=esc(v.state);}
+ if(!head)head='ออนไลน์';
+ var row='';Object.keys(U).forEach(function(k){var x=m[k];if(k==='temperature'&&x==null&&d.temperature>0)x=d.temperature;if(k==='humidity'&&x==null&&d.humidity>0)x=d.humidity;if(x==null||k==='battery')return;var u=U[k];row+='<div><strong>'+Number(x).toFixed(u[2])+(u[1]?' '+u[1]:'')+'</strong>'+u[0]+'</div>';});
+ Object.keys(v).slice(0,4).forEach(function(k){row+='<div><strong>'+esc(v[k])+'</strong>'+esc(k.replace(/_/g,' '))+'</div>';});
+ var metric=['power','co2','pm25','temperature','local_temperature','illuminance'].filter(function(k){return m[k]!=null;})[0];
+ var chart='';if(metric){var pts=(input.history||[]).map(function(h){return h.metrics&&h.metrics[metric];}).filter(function(x){return typeof x==='number';}).slice(-60);if(pts.length>1){var lo=Math.min.apply(null,pts),hi=Math.max.apply(null,pts);if(hi-lo<0.5){hi=lo+0.5;}chart='<svg viewBox="0 0 600 70"><polyline fill="none" stroke="#58eda9" stroke-width="2" points="'+pts.map(function(x,i){return (i/(pts.length-1)*600).toFixed(1)+','+(64-(x-lo)/(hi-lo)*58).toFixed(1);}).join(' ')+'"/></svg>';}}
+ return {html:'<div class="eyebrow">'+eyebrow+'</div><div class="state '+tone+'" style="font-size:30px">'+head+'</div><div class="row">'+row+meta(d)+'</div>'+chart+foot(d,input.source,now)};}`),
 	}
 }

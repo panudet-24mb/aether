@@ -96,3 +96,5 @@
 .ac-timeline .ev-door_open .ac-tl-icon, .ac-timeline .ev-occupied .ac-tl-icon { color: var(--color-warning); }
 .ac-timeline .ev-door_closed .ac-tl-icon, .ac-timeline .ev-vacant .ac-tl-icon { color: var(--color-muted); }
 .ac-hours .ac-grid input { width: 100% !important; }
+
+.ac-quiet-note { margin: 0 0 10px; opacity: .8; }

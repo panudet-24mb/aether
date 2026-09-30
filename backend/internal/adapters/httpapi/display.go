@@ -279,6 +279,24 @@ func kioskRoutes(api *fiber.App, s *app.Service, reads *readLog) {
 		}
 		return c.JSON(fiber.Map{"site": site})
 	})
+	// The digital twin of a site, live: what the twin view draws, with people at most as the owner lets displays show
+	// them (twin settings' display_people; a display never names anybody).
+	kiosk.Get("/twin/sites/:id/state", func(c fiber.Ctx) error {
+		d := display(c)
+		people := c.Query("people", domain.TwinPeopleCounts)
+		if !security.ValidID(c.Params("id")) || !domain.ValidTwinPeople(people) {
+			return domain.ErrInvalid
+		}
+		out, e := s.Repo.TwinState(c.Context(), d.Principal(), c.Params("id"), people)
+		if e != nil {
+			return e
+		}
+		if e := logRead(c, d, "display_twin", "site", c.Params("id")); e != nil {
+			return e
+		}
+		c.Set("Cache-Control", "no-store")
+		return c.JSON(out)
+	})
 	kiosk.Get("/floors/:id/image", func(c fiber.Ctx) error {
 		if !security.ValidID(c.Params("id")) {
 			return domain.ErrInvalid

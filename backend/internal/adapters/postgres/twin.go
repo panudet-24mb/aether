@@ -69,6 +69,9 @@ type twinReading struct {
 
 const zigbeeFrame = "z2m-state@1"
 
+// twinControlled are the reading kinds of devices that can be commanded (Zigbee2MQTT and Tuya).
+var twinControlled = map[string]bool{"switch": true, "lighting": true, "cover": true, "climate": true, "fan": true}
+
 func (r twinReading) zigbee() bool { return slices.Contains(r.Frames, zigbeeFrame) }
 
 func (r twinReading) environment() bool {
@@ -111,6 +114,26 @@ func mergeTwinReadings(d *domain.TwinDevice, rows []twinSample) {
 				open = 1
 			}
 			d.Door = &open
+		}
+		if twinControlled[r.Kind] {
+			d.Class = r.Kind
+			if r.Kind == "switch" || r.Kind == "lighting" || r.Kind == "fan" {
+				on, seen := 0, false
+				for _, k := range []string{"state", "sw1", "sw2", "sw3", "sw4", "fan_state"} {
+					if v, ok := r.Metrics[k]; ok {
+						seen = true
+						if v >= 1 {
+							on = 1
+						}
+					}
+				}
+				if seen {
+					d.On = &on
+				}
+			}
+			if v, ok := r.Metrics["power"]; ok {
+				d.Power = ptr(v)
+			}
 		}
 		if r.Metrics["motion"] >= 1 {
 			at := row.ReceivedAt

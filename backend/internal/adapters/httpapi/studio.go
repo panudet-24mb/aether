@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"aether/backend/internal/adapters/minew"
+	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/app"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/security"
@@ -9,6 +10,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
@@ -275,11 +277,33 @@ func renderStudioPanels(ctx context.Context, s *app.Service, p domain.Principal,
 	if e != nil {
 		return nil, e
 	}
+	// A demo workspace's readings are simulated by design (demo-twin); its dashboards show them as a real site's.
+	demo, e := s.Repo.TenantDemo(ctx, p)
+	if e != nil {
+		return nil, e
+	}
 	presences := map[string]domain.Presence{}
+	var names map[string]string
 	for _, panel := range panels {
 		result := fiber.Map{"id": panel.ID}
 		out = append(out, result)
-		if !security.ValidID(panel.GatewayID) || len(panel.ExternalID) != 12 {
+		if panel.WidgetID == studio.ControlsWidget {
+			if names == nil {
+				devices, err := s.Repo.ListDevices(ctx, p)
+				if err != nil {
+					return nil, err
+				}
+				names = make(map[string]string, len(devices))
+				for _, d := range devices {
+					names[d.ID] = d.Name
+				}
+			}
+			if err := renderControlsPanel(ctx, s, p, panel, names, result); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if !security.ValidID(panel.GatewayID) || !studio.ValidSource(panel.ExternalID) {
 			result["error"] = "Invalid source"
 			continue
 		}
@@ -370,6 +394,12 @@ func renderStudioPanels(ctx context.Context, s *app.Service, p domain.Principal,
 			input["events"], input["alerts"], input["presence"] = mask.events(deviceEvents), mask.alerts(openAlerts), mask.presence(presence)
 		}
 		input["now"] = time.Now().UTC()
+		if demo && input["source"] == "simulated" {
+			input["source"] = "device"
+		}
+		if demo && result["source"] == "simulated" {
+			result["source"] = "device"
+		}
 		var d studio.Definition
 		_ = json.Unmarshal(widget.Definition, &d)
 		markup := d.HTML
@@ -407,4 +437,90 @@ func renderStudioPanels(ctx context.Context, s *app.Service, p domain.Principal,
 		result["css"] = d.CSS
 	}
 	return out, nil
+}
+
+// renderControlsPanel describes a controls panel: each device's name and what it can be set to (the app draws the
+// switches itself from /devices/:id/controls), and a static rendering of their current state for the widget frame,
+// which is all a wall display shows (read-only: a display can never command).
+func renderControlsPanel(ctx context.Context, s *app.Service, p domain.Principal, panel studio.Panel, names map[string]string, result fiber.Map) error {
+	if len(panel.Devices) == 0 || len(panel.Devices) > studio.MaxControls {
+		result["error"] = "Invalid source"
+		return nil
+	}
+	items := []fiber.Map{}
+	var rows strings.Builder
+	var newest time.Time
+	for _, id := range panel.Devices {
+		name, ok := names[id]
+		if !ok || !security.ValidID(id) {
+			continue // removed, or in a project this viewer cannot see
+		}
+		controls, err := s.Repo.DeviceControls(ctx, p, id)
+		if errors.Is(err, domain.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		items = append(items, fiber.Map{"device_id": id, "name": name})
+		var state map[string]any
+		_ = json.Unmarshal(controls.State, &state)
+		parts := []string{}
+		gang := 0
+		for _, f := range zigbee2mqtt.SettableFeatures(controls.Exposes) {
+			if f.Type != "binary" || !(f.Group == "switch" || f.Name == "state" || strings.HasPrefix(f.Property, "switch")) {
+				continue
+			}
+			gang++
+			v, known := state[f.Property]
+			word := "—"
+			if known {
+				word = "ปิด"
+				if on, _ := json.Marshal(v); string(on) == string(f.ValueOn) {
+					word = "<b>เปิด</b>"
+				}
+			}
+			parts = append(parts, fmt.Sprintf("ช่อง %d %s", gang, word))
+		}
+		if len(parts) == 1 {
+			parts[0] = strings.TrimPrefix(parts[0], "ช่อง 1 ")
+		}
+		if w, ok := state["power"].(float64); ok {
+			parts = append(parts, fmt.Sprintf("%.0f W", w))
+		}
+		if pos, ok := state["position"].(float64); ok {
+			parts = append(parts, fmt.Sprintf("เปิด %.0f%%", pos))
+		}
+		for _, k := range []string{"current_heating_setpoint", "temp_set"} {
+			if t, ok := state[k].(float64); ok {
+				parts = append(parts, fmt.Sprintf("ตั้ง %.1f °C", t))
+			}
+		}
+		status := ""
+		if !controls.Online {
+			status = ` class="off"`
+			parts = append(parts, "ขาดการติดต่อ")
+		}
+		if ts, ok := state["last_seen"].(string); ok {
+			if at, e := time.Parse(time.RFC3339, ts); e == nil && at.After(newest) {
+				newest = at
+			}
+		}
+		fmt.Fprintf(&rows, "<li%s><span>%s</span><em>%s</em></li>", status, html.EscapeString(name), strings.Join(parts, " · "))
+	}
+	result["controls"] = items
+	result["source"] = "device"
+	if !newest.IsZero() {
+		result["received_at"] = newest
+	}
+	if len(items) == 0 {
+		result["error"] = "No controllable devices"
+		return nil
+	}
+	result["html"] = "<ul class=\"controls\">" + rows.String() + "</ul>"
+	result["css"] = `body{margin:0;padding:16px 18px;background:#0e1312;color:#e6edea;font-family:'Avenir Next','Segoe UI',Tahoma,system-ui,sans-serif}` +
+		`.controls{list-style:none;margin:0;padding:0;display:grid;gap:6px;font-size:14px;line-height:1.45}` +
+		`.controls li{display:flex;justify-content:space-between;gap:12px;padding:8px 11px;border-radius:8px;background:#121a18}` +
+		`.controls em{font-style:normal;color:#93a7a2;white-space:nowrap}.controls b{color:#ffe39a;font-weight:600}.controls li.off{opacity:.55}`
+	return nil
 }

@@ -14,6 +14,7 @@ import { gatewayHealthLabel } from "./nodes";
 import { CopyButton, Step } from "./panel-bits";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
 import PrivacyPanel, { type PrivacyClient } from "./privacy-panel";
+import { useShowSimulated } from "../demo-mode";
 
 export type Selection = { kind: "broker" } | { kind: "gateway"; id: string } | { kind: "device"; external: string } | { kind: "draft"; id: string; profile: string } | null;
 
@@ -468,6 +469,7 @@ function RemovedList({ items, gatewayName, busy, onRestore }: { items: Device[];
 }
 
 function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topology; busy: boolean; p: InspectorProps }) {
+  const showSim = useShowSimulated();
   // Learned signals that apply to this tag, reported by the panel below and shown as a header badge.
   const [learned, setLearned] = useState<LearnedSignal[]>([]);
   const reg = d.registrations[0];
@@ -549,7 +551,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
             </dd>
           </div>
         ) : null}
-        {d.simulated && (
+        {showSim && d.simulated && (
           <div className="topo-field">
             <dt>แหล่งข้อมูล</dt>
             <dd>

@@ -1,3 +1,13 @@
+## Update 2026-10-01: controls panels
+
+A dashboard panel with `widget_id: "aether:controls"` and `devices: [<device id>, …]` (1–12 registered devices, no
+`gateway_id`/`external_id`) is a first-party controls panel: the app draws each device's switches itself (the compact
+form of `topology/device-controls.tsx`: a switch per gang or output, open/stop/close, one slider for brightness,
+position or setpoint) and commands go through `POST /commands` with the usual confirm/timeout flow and role rules. It
+never runs in the widget sandbox, which stays script-free. The render endpoint returns the device names and a static,
+read-only rendering of their state, which is what a wall display shows. The same compact controls appear on overview
+tiles of controllable devices and in the Digital twin's side card.
+
 ## Update 2026-09-20: dashboards per project
 
 A dashboard can belong to a project (`definition.project_id`). The Studio command bar filters dashboards by project, the Add Panel device list is scoped to the dashboard's project, and "ข้ามโปรเจค" opens it to every project. See [projects and real-time](projects-realtime.md).

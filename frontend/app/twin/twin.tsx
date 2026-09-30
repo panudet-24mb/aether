@@ -1,11 +1,12 @@
 "use client";
 // Digital twin page (docs/platform/digital-twin.md): one building, live, in 3D. A thin toolbar over TwinView.
 
-import { Box, Building2, Camera, Crosshair, Expand, Grid3x3, History, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Radio, Table2, Users } from "lucide-react";
+import { Box, Building2, Camera, Crosshair, Expand, Grid3x3, History, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Power, Radio, Table2, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
+import DeviceControlsPanel from "../topology/device-controls";
 import type { Site } from "../floorplan/model";
 import { LAYERS, type Layer, type PeopleMode, type TwinAlert, type TwinDevice, type TwinMarker, type TwinReplay, type TwinState, type TwinTimeline } from "./api";
 import { ReplayStore, stateAt, type ReplayIndex } from "./replay/store";
@@ -50,6 +51,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [isolate, setIsolate] = useState(false);
   const [tour, setTour] = useState(false);
   const [showData, setShowData] = useState(false);
+  const [showSwitches, setShowSwitches] = useState(false);
   const [state, setState] = useState<TwinState | null>(null);
   const [selected, setSelected] = useState<TwinDevice | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -200,6 +202,9 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
     return () => clearInterval(t);
   }, [debug]);
 
+  // The active floor's devices first, then the rest of the building.
+  const controllable = useMemo(() => (state?.devices ?? []).filter((d) => d.kind === "device" && d.class)
+    .sort((a, b) => Number(b.floor_id === floorId) - Number(a.floor_id === floorId) || a.name.localeCompare(b.name, "th")), [state, floorId]);
   const urgent = useMemo(() => (state?.alerts ?? []).filter((a) => (a.sos || a.hazard) && a.status === "open"), [state]);
   const focus = useCallback((a: TwinAlert) => {
     const z = handle.current?.engine()?.zoneName(a.gateway_id);
@@ -253,7 +258,6 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
       <header className="topo-bar twin-bar" aria-label="เครื่องมือ digital twin">
         <h1 className="topo-bar-title">Digital twin</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบ"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
-        {state?.demo && <span className="twin-demo-badge" title="workspace สาธิต · ข้อมูลทั้งหมดเป็นข้อมูลจำลอง">DEMO DATA</span>}
         <div className="twin-seg" role="group" aria-label="สดหรือย้อนดู">
           <button type="button" className={mode === "live" ? "is-on" : ""} aria-pressed={mode === "live"} onClick={() => { setMode("live"); setPlaying(false); }}><Radio size={13} />สด</button>
           <button type="button" className={mode === "replay" ? "is-on" : ""} aria-pressed={mode === "replay"} disabled={!state} onClick={() => enterReplay(replayRange)} title="ย้อนดูเหตุการณ์"><History size={13} />ย้อนดู</button>
@@ -281,6 +285,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         </div>
         <label className="twin-explode" title="ระยะห่างระหว่างชั้น"><Grid3x3 size={13} /><input type="range" min={0} max={1.2} step={0.05} value={explode} onChange={(e) => setExplode(Number(e.target.value))} aria-label="ระยะห่างระหว่างชั้น" /></label>
         <button type="button" className={`topo-btn ${isolate ? "is-on" : ""}`} aria-pressed={isolate} onClick={() => setIsolate(!isolate)} title="แสดงเฉพาะชั้นนี้" aria-label="แสดงเฉพาะชั้นนี้"><Camera size={14} /></button>
+        <button type="button" className={`topo-btn ${showSwitches ? "is-on" : ""}`} aria-pressed={showSwitches} onClick={() => setShowSwitches(!showSwitches)} title="สวิตช์และปลั๊ก" aria-label="สวิตช์และปลั๊ก"><Power size={14} /></button>
         <button type="button" className={`topo-btn ${showData ? "is-on" : ""}`} aria-pressed={showData} onClick={() => setShowData(!showData)} title="ตารางข้อมูล" aria-label="ตารางข้อมูล"><Table2 size={14} /></button>
         <button type="button" className="topo-btn" onClick={fullscreen} title="เต็มจอ" aria-label="เต็มจอ"><Expand size={14} /></button>
       </header>
@@ -320,6 +325,16 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
           )}
           {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง</small>}
         </div>
+        {showSwitches && mode === "live" && (
+          <nav className="twin-switchboard" aria-label="อุปกรณ์ที่สั่งงานได้">
+            <strong>สวิตช์ ไฟ ปลั๊ก ม่าน แอร์</strong>
+            {controllable.length === 0 ? <small>อาคารนี้ยังไม่มีอุปกรณ์ที่สั่งงานได้</small> : <ul>{controllable.map((d) => (
+              <li key={d.id}><button type="button" aria-current={selected?.id === d.id} className={d.on === 1 ? "is-on" : ""} onClick={() => { setTour(false); setFloorId(d.floor_id); handle.current?.select(d.id); handle.current?.lookAt(d.floor_id, d.x, d.y); }}>
+                <span className="twin-lamp" aria-hidden="true" /><span className="twin-switch-name">{d.name}</span><small>{d.on === 1 ? "เปิด" : d.on === 0 ? "ปิด" : ""}{d.power !== undefined ? ` · ${d.power.toFixed(0)} W` : ""}</small>
+              </button></li>
+            ))}</ul>}
+          </nav>
+        )}
         {selected && (
           <aside className="twin-card" aria-label="อุปกรณ์ที่เลือก">
             <strong>{selected.name}</strong>
@@ -330,8 +345,10 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
               {selected.battery !== undefined && <><dt>แบตเตอรี่</dt><dd>{selected.battery.toFixed(0)} %</dd></>}
               {selected.door !== undefined && <><dt>ประตู</dt><dd>{selected.door ? "เปิด" : "ปิด"}</dd></>}
               <dt>สถานะ</dt><dd>{selected.alert ? "มีการแจ้งเตือน" : selected.online ? "ออนไลน์" : "ขาดการติดต่อ"}</dd>
+              {selected.power !== undefined && <><dt>กำลังไฟ</dt><dd>{selected.power.toFixed(1)} W</dd></>}
               <dt>ล่าสุด</dt><dd>{selected.last_at ? new Date(selected.last_at).toLocaleTimeString("th-TH") : "—"}</dd>
             </dl>
+            {selected.class && selected.kind === "device" && mode === "live" && <DeviceControlsPanel variant="compact" client={client} deviceId={selected.id} refreshKey={selected.last_at} onSettled={() => setRefreshKey((k) => k + 1)} />}
           </aside>
         )}
         {debug && stats && <div className="twin-debug" aria-hidden="true">{stats.fps} fps · {stats.calls} draw · {Math.round(stats.triangles / 1000)}k tri · {stats.tier} · tex {stats.textures}</div>}

@@ -20,7 +20,7 @@ import type { Layer, PeopleMode, TwinAlert, TwinDevice, TwinState } from "../api
 export type Quality = "high" | "med" | "low";
 export type Preset = "overview" | "plan" | "floor" | "alert" | "tour";
 
-const STAGE = 0x0b1418, ACCENT = 0xa7f3d0, AMBER = 0xf6c177, CORAL = 0xff8f70, MUTED = 0x5d7279, BLUE = 0x80b7ff, INK = 0xe6f2ee;
+const STAGE = 0x0b1418, ACCENT = 0xa7f3d0, AMBER = 0xf6c177, CORAL = 0xff8f70, MUTED = 0x5d7279, BLUE = 0x80b7ff, INK = 0xe6f2ee, LAMP = 0xffe39a, LAMP_OFF = 0x34444a;
 const ZONE_COLORS: Record<string, [number, number, number]> = { mint: [167, 243, 208], blue: [128, 183, 255], amber: [246, 193, 119], coral: [255, 143, 112], violet: [196, 167, 255], slate: [159, 177, 182] };
 
 export type LabelSpec = { id: string; floorId: string; x: number; y: number; h: number; text: string; tone?: "sos" | "warn" | "muted" | "person" | "zone" };
@@ -509,12 +509,14 @@ export class TwinEngine {
     this.deviceIndex = devices;
     this.gatewayIndex = gateways;
     const m = new THREE.Matrix4(), c = new THREE.Color();
-    const tone = (d: TwinDevice) => (d.sos || d.alert ? CORAL : !d.online ? (d.last_at ? AMBER : MUTED) : d.door === 1 ? AMBER : ACCENT);
+    // Switched outputs glow warm when on and dim when off, so a light switched from the UI is visible in the model.
+    const tone = (d: TwinDevice) => (d.sos || d.alert ? CORAL : !d.online ? (d.last_at ? AMBER : MUTED) : d.door === 1 ? AMBER : d.on === 1 ? LAMP : d.on === 0 ? LAMP_OFF : ACCENT);
     const stems: number[] = [];
     this.deviceMesh.count = devices.length;
     devices.forEach((d, i) => {
       const at = this.world(d.floor_id, d.x, d.y, d.z)!;
       m.makeTranslation(at.x, at.y, at.z);
+      if (d.on === 1) m.scale(new THREE.Vector3(1.45, 1.45, 1.45));
       this.deviceMesh!.setMatrixAt(i, m);
       this.deviceMesh!.setColorAt(i, c.setHex(tone(d)));
       stems.push(at.x, at.y, at.z, at.x, at.y - d.z + 0.1, at.z);

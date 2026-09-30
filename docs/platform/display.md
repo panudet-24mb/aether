@@ -36,12 +36,13 @@ announces the revocation on the signal channel; the stream also re-checks its di
 
 | Kind | Shows |
 |---|---|
-| `overview` | Open alerts (critical in red), gateways and devices online, low batteries; big temperature/humidity tiles |
-| `alerts` | Open and acknowledged alerts, newest first, with severity and how long each has been open |
+| `overview` | Open alerts (critical in red), gateways and devices online, low batteries; energy (plug watts and kWh), life safety (smoke, gas, CO, leak), doors, air quality and lights on; big temperature/humidity tiles |
+| `alerts` | Open and acknowledged alerts, newest first, with severity and how long each has been open; with none open, the last day's handled alerts under the all-clear |
+| `twin` | The Digital twin live view (`ref` picks the site): kept mounted for the whole rotation and paused while another view is up (browsers cap WebGL contexts), touring the building; people as counts or as `display_people` allows (`GET /api/v1/kiosk/twin/sites/:id/state`, logged as `display_twin`) |
 | `floorplan` | The 3D building (the same renderer as the floor-plan editor, read-only, slowly orbiting); `ref` picks the site, otherwise the first one the display sees. The floor with an emergency comes to the front |
-| `devices` | Gateways online or not, devices that stopped reporting, batteries under 20% |
+| `devices` | Gateways online or not (with their device counts), each device family online, devices that stopped reporting, batteries under 20% |
 | `presence` | Worn tags per zone: counts; names only when the owner allowed them |
-| `studio` | A Dashboard Studio dashboard (`ref`, required), rendered as the display sees the data, in the same sandboxed frames as Studio |
+| `studio` | A Dashboard Studio dashboard (`ref`, required), rendered as the display sees the data, in the same sandboxed frames as Studio; a controls panel shows its devices' state only (a display never commands) |
 
 **Emergency takeover.** An open SOS (a critical `button` alert) or hazard (smoke, gas, CO) replaces the rotation:
 - a pulsing red screen with what happened and who (see names below);

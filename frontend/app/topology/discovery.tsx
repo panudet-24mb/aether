@@ -6,6 +6,7 @@ import { formatMAC, suggestProfile } from "./catalog";
 import { isFresh } from "./model";
 import { BLE_WARNING, LAN_WARNING } from "./tuya-import";
 import { ZIGBEE_KIND_LABEL } from "./zigbee-catalog";
+import { useShowSimulated } from "../demo-mode";
 
 export default function DiscoveryList({ items, gateways, gatewayId, serverTime, busy, onAdopt, hiddenUnknown = 0, hiddenBLE = 0 }: {
   items: Discovery[]; gateways: Gateway[]; gatewayId?: string; serverTime: number; busy: boolean;
@@ -15,6 +16,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
   hiddenBLE?: number;
   onAdopt: (external: string, gatewayId: string) => void;
 }) {
+  const showSim = useShowSimulated();
   const [filter, setFilter] = useState("");
   const [query, setQuery] = useState("");
   const selected = gatewayId ?? filter;
@@ -51,7 +53,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
               <strong>{label}</strong>
               <small>{zigbee && d.description ? `${d.description}${d.kind ? ` · ${ZIGBEE_KIND_LABEL[d.kind] ?? d.kind}` : ""}` : d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
               <code>{formatMAC(d.external_id)}</code>
-              <small>{zigbee ? "pair อยู่กับ coordinator" : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{d.source === "simulated" ? " · SIM" : ""}</small>
+              <small>{zigbee ? "pair อยู่กับ coordinator" : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{showSim && d.source === "simulated" ? " · SIM" : ""}</small>
               <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>ลงทะเบียน</button>
             </div>
           </article>;

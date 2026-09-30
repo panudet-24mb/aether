@@ -64,6 +64,11 @@ var canonical = map[string]string{
 	"gas_sensor_status":   "gas",
 	"co_state":            "carbon_monoxide",
 	"battery_percentage":  "battery",
+	// Air-quality monitors (hjjcy, co2bj) report under the names the Zigbee environment sensors use.
+	"co2_value":  "co2",
+	"pm25_value": "pm25",
+	"voc_value":  "voc",
+	"ch2o_value": "formaldehyd",
 }
 
 // preferred wins a rename both of two codes want (a light with bright_value and bright_value_v2).

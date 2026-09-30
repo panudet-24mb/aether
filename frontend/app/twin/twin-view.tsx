@@ -24,6 +24,8 @@ export type TwinViewHandle = {
   lockRange: (kind: "temperature" | "humidity" | "occupancy", r: [number, number] | null) => void;
   range: (kind: "temperature" | "humidity" | "occupancy") => [number, number];
   engine: () => TwinEngine | null;
+  /** Selects a device as a click on its marker would (keyboard access to the side card). */
+  select: (id: string | null) => void;
 };
 
 export type TwinViewProps = {
@@ -260,6 +262,7 @@ export default function TwinView(props: TwinViewProps) {
       lockRange: (k, r) => engineRef.current?.lockRange(k, r),
       range: (k) => engineRef.current?.range(k) ?? [0, 1],
       engine: () => engineRef.current,
+      select: (id) => setSelected(id),
   }), [floorId]);
 
   const summaries: ZoneSummary[] = useMemo(() => (site && state ? zoneSummaries(site, state, layers) : []), [site, state, layers]);

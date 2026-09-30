@@ -148,3 +148,13 @@
 .ov-facts .is-warn { border-color: var(--color-warning); }
 .ov-facts .is-warn strong { color: var(--color-warning); }
 .ov-facts .is-ok strong { color: var(--color-accent); }
+
+/* Controllable devices: the card plus its compact on/off controls, drawn as one tile (a button cannot hold buttons). */
+.ov-card-slot { display: flex; flex-direction: column; min-width: 0; }
+.ov-card-slot > .ov-card { flex: 1; }
+.ov-card-slot.has-controls > .ov-card { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: transparent; }
+.ov-card-controls { padding: 2px 11px 9px; border: 1px solid var(--color-border); border-top: 0; border-radius: 0 0 9px 9px; background: var(--color-panel); }
+.ov-card-controls .dc-switch { height: 28px; }
+.ov-card-controls .dc-switches { gap: 5px; }
+.ov-card-controls .dc-switch { padding: 0 9px 0 5px; gap: 6px; }
+.ov-card-controls .dc-switch small { display: none; }

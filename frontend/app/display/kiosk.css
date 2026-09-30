@@ -161,3 +161,34 @@ html:has(.ks), body:has(.ks) { background: var(--color-paper); overflow: hidden;
 .ks-mp-dot { fill: #fff; }
 .ks-mp-ring { fill: none; stroke: #fff; stroke-width: .2; transform-box: fill-box; transform-origin: center; animation: ks-ring 1.4s ease-out infinite; }
 @keyframes ks-ring { from { transform: scale(1); opacity: 1; } to { transform: scale(4); opacity: 0; } }
+
+/* Energy, safety, doors and air at a glance on the overview. */
+.ks-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(16vw, 1fr)); gap: 1.2vw; margin: 1.4vh 0; }
+.ks-strip article { background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 1vw; padding: 1.4vh 1.2vw; display: flex; flex-direction: column; gap: .6vh; min-width: 0; }
+.ks-strip article p { display: flex; align-items: center; gap: .5vw; margin: 0; font-size: 1.6vh; color: var(--color-muted); }
+.ks-strip article p svg { width: 2vh; height: 2vh; }
+.ks-strip article strong { font-size: 3.6vh; font-weight: 600; line-height: 1.15; color: var(--color-accent); }
+.ks-strip article small { font-size: 1.5vh; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ks-strip article.is-warn strong { color: var(--color-warning, #f8b74f); }
+.ks-strip article.is-danger { border-color: var(--color-danger, #ff8164); }
+.ks-strip article.is-danger strong { color: var(--color-danger, #ff8164); }
+/* The twin stays mounted across the rotation; hidden, it keeps its WebGL context and stops drawing. */
+.ks-twin { position: relative; min-height: 0; }
+.ks-twin.is-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+
+/* Device families on the status wall. */
+.ks-gw span small { margin-left: .5vw; padding: 0 .5vw; border-radius: 1vw; background: rgba(255,255,255,.08); font-size: .8em; }
+.ks-families { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1vw; margin: 1.4vh 0; }
+.ks-families article { background: var(--color-panel); border: 1px solid var(--color-border); border-radius: 1vw; padding: 1.2vh 1.2vw; min-width: 0; }
+.ks-families article p { margin: 0; font-size: 1.6vh; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ks-families article strong { display: block; font-size: 4vh; font-weight: 600; color: var(--color-accent); line-height: 1.2; }
+.ks-families article strong small { font-size: .55em; color: var(--color-muted); font-weight: 400; }
+.ks-families article > small { font-size: 1.4vh; color: var(--color-muted); }
+.ks-families article.is-warn strong { color: var(--color-warning, #f8b74f); }
+
+/* All clear, with the day's handled alerts underneath. */
+.ks-allclear.has-recent { justify-content: flex-start; padding-top: 3vh; }
+.ks-allclear.has-recent > svg { width: 9vh; height: 9vh; }
+.ks-recent { width: min(100%, 150vh); margin-top: 3vh; text-align: left; }
+.ks-recent h3 { margin: 0 0 1.2vh; font-size: 2vh; font-weight: 500; color: var(--color-muted); }
+.ks-alerts.is-recent li { opacity: .82; }

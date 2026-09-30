@@ -3,6 +3,7 @@ import { type DragEvent, type KeyboardEvent, useState } from "react";
 import { Bluetooth, GripVertical, Router, Search, Thermometer } from "lucide-react";
 import { DEVICE_PROFILES, GATEWAY_MODELS, formatMAC } from "./catalog";
 import type { DeviceEntity } from "./model";
+import { useShowSimulated } from "../demo-mode";
 
 export const DRAG_MIME = "application/x-aether-topology";
 export type DragPayload = { kind: "gateway"; model: string } | { kind: "profile"; profile: string } | { kind: "device"; external: string };
@@ -39,6 +40,7 @@ export default function Palette({
   onAddGateway: (model: string) => void;
   onAddProfile: (profile: string) => void;
 }) {
+  const showSim = useShowSimulated();
   const [query, setQuery] = useState("");
   const q = norm(query);
   const list = discovered.filter((d) => !q || norm(d.external).includes(q) || norm(d.name).includes(q));
@@ -115,7 +117,7 @@ export default function Palette({
                 <small>
                   {formatMAC(d.external)}
                   {d.heard[0]?.rssi != null ? ` · ${d.heard[0].rssi} dBm` : ""}
-                  {d.simulated ? " · SIM" : ""}
+                  {showSim && d.simulated ? " · SIM" : ""}
                 </small>
               </span>
             </div>

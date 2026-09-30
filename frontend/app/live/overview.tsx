@@ -13,6 +13,7 @@ import { useSignals } from "../topology/use-signals";
 import { environmentReading, latestMeasurements, normalizeReading } from "./measurements";
 import { COMFORT_NOTE, DOOR_LEFT_OPEN_MS, OCCUPIED_WINDOW_MS, activityStrip, comfortOf, doorStateOf, doorText, duration, isDoorSensor, isOccupancySensor, lastMotionText, occupancyOf, type DoorState, type Occupancy, type StripCell } from "./office";
 import TemplateSettings from "../template-settings";
+import { useShowSimulated } from "../demo-mode";
 
 // `sos` comes from the API (a critical alert raised by a `button` event); the board never re-derives it.
 type Alert = { id: string; title: string; severity: string; device_name: string; external_id: string; gateway_id: string; opened_at: string; status: string; sos?: boolean };
@@ -38,6 +39,8 @@ type Card = {
 };
 export type OverviewTarget = "alerts" | "connect" | "assets" | "floorplan" | "studio";
 
+/** Card kinds that can be commanded (Zigbee2MQTT and Tuya): their cards carry compact on/off controls. */
+const CONTROL_KINDS = new Set(["switch", "lighting", "cover", "climate", "fan"]);
 const FRESH_MS = 60000, STALE_MS = 15 * 60000, LOW_BATTERY = 20;
 const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์", switch: "สวิตช์ไฟ",
   lighting: "หลอดไฟ", cover: "ม่าน / มู่ลี่", lock: "กลอนประตู", climate: "ควบคุมอุณหภูมิ", fan: "พัดลม", remote: "รีโมต / ปุ่ม", sos: "ปุ่มฉุกเฉิน", hazard: "ควัน / แก๊ส / CO", metering: "มิเตอร์ไฟฟ้า", zigbee: "อุปกรณ์ Zigbee" };
@@ -97,6 +100,7 @@ function Chart({ readings: rawReadings, metric, limit }: { readings: Reading[]; 
 }
 
 export default function Overview({ getToken, refresh, onUnauthorized, onNavigate, onSummary }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; onNavigate: (to: OverviewTarget) => void; onSummary?: (openAlerts: number) => void }) {
+  const showSim = useShowSimulated();
   const handlers = useLatest({ getToken, refresh });
   const [client] = useState(() => createClientFrom(handlers));
   const onUnauthorizedRef = useLatest(onUnauthorized);
@@ -399,11 +403,13 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                     const Icon = KIND_ICON[c.kind] ?? Bluetooth, color = c.projectId ? PROJECT_COLORS[(snapshot?.projects ?? []).find((p) => p.id === c.projectId)?.color ?? ""] : undefined;
                     const cardStrip = c.occupancy ? activityStrip(c.samples, now, "motion", 1, 5 * 60000) : c.door ? activityStrip(c.samples, now, "door", 1, 5 * 60000) : null;
                     const series = c.kind === "environment" ? c.history.filter(environmentReading).slice(-40).map((h) => h.temperature) : c.history.slice(-40).map((h) => Number((h.metrics as Record<string, number> | undefined)?.accel_g ?? NaN)).filter((v) => Number.isFinite(v));
+                    const controllable = !!c.deviceId && c.registered && CONTROL_KINDS.has(c.kind) && c.status !== "offline";
                     return (
-                      <button key={c.key} type="button" className={`ov-card is-${c.status}${c.sos ? " is-sos" : ""}${c.door?.leftOpen && c.status !== "offline" ? " is-door-long" : ""}${c.occupancy?.occupied && c.status !== "offline" ? " is-occupied" : ""}`} onClick={() => setOpenKey(c.key)} style={color ? ({ "--ov-project": color } as React.CSSProperties) : undefined}>
+                      <div key={c.key} className={`ov-card-slot${controllable ? " has-controls" : ""}`}>
+                      <button type="button" className={`ov-card is-${c.status}${c.sos ? " is-sos" : ""}${c.door?.leftOpen && c.status !== "offline" ? " is-door-long" : ""}${c.occupancy?.occupied && c.status !== "offline" ? " is-occupied" : ""}`} onClick={() => setOpenKey(c.key)} style={color ? ({ "--ov-project": color } as React.CSSProperties) : undefined}>
                         <span className="ov-card-head">
                           <span className="ov-card-icon">{c.image ? <img src={c.image} alt="" /> : <Icon size={18} />}</span>
-                          <span className="ov-card-name"><strong>{c.name}</strong><small>{c.model || formatMAC(c.external)}{c.simulated ? " · SIM" : ""}{!c.registered ? " · ยังไม่ adopt" : ""}</small></span>
+                          <span className="ov-card-name"><strong>{c.name}</strong><small>{c.model || formatMAC(c.external)}{showSim && c.simulated ? " · SIM" : ""}{!c.registered ? " · ยังไม่ adopt" : ""}</small></span>
                           {c.sos && <span className="ov-sos-tag">SOS</span>}
                           <i className="ov-dot" aria-label={c.status} />
                         </span>
@@ -414,6 +420,8 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                           <span>{c.reading && c.reading.battery > 0 ? `${c.reading.battery}%` : ""}{c.reading?.rssi != null ? ` ${c.reading.rssi} dBm` : ""}</span>
                         </span>
                       </button>
+                      {controllable && <div className="ov-card-controls"><DeviceControlsPanel variant="compact" client={client} deviceId={c.deviceId!} refreshKey={c.reading?.received_at} /></div>}
+                      </div>
                     );
                   })}
                 </div>
@@ -481,7 +489,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                   {opened.wearable && <div><strong>{opened.zone ?? "—"}</strong>โซนปัจจุบัน</div>}
                 </div>
                 {openedComfort && <p className="topo-note">{COMFORT_NOTE} · นอกช่วงนี้แสดงเป็น ร้อน / เย็น / ชื้น / แห้ง</p>}
-                {opened.deviceId && opened.external.startsWith("0x") && <DeviceControlsPanel client={client} deviceId={opened.deviceId} refreshKey={opened.reading?.received_at} />}
+                {opened.deviceId && (opened.external.startsWith("0x") || CONTROL_KINDS.has(opened.kind)) && <DeviceControlsPanel client={client} deviceId={opened.deviceId} refreshKey={opened.reading?.received_at} />}
                 {opened.occupancy && (
                   <>
                     <h3>การใช้ห้อง 24 ชม.</h3>

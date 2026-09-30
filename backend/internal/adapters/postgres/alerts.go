@@ -442,6 +442,23 @@ func saveEvents(tx *gorm.DB, tenant, gateway string, view minew.View, raws rawBy
 	for _, n := range named {
 		names[n.ExternalID] = n.Name
 	}
+	// A registered device's own name wins over the stream's: a roaming wearable has a stream per gateway that
+	// hears it, and only the one it was registered through carries the name the workspace gave it.
+	heard := make([]string, 0, len(view.Sensors))
+	for _, sensor := range view.Sensors {
+		heard = append(heard, sensor.ID)
+	}
+	if len(heard) > 0 {
+		var registered []struct{ ExternalID, Name string }
+		if e := tx.Raw(`SELECT lower(external_id) AS external_id,name FROM core.devices WHERE removed_at IS NULL AND lower(external_id) IN ?`, heard).Scan(&registered).Error; e != nil {
+			return e
+		}
+		for _, n := range registered {
+			if n.Name != "" {
+				names[n.ExternalID] = n.Name
+			}
+		}
+	}
 	// A button press is inferred (the B10's iBeacon trigger slot reappearing, or an Eddystone-UID instance
 	// change). Any third-party beacon can produce either, so only tags registered with a button profile may raise it.
 	var buttonIDs []string

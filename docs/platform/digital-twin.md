@@ -267,19 +267,57 @@ The building: 3 floors, 14 zones, 10 MG3-style gateways, 52 S1 environment senso
 with B10 wristbands (roaming), fictional Thai names. The script (`internal/simulation/twin_scenario.go`, deterministic):
 nurses, doctors and staff walk their rounds; minute 8 a patient walks into the restricted server room (zone rule);
 minute 12 SOS in ward 3; minute 18 someone at the cold-store door; minutes 20–26 the cold store warms to 12 °C and back
-(threshold rule at 8 °C). All MACs start with `f1`, every row is marked `aether_source: simulated`, and the twin shows a
-DEMO DATA badge.
+(threshold rule at 8 °C). All MACs start with `f1` and every row is marked `aether_source: simulated`.
 
 A demo workspace's alerts are never delivered: `ClaimNotifications` returns nothing for it whatever channels exist. A
-channel's own "send test" button still sends (that is how a channel is checked). Every page of a demo workspace shows a
-DEMO strip saying the data is fictional, that gateways and devices added there belong to the demo, and that
-notifications are not sent. The flag is set only by the migration role (migration 00045 narrows `aether_app`'s INSERT
-on `core.tenants` to `(id, name)`).
-With `ALERTS_SHADOW=true` (production) only the SOS opens an alert; the zone and threshold rules show only as events.
+channel's own "send test" button still sends (that is how a channel is checked). The screens of a demo workspace carry
+no demo wording (it is shown to customers): the only reminder is one owner-only line on the alert channels page, and
+the SIM markers that real workspaces keep for their simulated devices are hidden for a demo workspace
+(`frontend/app/demo-mode.ts`). The flag is set only by the migration role (migration 00045 narrows `aether_app`'s
+INSERT on `core.tenants` to `(id, name)`).
+With `ALERTS_SHADOW=true` (production) only the SOS and the hazards (smoke, gas, CO) open alerts; the zone and threshold
+rules show only as events.
 
-Honest limits of the demo: the "door" is a PIR at the cold-store door, because no HTTP-ingest sensor reports a door
-state (Minew S4 doors are learned signals, Zigbee doors arrive over MQTT). The first uplink after `run` starts leaves out
-the faint second gateway, so every tag's first zone is its real one.
+### Every device family (`extend`)
+
+`extend` adds to an existing demo workspace everything Aether supports, through the same code paths the API uses, and is
+idempotent (re-running adds only what is missing). It refuses a workspace that is not demo.
+
+```sh
+DATABASE_URL=… MIGRATION_DATABASE_URL=… DEMO_STATE=./demo-twin.json AETHER_ORIGIN=https://… go run ./cmd/demo-twin extend
+# the driver then also connects to the broker as the Zigbee coordinator and the Aether Edge (TLS, the MQTT CA):
+DEMO_MQTT_URL=ssl://mqtt:8883 DEMO_MQTT_CA=/run/mqtt-ca.crt DATABASE_URL=… AETHER_ORIGIN=… DEMO_STATE=… go run ./cmd/demo-twin run
+go run ./cmd/demo-twin pair   # a new pairing code for the control-room TV (the old TV is signed out)
+```
+
+- **Minew over the HTTP gateway ingest:** an MG4 gateway in the lab (S1 "PLUS", MSP01, S4), E8S on infusion pumps and a
+  wheelchair, MBT01 anti-tamper on the controlled-drug cabinet and the server rack, C10 and B7 wearables (roaming).
+- **Zigbee (a simulated Zigbee2MQTT coordinator over MQTT):** 52 devices built from 31 real zigbee-herdsman-converters
+  definitions (`internal/simulation/z2m_demo_definitions.json`, exported by `infra/export-z2m-demo-definitions.mjs`):
+  Tuya TS0001–TS0004, TS011F plugs, TS0601 thermostat / curtain / presence radar / air quality / smoke, TS0207, TS0201,
+  WSD500A, TS0203, TS0202; Aqara WSDCGQ11LM, MCCGQ11LM, RTCGQ11LM, SJCGQ11LM; IKEA LED1623G12, ICTC-G-1, STYRBAR, STARKVIND;
+  Philips Hue motion; SONOFF SNZB-01..04; Heiman HS1SA-E, HS1CG, HS1CA-E. `bridge/devices` is published as Zigbee2MQTT
+  does (model id and manufacturer from each definition's zigbee model or fingerprint); every state follows the
+  definition's exposes (keys, ranges, enums, on/off values) plus linkquality, battery and last_seen.
+- **Tuya Wi‑Fi (a simulated Aether Edge over MQTT):** a vaccine fridge plug, an air purifier, a 3-gang switch, a lamp, an
+  air conditioner and an air-quality monitor.
+- Tuya Cloud and Tuya BLE are not simulated: their flags are off in production and the API refuses those gateways.
+
+Both simulated gateways apply `/set` commands and report the new state, so a switch pressed in the twin, the overview or
+a Studio controls panel is confirmed like a real one (manual commands need the owner, admin or operator role; they do
+not depend on `AUTOMATION_COMMANDS`). A command holds for 15 minutes, then the script takes over again.
+
+The 30-minute script adds: lights by shift, plugs with a real load profile, doors on the pharmacy, cold store, server
+room and lab, corridor motion, ward air quality, the ICU thermostat, a leak in the lab (minutes 15–18) and a smoke test
+(minute 27), once per loop. The driver resolves the demo workspace's alerts 4 minutes after they open (with
+`DATABASE_URL`), so a wall TV's takeover ends by itself. `backfill` covers the Minew rows (MG3s and the MG4); Zigbee and
+Edge history is not backfilled, because their capture takes the arrival time.
+
+`extend` also creates four Studio dashboards (environment; energy and safety; people and events; switches and plugs,
+the last one made of first-party controls panels) and the display "จอห้องควบคุม" (overview, Digital twin, alerts, the four
+dashboards, floor plan, people by zone, device status; names shown; acknowledge allowed), and prints its pairing link
+`/display#code=…` (valid 10 minutes). The Tuya local keys it stores are random and sealed with a throwaway secret: the
+simulated Edge never fetches them.
 
 ## Roadmap
 
@@ -289,5 +327,5 @@ the faint second gateway, so every tag's first zone is its real one.
 | P2 | History storage: `presence_history`, `sample_rollup`, `twin_settings` | done (00046, 00047) |
 | P3 | Replay: timeline, replay, trail, settings; time scrubber | done |
 | P4 | Polish | bloom tuning, keyboard map, contrast audit, axe scan |
-| P5 | TV embed | `twin-embed` for the display playlist: keep-alive with `paused`; a display is clamped to `display_people` (already in `TwinPeopleFor`) |
+| P5 | TV embed | done: the display playlist's "twin" view (`GET /api/v1/kiosk/twin/sites/:id/state`), kept mounted and `paused` between turns, people clamped to `display_people` |
 | P6 | Backfill | done with P3: `CapturePacketAt` and `demo-twin backfill` |

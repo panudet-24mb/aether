@@ -15,7 +15,7 @@ const SETTLED = new Set(["confirmed", "timeout", "expired", "failed"]);
 
 const LABELS: Record<string, string> = {
   state: "เปิด / ปิด", brightness: "ความสว่าง", color_temp: "อุณหภูมิสี", color: "สี", position: "ตำแหน่ง", tilt: "มุมใบม่าน",
-  system_mode: "โหมด", occupied_heating_setpoint: "อุณหภูมิที่ตั้ง", current_heating_setpoint: "อุณหภูมิที่ตั้ง", child_lock: "ล็อกกันเด็ก",
+  system_mode: "โหมด", temp_set: "อุณหภูมิที่ตั้ง", occupied_heating_setpoint: "อุณหภูมิที่ตั้ง", current_heating_setpoint: "อุณหภูมิที่ตั้ง", child_lock: "ล็อกกันเด็ก",
   fan_mode: "ความเร็วพัดลม", effect: "เอฟเฟกต์", preset: "โหมดตั้งล่วงหน้า",
 };
 
@@ -91,7 +91,17 @@ function hexToXY(hex: string): { x: number; y: number } {
  * Controls for a registered Zigbee2MQTT device, rendered from what its own definition says is settable. A click
  * queues a command; the shown value only changes when the device reports it (the command becomes "confirmed").
  */
-export default function DeviceControlsPanel({ client, deviceId, refreshKey }: { client: CommandClient; deviceId: string; refreshKey?: unknown }) {
+/** Settable values the compact controls show (the rest stay in the device inspector). */
+const QUICK_NUMERIC = new Set(["brightness", "position", "current_heating_setpoint", "occupied_heating_setpoint", "temp_set"]);
+
+export default function DeviceControlsPanel({ client, deviceId, refreshKey, variant = "full", onSettled }: {
+  client: CommandClient; deviceId: string; refreshKey?: unknown;
+  /** compact: on/off toggles per gang, open/stop/close, and one slider for brightness, position or setpoint, for a
+   *  tile, the twin's side card or a Studio controls panel. full: every settable value (the device inspector). */
+  variant?: "full" | "compact";
+  /** Called when a command settles (confirmed, timed out or failed), so the caller can refresh what it shows. */
+  onSettled?: () => void;
+}) {
   const [controls, setControls] = useState<DeviceControls | null>(null);
   const [missing, setMissing] = useState(false);
   const [pending, setPending] = useState<Record<string, Pending>>({});
@@ -143,6 +153,7 @@ export default function DeviceControlsPanel({ client, deviceId, refreshKey }: { 
       }
     }
     void load();
+    onSettled?.();
   }
 
   if (missing || !controls) return null;
@@ -156,6 +167,7 @@ export default function DeviceControlsPanel({ client, deviceId, refreshKey }: { 
   const gangs = controls.features.filter((f) => f.group === "switch" && f.type === "binary").sort((a, b) => endpointRank(a.endpoint) - endpointRank(b.endpoint));
   const others = controls.features.filter((f) => !gangs.includes(f));
   const seenComposite = new Set<string>();
+  if (variant === "compact") return <CompactControls controls={controls} gangs={gangs} others={others} pending={pending} draft={draft} setDraft={setDraft} error={error} disabled={disabled} busy={busy} send={send} />;
 
   return (
     <section className="topo-controls" aria-label="สั่งงานอุปกรณ์">
@@ -248,5 +260,65 @@ export default function DeviceControlsPanel({ client, deviceId, refreshKey }: { 
       {controls.features.length === 0 && <p className="topo-note">อุปกรณ์นี้ไม่มีค่าที่ตั้งได้</p>}
       {error && <p className="topo-error" role="alert">{error}</p>}
     </section>
+  );
+}
+
+/**
+ * The compact form: a switch per output (role="switch", pressed = on). A pressed switch shows "กำลังสั่ง…" until the
+ * device itself reports the new value; the shown state never changes before that, so a timeout leaves it where it
+ * was and says so.
+ */
+function CompactControls({ controls, gangs, others, pending, draft, setDraft, error, disabled, busy, send }: {
+  controls: DeviceControls; gangs: ControlFeature[]; others: ControlFeature[]; pending: Record<string, Pending>;
+  draft: Record<string, unknown>; setDraft: (f: (d: Record<string, unknown>) => Record<string, unknown>) => void; error: string;
+  disabled: (property: string) => boolean; busy: (property: string) => boolean;
+  send: (property: string, input: { value?: unknown; action?: "set" | "toggle" }) => Promise<void>;
+}) {
+  // Outputs only (a gang, a plug, a lamp): a thermostat's window or valve detection is a setting, not a switch.
+  const output = (f: ControlFeature) => f.type === "binary" && (f.name === "state" || /^(state|switch)(_|$)/.test(f.property));
+  const outputs = [...gangs.filter(output), ...others.filter(output)];
+  const cover = others.find((f) => f.type === "enum" && f.name === "state" && (f.values ?? []).includes("OPEN"));
+  const numeric = others.filter((f) => f.type === "numeric" && QUICK_NUMERIC.has(f.name ?? f.property)).slice(0, 2);
+  const failed = Object.entries(pending).filter(([, p]) => p.status === "timeout" || p.status === "failed" || p.status === "expired");
+  const readOnly = !controls.can_command;
+  if (!outputs.length && !cover && !numeric.length) return null;
+  return (
+    <div className="dc-compact" aria-label="สั่งงานอุปกรณ์">
+      {outputs.length > 0 && <div className="dc-switches">{outputs.map((f, i) => {
+        const on = controls.state[f.property] === f.value_on;
+        const known = controls.state[f.property] !== undefined;
+        const name = outputs.length === 1 ? "เปิด / ปิด" : `ช่อง ${i + 1}`;
+        if (readOnly) return <span key={f.property} className={`dc-state ${on ? "is-on" : ""}`}>{name} · {known ? (on ? "เปิด" : "ปิด") : "—"}</span>;
+        return (
+          <button key={f.property} type="button" role="switch" aria-checked={known ? on : undefined} aria-busy={busy(f.property)} disabled={disabled(f.property)}
+            className={`dc-switch ${on ? "is-on" : ""} ${busy(f.property) ? "is-pending" : ""}`}
+            title={`${name}: ${busy(f.property) ? "กำลังสั่ง… รออุปกรณ์ยืนยัน" : on ? "เปิดอยู่ · กดเพื่อปิด" : "ปิดอยู่ · กดเพื่อเปิด"}`}
+            onClick={() => void send(f.property, { value: on ? f.value_off : f.value_on })}>
+            <span className="dc-knob" aria-hidden="true" /><span className="dc-label">{name}</span><small>{busy(f.property) ? "กำลังสั่ง…" : known ? (on ? "เปิด" : "ปิด") : "—"}</small>
+          </button>
+        );
+      })}</div>}
+      {cover && <div className="dc-row"><span>ม่าน · <strong>{show(controls.state[cover.property])}</strong></span>{!readOnly && <div className="dc-buttons">{(["OPEN", "STOP", "CLOSE"] as const).filter((v) => (cover.values ?? []).includes(v)).map((v) => (
+        <button key={v} type="button" className="topo-btn" disabled={disabled(cover.property)} onClick={() => void send(cover.property, { value: v })}>{v === "OPEN" ? "เปิด" : v === "STOP" ? "หยุด" : "ปิด"}</button>
+      ))}</div>}</div>}
+      {numeric.map((f) => {
+        const current = controls.state[f.property];
+        const min = f.value_min ?? 0, max = f.value_max ?? Math.max(100, Number(current) || 0), step = f.value_step ?? 1;
+        const value = Number(draft[f.property] ?? current ?? min);
+        return (
+          <div key={f.property} className="dc-row">
+            <span>{label(f)} · <strong>{show(current)}{f.unit ? ` ${f.unit}` : ""}</strong></span>
+            {!readOnly && <div className="dc-buttons">
+              <input type="range" min={min} max={max} step={step} value={value} disabled={disabled(f.property)} aria-label={label(f)} onChange={(e) => setDraft((d) => ({ ...d, [f.property]: Number(e.target.value) }))} />
+              <button type="button" className="topo-btn" disabled={disabled(f.property) || value === Number(current)} onClick={() => void send(f.property, { value })}>{busy(f.property) ? "กำลังสั่ง…" : `ตั้ง ${value}`}</button>
+            </div>}
+          </div>
+        );
+      })}
+      {readOnly && <small className="dc-note">ดูสถานะได้อย่างเดียว</small>}
+      {!readOnly && !controls.online && <small className="dc-note">อุปกรณ์ออฟไลน์ · สั่งงานได้เมื่อกลับมาออนไลน์</small>}
+      {failed.length > 0 && <p className="dc-toast" role="alert">{STATUS[failed[failed.length - 1][1].status]} · สถานะคงเดิม</p>}
+      {error && <p className="dc-toast" role="alert">{error}</p>}
+    </div>
   );
 }

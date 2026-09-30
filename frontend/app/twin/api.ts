@@ -19,6 +19,10 @@ export type TwinDevice = {
   battery?: number;
   door?: 0 | 1;
   motion_at?: string;
+  /** Controllable devices: what they are, whether any output is on, a plug's watts. */
+  class?: "switch" | "lighting" | "cover" | "climate" | "fan";
+  on?: 0 | 1;
+  power?: number;
   alert: boolean;
   sos: boolean;
 };

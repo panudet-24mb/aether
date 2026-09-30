@@ -313,6 +313,8 @@ type TwinOverrides struct {
 	// Warmup leaves out the faint second gateway: the first time a tag is heard decides its zone at once, so the
 	// first uplink must come only from the gateway it is really near (after that the ingest's hysteresis holds).
 	Warmup bool
+	// Extras adds the extended building's Minew tags (demo-twin extend) to the MG3s' uplinks.
+	Extras *TwinExtras
 }
 
 // TwinColdC is the cold-store temperature at a step: flat, then the scripted (or triggered) warming.
@@ -390,6 +392,13 @@ func (b TwinBuilding) TwinPackets(step int, at time.Time, o TwinOverrides) map[i
 			// gateway the wearer is near catches the short burst, so the alert names the right room.
 			if pressing && hi == 0 {
 				rows[h[0]] = append(rows[h[0]], row(p.MAC, iBeaconFrame(7, pi+1, -59), h[1]))
+			}
+		}
+	}
+	if o.Extras != nil {
+		for gi, extra := range b.ExtraMinewRows(*o.Extras, s, at, false) {
+			if gi >= 0 {
+				rows[gi] = append(rows[gi], extra...)
 			}
 		}
 	}

@@ -49,6 +49,14 @@ type State struct {
 	SiteID     string    `json:"site_id"`
 	Gateways   []Gateway `json:"gateways"`
 	CreatedAt  time.Time `json:"created_at"`
+	// What extend added: the lab MG4 (HTTP ingest), the Zigbee2MQTT coordinator and the Aether Edge (MQTT; their
+	// broker passwords are secrets too), the control-room dashboards and display.
+	MG4        *Gateway     `json:"mg4,omitempty"`
+	Zigbee     *MQTTGateway `json:"zigbee,omitempty"`
+	Edge       *MQTTGateway `json:"edge,omitempty"`
+	Dashboards []string     `json:"dashboards,omitempty"`
+	DisplayID  string       `json:"display_id,omitempty"`
+	Extended   bool         `json:"extended,omitempty"`
 }
 
 // Setup creates the demo workspace: owner, project, site with three floors, gateways, sensors, wearables
@@ -59,7 +67,7 @@ func Setup(ctx context.Context, s *app.Service, email, password, workspace strin
 		return State{}, errors.New("demotwin: the service must allow registration")
 	}
 	b := simulation.TwinDemo()
-	acct, e := s.Register(ctx, email, password, "ผู้ดูแลเดโม", workspace, false)
+	acct, e := s.Register(ctx, email, password, OwnerName, workspace, false)
 	if e != nil {
 		return State{}, fmt.Errorf("register the demo owner: %w", e)
 	}
@@ -68,7 +76,7 @@ func Setup(ctx context.Context, s *app.Service, email, password, workspace strin
 		return st, fmt.Errorf("mark the workspace demo: %w", e)
 	}
 	p := domain.Principal{UserID: acct.User.ID, TenantID: acct.TenantID, Role: "owner"}
-	project, e := s.CreateProject(ctx, p, "โรงพยาบาลเดโม", "อาคารสมมติสำหรับสาธิต digital twin · ข้อมูลทั้งหมดเป็นข้อมูลจำลอง", "mint")
+	project, e := s.CreateProject(ctx, p, ProjectName, ProjectNote, "mint")
 	if e != nil {
 		return st, fmt.Errorf("project: %w", e)
 	}
@@ -110,7 +118,7 @@ func Setup(ctx context.Context, s *app.Service, email, password, workspace strin
 	}
 
 	// The building: CreateSite adds a first floor, which becomes the ground floor.
-	site, e := s.Repo.CreateSite(ctx, p, domain.Site{Name: "โรงพยาบาลเดโม · อาคารหลัก", Description: "ข้อมูลจำลอง (demo-twin)", ProjectID: &project.ID})
+	site, e := s.Repo.CreateSite(ctx, p, domain.Site{Name: SiteName, Description: SiteDescription, ProjectID: &project.ID})
 	if e != nil {
 		return st, fmt.Errorf("site: %w", e)
 	}
@@ -195,11 +203,19 @@ func Setup(ctx context.Context, s *app.Service, email, password, workspace strin
 // Uplinks are one step of the script, per gateway id, ready to post.
 func Uplinks(st State, step int, at time.Time, o simulation.TwinOverrides) map[string][]byte {
 	b := simulation.TwinDemo()
+	if st.Extended && o.Extras == nil {
+		x := simulation.TwinExtended()
+		o.Extras = &x
+	}
 	out := map[string][]byte{}
 	for gi, raw := range b.TwinPackets(step, at, o) {
 		if gi < len(st.Gateways) {
 			out[st.Gateways[gi].ID] = raw
 		}
+	}
+	// The lab MG4 posts every other step, which keeps the whole building under the ingest's per-client limit.
+	if st.Extended && st.MG4 != nil && step%2 == 0 {
+		out[st.MG4.ID] = b.MG4Packet(*o.Extras, step, at)
 	}
 	return out
 }
@@ -234,7 +250,7 @@ func PostStep(ctx context.Context, client *http.Client, origin string, st State,
 	sort.Strings(ids)
 	var errs []error
 	for _, id := range ids {
-		for _, g := range st.Gateways {
+		for _, g := range httpGateways(st) {
 			if g.ID == id {
 				if e := Post(ctx, client, origin, g, up[id]); e != nil {
 					errs = append(errs, e)
@@ -243,6 +259,15 @@ func PostStep(ctx context.Context, client *http.Client, origin string, st State,
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// httpGateways are the gateways that post through the HTTP ingest: the MG3s and, once extended, the lab MG4.
+func httpGateways(st State) []Gateway {
+	out := append([]Gateway{}, st.Gateways...)
+	if st.MG4 != nil {
+		out = append(out, *st.MG4)
+	}
+	return out
 }
 
 // PostSOS sends the press of the script's SOS wearer: only the uplinks of the gateways that hear that wearer, so a

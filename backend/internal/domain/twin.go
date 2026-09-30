@@ -129,8 +129,13 @@ type TwinDevice struct {
 	Battery  *float64   `json:"battery,omitempty"`
 	Door     *int       `json:"door,omitempty"`
 	MotionAt *time.Time `json:"motion_at,omitempty"`
-	Alert    bool       `json:"alert"`
-	SOS      bool       `json:"sos"`
+	// Class is what a controllable device is (switch, lighting, cover, climate, fan), from its reading kind; the twin
+	// offers its controls and draws On. On is 1 when any output (gang, plug, lamp) is on; Power is the plug's watts.
+	Class string   `json:"class,omitempty"`
+	On    *int     `json:"on,omitempty"`
+	Power *float64 `json:"power,omitempty"`
+	Alert bool     `json:"alert"`
+	SOS   bool     `json:"sos"`
 }
 
 type TwinGatewayCount struct {

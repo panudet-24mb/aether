@@ -6,6 +6,7 @@ import (
 	"aether/backend/internal/adapters/postgres"
 	"aether/backend/internal/app"
 	"aether/backend/internal/demotwin"
+	"aether/backend/internal/domain"
 	"aether/backend/internal/security"
 	"aether/backend/internal/simulation"
 	"context"
@@ -40,6 +41,17 @@ const usage = `usage:
   demo-twin trigger [--insecure-http] sos|spike|door
                               fires an event now, on top of the script (sos posts the press; spike and door are read
                               by a running "run" for the next few minutes)
+  demo-twin extend            adds every other device family to the demo workspace (an MG4 and more Minew tags, a
+                              Zigbee2MQTT coordinator with ~50 devices from real zigbee-herdsman-converters
+                              definitions, an Aether Edge with Tuya Wi-Fi devices), their places on the plan, three
+                              control-room dashboards and a display, and gives the site neutral names. Idempotent.
+                              DATABASE_URL, MIGRATION_DATABASE_URL, DEMO_STATE; AETHER_ORIGIN for the display link.
+  demo-twin pair              a new pairing code for the control-room display (DATABASE_URL, MIGRATION_DATABASE_URL,
+                              DEMO_STATE; AETHER_ORIGIN for the link)
+
+run also drives the coordinator and the Edge over MQTT once extend has run: DEMO_MQTT_URL (default ssl://mqtt:8883)
+and DEMO_MQTT_CA (the broker's CA certificate). With DATABASE_URL set it closes the script's alerts 4 minutes after
+they open, so the next loop's SOS and smoke test ring again.
 
 The gateway tokens travel in every uplink: an http:// origin other than localhost is refused unless --insecure-http.`
 
@@ -93,6 +105,16 @@ func run(args []string) error {
 		return drive()
 	case "backfill":
 		return backfill(rest)
+	case "extend":
+		if len(rest) != 0 {
+			return errors.New(usage)
+		}
+		return extend()
+	case "pair":
+		if len(rest) != 0 {
+			return errors.New(usage)
+		}
+		return pair()
 	case "trigger":
 		if len(rest) != 1 {
 			return errors.New(usage)
@@ -177,7 +199,7 @@ func setup() error {
 	if email == "" {
 		email = "demo-twin-" + strings.ToLower(security.RandomToken()[:8]) + "@demo.aether.invalid"
 	}
-	st, e := demotwin.Setup(ctx, s, email, security.RandomToken(), "Aether Demo · โรงพยาบาล", func(tenant string) error {
+	st, e := demotwin.Setup(ctx, s, email, security.RandomToken(), demotwin.WorkspaceName, func(tenant string) error {
 		_, e := admin.ExecContext(ctx, `UPDATE core.tenants SET demo=true WHERE id=$1`, tenant)
 		return e
 	})
@@ -233,7 +255,53 @@ func drive() error {
 	defer stop()
 	client := &http.Client{Timeout: 5 * time.Second}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	log.Info("demo-twin running", "origin", origin(), "gateways", len(st.Gateways), "loop_minutes", simulation.TwinLoopSteps*simulation.TwinStepSec/60)
+	log.Info("demo-twin running", "origin", origin(), "gateways", len(st.Gateways), "extended", st.Extended, "loop_minutes", simulation.TwinLoopSteps*simulation.TwinStepSec/60)
+	var bridge *demotwin.Bridge
+	var link *demotwin.MQTTLink
+	if st.Extended && (st.Zigbee != nil || st.Edge != nil) {
+		zigbee, edgeID := "", ""
+		if st.Zigbee != nil {
+			zigbee = st.Zigbee.ID
+		}
+		if st.Edge != nil {
+			edgeID = st.Edge.ID
+		}
+		bridge = demotwin.NewBridge(zigbee, edgeID)
+		url := os.Getenv("DEMO_MQTT_URL")
+		if url == "" {
+			url = "ssl://mqtt:8883"
+		}
+		for attempt := 0; link == nil; attempt++ {
+			var e error
+			if link, e = demotwin.ConnectMQTT(ctx, st, url, os.Getenv("DEMO_MQTT_CA"), bridge); e != nil {
+				if attempt >= 20 || ctx.Err() != nil {
+					return e
+				}
+				log.Warn("MQTT not ready, retrying", "err", e)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(15 * time.Second):
+				}
+			}
+		}
+		defer link.Close()
+		if e := link.Publish(append(demotwin.ZigbeeAnnounce(st.Zigbee.ID, bridge.X), demotwin.EdgeAnnounce(st.Edge.ID, bridge.X)...)); e != nil {
+			log.Warn("announce failed", "err", e)
+		}
+		log.Info("Zigbee coordinator and Aether Edge connected", "zigbee_devices", len(bridge.X.ZigbeeDev), "tuya_devices", len(bridge.X.Tuya))
+	}
+	// Housekeeping: the script's alerts close four minutes after they open (someone dealt with them), so the next
+	// loop's SOS and smoke test open new ones and a wall display's takeover does not stay up forever.
+	var repo *postgres.Repository
+	if os.Getenv("DATABASE_URL") != "" {
+		r, e := postgres.Open(os.Getenv("DATABASE_URL"))
+		if e != nil {
+			return e
+		}
+		defer r.Close()
+		repo = r
+	}
 	for first := true; ; first = false {
 		now := time.Now()
 		step := simulation.TwinStep(now)
@@ -241,6 +309,16 @@ func drive() error {
 		o.Warmup = first
 		if e := demotwin.PostStep(ctx, client, origin(), st, step, now, o); e != nil && ctx.Err() == nil {
 			log.Warn("uplink failed", "step", step, "err", e)
+		}
+		if link != nil {
+			if e := link.Publish(bridge.Step(step, now, o)); e != nil && ctx.Err() == nil {
+				log.Warn("MQTT publish failed", "step", step, "err", e)
+			}
+		}
+		if repo != nil && step%10 == 0 {
+			if _, e := repo.ResolveDemoAlertsBefore(ctx, st.TenantID, now.Add(-4*time.Minute)); e != nil && ctx.Err() == nil {
+				log.Warn("closing the script's alerts failed", "err", e)
+			}
 		}
 		if step%10 == 0 {
 			log.Info("script", "step", step, "minute", step*simulation.TwinStepSec/60)
@@ -335,5 +413,154 @@ func trigger(kind string) error {
 	default:
 		return errors.New(usage)
 	}
+	return nil
+}
+
+// owner is the demo workspace's owner, read with the migration role, which also proves the workspace is a demo one.
+func owner(ctx context.Context, admin *sql.DB, st demotwin.State) (domain.Principal, error) {
+	var demo bool
+	if e := admin.QueryRowContext(ctx, `SELECT demo FROM core.tenants WHERE id=$1`, st.TenantID).Scan(&demo); e != nil {
+		return domain.Principal{}, fmt.Errorf("workspace %s: %w", st.TenantID, e)
+	}
+	if !demo {
+		return domain.Principal{}, fmt.Errorf("workspace %s is not a demo workspace: refusing", st.TenantID)
+	}
+	var user string
+	if e := admin.QueryRowContext(ctx, `SELECT user_id::text FROM core.memberships WHERE tenant_id=$1 AND role='owner' ORDER BY created_at LIMIT 1`, st.TenantID).Scan(&user); e != nil {
+		return domain.Principal{}, fmt.Errorf("demo owner: %w", e)
+	}
+	return domain.Principal{UserID: user, TenantID: st.TenantID, Role: "owner"}, nil
+}
+
+func service() (*app.Service, *postgres.Repository, error) {
+	repo, e := postgres.Open(os.Getenv("DATABASE_URL"))
+	if e != nil {
+		return nil, nil, e
+	}
+	s, e := app.New(repo, security.NewTokens([]byte(security.RandomToken()), "aether"), true)
+	if e != nil {
+		repo.Close()
+		return nil, nil, e
+	}
+	return s, repo, nil
+}
+
+func saveState(st demotwin.State) error {
+	path := statePath()
+	b, _ := json.MarshalIndent(st, "", "  ")
+	tmp := path + ".tmp"
+	f, e := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	if e != nil {
+		return e
+	}
+	if _, e := f.Write(b); e != nil {
+		f.Close()
+		return e
+	}
+	if e := f.Sync(); e != nil {
+		f.Close()
+		return e
+	}
+	f.Close()
+	return os.Rename(tmp, path)
+}
+
+// simPrefix is what internal/adapters/minew prefixes a simulated stream's name with.
+const simPrefix = "SIM · ข้อมูลจำลอง · "
+
+func extend() error {
+	st, e := load()
+	if e != nil {
+		return e
+	}
+	fmt.Fprintf(os.Stderr, "demo-twin: database %s (migration role on %s), workspace %s, state file %s\n", hostOf(os.Getenv("DATABASE_URL")), hostOf(os.Getenv("MIGRATION_DATABASE_URL")), st.TenantID, statePath())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	admin, e := sql.Open("pgx", os.Getenv("MIGRATION_DATABASE_URL"))
+	if e != nil {
+		return e
+	}
+	defer admin.Close()
+	if e := admin.PingContext(ctx); e != nil {
+		return fmt.Errorf("migration database: %w", e)
+	}
+	p, e := owner(ctx, admin, st)
+	if e != nil {
+		return e
+	}
+	// Neutral names where the migration role is needed: the workspace and the owner's display name.
+	if _, e := admin.ExecContext(ctx, `UPDATE core.tenants SET name=$1 WHERE id=$2 AND demo`, demotwin.WorkspaceName, st.TenantID); e != nil {
+		return fmt.Errorf("rename workspace: %w", e)
+	}
+	if _, e := admin.ExecContext(ctx, `UPDATE identity.users SET name=$1 WHERE id=$2`, demotwin.OwnerName, p.UserID); e != nil {
+		return fmt.Errorf("rename owner: %w", e)
+	}
+	// Streams of simulated rows were named with the ingest's "SIM · …" prefix, and alerts and events copied it. A
+	// demo workspace is simulated as a whole (tenants.demo), so its screens drop the prefix; demo tenant only.
+	for _, q := range []string{
+		`UPDATE core.sensor_streams SET name=replace(name,$2,'') WHERE tenant_id=$1 AND name LIKE $3`,
+		`UPDATE core.device_events SET device_name=replace(device_name,$2,'') WHERE tenant_id=$1 AND device_name LIKE $3`,
+		`UPDATE core.alerts SET device_name=replace(device_name,$2,''),title=replace(title,$2,'') WHERE tenant_id=$1 AND (device_name LIKE $3 OR title LIKE '%'||$3)`,
+	} {
+		if _, e := admin.ExecContext(ctx, `WITH d AS (SELECT 1 FROM core.tenants WHERE id=$1 AND demo) `+q+` AND EXISTS(SELECT 1 FROM d)`, st.TenantID, simPrefix, simPrefix+"%"); e != nil {
+			return fmt.Errorf("demo names: %w", e)
+		}
+	}
+	s, repo, e := service()
+	if e != nil {
+		return e
+	}
+	defer repo.Close()
+	st, out, e := demotwin.Extend(ctx, s, p, st, saveState)
+	if e != nil {
+		return e
+	}
+	x := simulation.TwinExtended()
+	fmt.Printf("Demo workspace extended: %d new gateways and devices (Minew %d, Zigbee %d, Tuya Wi-Fi %d), %d dashboards, display %s.\n",
+		out.Added, len(x.Minew), len(x.ZigbeeDev), len(x.Tuya), len(st.Dashboards), out.DisplayID)
+	fmt.Println("Zigbee definitions (zigbee-herdsman-converters):")
+	for _, m := range simulation.TwinZigbeeModels(x) {
+		fmt.Println("  " + m)
+	}
+	printPairing(out.PairingCode, out.PairingUntil)
+	fmt.Println("Restart the driver (demo-twin run) so it connects the Zigbee coordinator and the Edge.")
+	return nil
+}
+
+func printPairing(code, until string) {
+	if code == "" {
+		fmt.Println("The control-room display is already paired (demo-twin pair issues a new code and signs the old TV out).")
+		return
+	}
+	link := strings.TrimRight(origin(), "/") + "/display#code=" + strings.ReplaceAll(code, "-", "")
+	fmt.Printf("Pair the TV within 10 minutes (until %s): open %s\n  or open %s/display and type %s\n", until, link, strings.TrimRight(origin(), "/"), code)
+}
+
+func pair() error {
+	st, e := load()
+	if e != nil {
+		return e
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	admin, e := sql.Open("pgx", os.Getenv("MIGRATION_DATABASE_URL"))
+	if e != nil {
+		return e
+	}
+	defer admin.Close()
+	p, e := owner(ctx, admin, st)
+	if e != nil {
+		return e
+	}
+	s, repo, e := service()
+	if e != nil {
+		return e
+	}
+	defer repo.Close()
+	pairing, e := demotwin.Pair(ctx, s, p, st)
+	if e != nil {
+		return e
+	}
+	printPairing(pairing.Code, pairing.ExpiresAt.Local().Format("15:04"))
 	return nil
 }

@@ -908,6 +908,15 @@ func (r *Repository) RunSampleRollup(ctx context.Context, interval time.Duration
 
 // ResolveDemoAlertsBefore resolves (and acknowledges) every alert of a demo workspace opened before `at`, at that
 // time: the demo backfill closes what its script raised so the next loop rings again. Refused for a real workspace.
+// TenantDemo reports whether the caller's workspace is a demo workspace.
+func (r *Repository) TenantDemo(ctx context.Context, p domain.Principal) (bool, error) {
+	var demo []bool
+	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		return tx.Raw(`SELECT demo FROM core.tenants WHERE id=core.tenant_id()`).Scan(&demo).Error
+	})
+	return len(demo) == 1 && demo[0], e
+}
+
 func (r *Repository) ResolveDemoAlertsBefore(ctx context.Context, tenant string, at time.Time) (int64, error) {
 	var n int64
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {

@@ -488,3 +488,29 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .topo-save.is-conflict { color: var(--color-warning); }
 .topo-save.is-error { color: var(--color-danger); }
 .topo-save.is-readonly { color: var(--color-dim); }
+
+/* Compact device controls (overview tiles, the twin's side card, Studio controls panels). */
+.dc-compact { display: grid; gap: 8px; }
+.dc-switches { display: flex; flex-wrap: wrap; gap: 6px; }
+.dc-switch { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 0; height: 32px; padding: 0 10px 0 6px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-panel-raised); color: var(--color-ink); font: inherit; font-size: 12.5px; line-height: 1.45; cursor: pointer; white-space: nowrap; }
+.dc-switch small { color: var(--color-muted); font-size: 11.5px; }
+.dc-knob { width: 26px; height: 16px; border-radius: 999px; background: var(--color-border); position: relative; flex-shrink: 0; transition: background var(--dur-short) var(--ease-out); }
+.dc-knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--color-ink); transition: transform var(--dur-short) var(--ease-out); }
+.dc-switch.is-on { border-color: var(--color-accent); }
+.dc-switch.is-on .dc-knob { background: var(--color-accent); }
+.dc-switch.is-on .dc-knob::after { transform: translateX(10px); background: var(--color-paper); }
+.dc-switch.is-on small { color: var(--color-accent); }
+.dc-switch.is-pending { border-style: dashed; }
+.dc-switch.is-pending .dc-knob { animation: dc-pulse 1s ease-in-out infinite; }
+.dc-switch:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.dc-switch:disabled:not(.is-pending) { opacity: 0.55; cursor: not-allowed; }
+.dc-state { font-size: 12.5px; padding: 3px 9px; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-muted); }
+.dc-state.is-on { color: var(--color-accent); border-color: var(--color-accent); }
+.dc-row { display: grid; gap: 5px; font-size: 12.5px; }
+.dc-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dc-buttons .topo-btn { min-height: 0; height: 28px; padding: 0 10px; justify-content: center; }
+.dc-buttons input[type=range] { flex: 1; min-width: 90px; accent-color: var(--color-accent); }
+.dc-note { color: var(--color-muted); font-size: 11.5px; }
+.dc-toast { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--color-danger-dark); color: var(--color-danger); font-size: 12px; }
+@keyframes dc-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .dc-switch.is-pending .dc-knob { animation: none; } }

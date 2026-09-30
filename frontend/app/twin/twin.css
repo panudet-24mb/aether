@@ -6,15 +6,14 @@
 .twin-bar .topo-btn.is-on { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-faint); }
 .twin-site select { max-width: 220px; }
 .twin-seg { display: inline-flex; border: 1px solid var(--color-border); border-radius: 7px; overflow: hidden; height: 30px; flex-shrink: 0; max-width: 100%; }
-.twin-seg button { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; background: transparent; border: 0; color: var(--color-muted); font-size: 12.5px; }
+.twin-seg button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 100%; min-height: 0; padding: 0 9px; line-height: 1.45; white-space: nowrap; flex-shrink: 0; background: transparent; border: 0; color: var(--color-muted); font-size: 12.5px; }
 .twin-seg button + button { border-left: 1px solid var(--color-border); }
 .twin-seg button.is-on { background: var(--color-accent-faint); color: var(--color-accent); }
 .twin-seg button:hover:not(.is-on) { color: var(--color-ink); }
-.twin-mini { height: 30px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 12.5px; padding: 0 6px; max-width: 170px; }
+.twin-mini { height: 30px; min-height: 0; line-height: 1.45; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 12.5px; padding: 0 6px; max-width: 170px; }
 .twin-mini option { background: var(--color-panel); }
 .twin-explode { display: inline-flex; align-items: center; gap: 6px; color: var(--color-muted); height: 30px; }
 .twin-explode input { width: 84px; accent-color: var(--color-accent); }
-.twin-demo-badge { font-size: 11px; letter-spacing: 1px; font-weight: 700; color: var(--color-warning); border: 1px solid color-mix(in oklab, var(--color-warning) 55%, transparent); border-radius: 5px; padding: 2px 6px; }
 .twin-error { margin: 0; padding: 8px 16px; color: var(--color-danger); background: color-mix(in oklab, var(--color-danger) 10%, var(--color-panel)); border-bottom: 1px solid var(--color-border); font-size: 13px; }
 
 .twin-stage { position: relative; flex: 1; min-height: 0; background: #0b1418; }
@@ -105,8 +104,34 @@
 .twin-replay-track canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .twin-replay-lanes { position: absolute; left: 6px; top: 2px; bottom: 14px; display: flex; flex-direction: column; justify-content: space-around; font-size: 9px; color: var(--color-muted); pointer-events: none; }
 .twin-replay-ends { display: flex; justify-content: space-between; font-size: 10px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
-.twin-seg button svg { margin-right: 3px; vertical-align: -2px; }
+.twin-seg button svg { flex-shrink: 0; display: block; }
 @media (max-width: 560px) {
   .twin-replay-live { margin-left: 0; }
   .twin-replay-lanes { display: none; }
 }
+
+/* Every toolbar control is exactly as tall as its row and centres its icon and label: the shell's 40 px touch target
+   (live.css) made the buttons taller than their 30 px segment, which clipped the lower half of each label. On coarse
+   pointers the row grows to the touch target instead. */
+.twin-bar .topo-btn { min-height: 0; justify-content: center; line-height: 1.45; white-space: nowrap; }
+.twin-bar .topo-btn svg { flex-shrink: 0; display: block; }
+.twin-site select { line-height: 1.45; }
+@media (pointer: coarse) {
+  .twin-seg, .twin-mini, .twin-bar .topo-btn, .twin-explode { height: 40px; }
+}
+
+/* Controllable devices of the floor (keyboard route to the side card's switches). */
+.twin-switchboard { position: absolute; top: 12px; left: 12px; z-index: 2; width: min(260px, 60vw); max-height: calc(100% - 270px); overflow: auto; padding: 10px; border-radius: 10px; background: rgba(12, 22, 27, 0.92); border: 1px solid var(--color-border); display: grid; gap: 6px; font-size: 12.5px; }
+.twin-switchboard strong { font-size: 12.5px; font-weight: 600; }
+.twin-switchboard small { color: var(--color-muted); }
+.twin-switchboard ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.twin-switchboard button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 0; padding: 5px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--color-ink); font: inherit; text-align: left; line-height: 1.45; cursor: pointer; }
+.twin-switchboard button small { margin-left: auto; white-space: nowrap; }
+.twin-switchboard button:hover, .twin-switchboard button[aria-current=true] { background: var(--color-accent-faint); }
+.twin-switchboard button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.twin-lamp { width: 9px; height: 9px; border-radius: 50%; background: #34444a; flex-shrink: 0; }
+.twin-switchboard button.is-on .twin-lamp { background: #ffe39a; box-shadow: 0 0 8px #ffe39a; }
+.twin-switchboard button.is-on small { color: #ffe39a; }
+.twin-card .dc-compact { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.twin-switch-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-switchboard button small { flex-shrink: 0; }

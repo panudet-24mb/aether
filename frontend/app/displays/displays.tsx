@@ -10,13 +10,13 @@ import { useLatest } from "../topology/use-latest";
  * create a display with a project scope and a playlist, and get a one-time pairing code for the TV.
  */
 
-type ViewKind = "overview" | "alerts" | "floorplan" | "devices" | "presence" | "studio";
+type ViewKind = "overview" | "alerts" | "floorplan" | "devices" | "presence" | "studio" | "twin";
 type PlaylistItem = { kind: ViewKind; seconds: number; ref?: string };
 type Display = { id: string; name: string; project_ids: string[]; playlist: PlaylistItem[]; show_names: boolean; allow_ack: boolean; paired: boolean; pairing_expires_at: string | null; paired_at: string | null; last_seen_at: string | null; last_ip: string | null; created_at: string };
 type Pairing = { display: Display; code: string; expires_at: string };
 type Draft = { id?: string; name: string; project_ids: string[]; playlist: PlaylistItem[]; show_names: boolean; allow_ack: boolean };
 
-const KIND_LABEL: Record<ViewKind, string> = { overview: "ภาพรวม", alerts: "การแจ้งเตือน", floorplan: "ผังอาคาร 3D", devices: "สถานะอุปกรณ์", presence: "ผู้สวมอุปกรณ์ตามพื้นที่", studio: "Dashboard Studio" };
+const KIND_LABEL: Record<ViewKind, string> = { overview: "ภาพรวม", alerts: "การแจ้งเตือน", floorplan: "ผังอาคาร 3D", devices: "สถานะอุปกรณ์", presence: "ผู้สวมอุปกรณ์ตามพื้นที่", studio: "Dashboard Studio", twin: "Digital twin 3D" };
 const KINDS = Object.keys(KIND_LABEL) as ViewKind[];
 const DEFAULT_PLAYLIST: PlaylistItem[] = [{ kind: "overview", seconds: 30 }, { kind: "alerts", seconds: 20 }, { kind: "floorplan", seconds: 40 }, { kind: "devices", seconds: 20 }];
 const ONLINE_MS = 3 * 60 * 1000;
@@ -131,7 +131,7 @@ function DisplayForm({ draft, isOwner, was, projects, sites, dashboards, busy, o
       <ol className="dsp-playlist">{draft.playlist.map((v, i) => <li key={i}>
         <select aria-label="หน้าจอ" value={v.kind} onChange={(e) => setView(i, { kind: e.target.value as ViewKind, ref: undefined })}>{KINDS.map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</select>
         {v.kind === "studio" && <select aria-label="Dashboard" value={v.ref ?? ""} onChange={(e) => setView(i, { ref: e.target.value || undefined })}><option value="">เลือก Dashboard</option>{dashboards.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>}
-        {v.kind === "floorplan" && <select aria-label="อาคาร" value={v.ref ?? ""} onChange={(e) => setView(i, { ref: e.target.value || undefined })}><option value="">อาคารแรกที่เห็น</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+        {(v.kind === "floorplan" || v.kind === "twin") && <select aria-label="อาคาร" value={v.ref ?? ""} onChange={(e) => setView(i, { ref: e.target.value || undefined })}><option value="">อาคารแรกที่เห็น</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
         <label className="dsp-seconds"><input type="number" min={10} max={600} value={v.seconds} onChange={(e) => setView(i, { seconds: Number(e.target.value) })} />วินาที</label>
         <button type="button" aria-label="เลื่อนขึ้น" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={14} /></button>
         <button type="button" aria-label="เลื่อนลง" disabled={i === draft.playlist.length - 1} onClick={() => move(i, 1)}><ArrowDown size={14} /></button>

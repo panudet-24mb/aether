@@ -49,6 +49,8 @@ type MemberSelf struct {
 	// ProjectIDs is nil (JSON null) when the member sees every project.
 	ProjectIDs         []string `json:"project_ids"`
 	MustChangePassword bool     `json:"must_change_password"`
+	// NoticeAckVersion is the privacy notice version this identity acknowledged (0: never).
+	NoticeAckVersion int `json:"notice_ack_version"`
 }
 
 // ValidMemberRole reports whether role is one of MemberRoles.

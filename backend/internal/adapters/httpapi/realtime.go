@@ -20,7 +20,7 @@ const maxPendingSockets = 200
 // realtimeRoutes mounts GET /ws. Browsers cannot send an Authorization header on a WebSocket and tokens must
 // not travel in URLs, so the client authenticates with its first message. The socket only ever carries
 // "refetch" signals for the authenticated tenant; data stays behind the REST API.
-func realtimeRoutes(api *fiber.App, s *app.Service, cfg config.Config, hub *realtime.Hub) {
+func realtimeRoutes(api *fiber.App, s *app.Service, cfg config.Config, hub *realtime.Hub, reads *readLog) {
 	// /ws sits outside the /api limiter, and a socket costs a goroutine before it has authenticated:
 	// cap upgrade attempts per IP and the number of sockets still waiting for their auth message.
 	var pending atomic.Int64
@@ -72,6 +72,14 @@ func realtimeRoutes(api *fiber.App, s *app.Service, cfg config.Config, hub *real
 		scopeCancel()
 		if e != nil {
 			_ = conn.WriteJSON(fiber.Map{"type": "error", "error": "unauthorized"})
+			return
+		}
+		// Signals name devices (worn tags included) as they fire: opening the stream is a read of personal data.
+		logCtx, logCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		e = reads.write(logCtx, principal, domain.AccessRead{Resource: "realtime", SubjectKind: "signal_stream", SubjectID: "*", ClientIP: conn.IP()}, false)
+		logCancel()
+		if e != nil {
+			_ = conn.WriteJSON(fiber.Map{"type": "error", "error": "unavailable"})
 			return
 		}
 		release()

@@ -74,7 +74,7 @@ func passwordChangeExempt(path string) bool {
 
 // meHandler answers GET /api/v1/me. Besides the identity it reports the caller's role and the project
 // scope the database enforces for them (null = every project), so the UI can hide what is not theirs.
-func meHandler(s *app.Service, mode string) fiber.Handler {
+func meHandler(s *app.Service, mode, noticeURL string) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		p := c.Locals("principal").(domain.Principal)
 		self, e := s.Repo.MemberSelf(c.Context(), p)
@@ -86,7 +86,8 @@ func meHandler(s *app.Service, mode string) fiber.Handler {
 			return e
 		}
 		return c.JSON(fiber.Map{"permissions": permissions, "user_id": self.UserID, "tenant_id": self.TenantID, "email": self.Email, "name": self.Name,
-			"role": self.Role, "project_ids": self.ProjectIDs, "must_change_password": self.MustChangePassword, "deployment_mode": mode})
+			"role": self.Role, "project_ids": self.ProjectIDs, "must_change_password": self.MustChangePassword, "deployment_mode": mode,
+			"notice_version": domain.NoticeVersion, "notice_ack_version": self.NoticeAckVersion, "notice_url": noticeURL})
 	}
 }
 
@@ -109,7 +110,7 @@ func passwordHandler(s *app.Service) fiber.Handler {
 	}
 }
 
-func memberRoutes(r fiber.Router, s *app.Service, mode string) {
+func memberRoutes(r fiber.Router, s *app.Service, mode, noticeURL string) {
 	principal := func(c fiber.Ctx) domain.Principal { return c.Locals("principal").(domain.Principal) }
 	manage := func(c fiber.Ctx) (domain.Principal, error) {
 		p := principal(c)
@@ -126,7 +127,7 @@ func memberRoutes(r fiber.Router, s *app.Service, mode string) {
 		return id, nil
 	}
 
-	r.Get("/me", meHandler(s, mode))
+	r.Get("/me", meHandler(s, mode, noticeURL))
 
 	r.Get("/members", func(c fiber.Ctx) error {
 		p, e := manage(c)

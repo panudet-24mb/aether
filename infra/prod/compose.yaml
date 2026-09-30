@@ -239,6 +239,10 @@ services:
     entrypoint: ["/app/migrate"]
     environment:
       MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      # How long the read-access log of personal data is kept. Applied here, by the migration role, because the API
+      # must not be able to shorten the trail it writes (core.retention_policy, migration 00038).
+      # Unset or empty leaves the stored value (setup.py always writes one).
+      ACCESS_LOG_RETENTION_DAYS: ${ACCESS_LOG_RETENTION_DAYS:-}
     volumes:
       - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
     depends_on:
@@ -268,6 +272,8 @@ services:
       SAMPLE_RETENTION_DAYS: ${SAMPLE_RETENTION_DAYS:-90}
       SAMPLE_MIN_INTERVAL_SEC: ${SAMPLE_MIN_INTERVAL_SEC:-30}
       BLE_HISTORY_HOURS: ${BLE_HISTORY_HOURS:-24}
+      # The privacy notice (docs/platform/privacy.md); empty: the built-in page at /privacy.
+      PRIVACY_NOTICE_URL: ${PRIVACY_NOTICE_URL:-}
       DISCOVERY_LIMIT: ${DISCOVERY_LIMIT:-100}
       ALERTS_SHADOW: ${ALERTS_SHADOW:-true}
       AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}

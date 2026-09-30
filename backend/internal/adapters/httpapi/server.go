@@ -94,6 +94,12 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 		return c.Status(code).JSON(fiber.Map{"error": message, "request_id": c.GetRespHeader("X-Request-ID")})
 	}})
 	api.Use(recover.New())
+	// Request ids are the server's own: one a client sends is dropped, so the id recorded in logs (and in the
+	// read-access log of personal data) cannot be chosen by the caller.
+	api.Use(func(c fiber.Ctx) error {
+		c.Request().Header.Del(fiber.HeaderXRequestID)
+		return c.Next()
+	})
 	api.Use(requestid.New())
 	api.Use(func(c fiber.Ctx) error {
 		c.Set("X-Content-Type-Options", "nosniff")
@@ -205,7 +211,11 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	})
 	// Changing one's own password is a credential mutation: same exact-Origin check and budget as login.
 	auth.Post("/password", authenticate, passwordHandler(service))
-	secured := api.Group("/api/v1", authenticate, accessGate(service))
+	// Before the secured group: the login screen links to the privacy notice.
+	noticeRoutes(api, cfg.PrivacyNoticeURL)
+	reads := newReadLog(service)
+	secured := api.Group("/api/v1", authenticate, accessGate(service), reads.middleware)
+	privacyRoutes(secured, service, reads)
 	memberAccessRoutes(secured, service)
 	studioRoutes(secured, service)
 	discoveryRoutes(secured, service)
@@ -214,7 +224,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	projectRoutes(secured, service)
 	presenceRoutes(secured, service)
 	signalRoutes(secured, service)
-	memberRoutes(secured, service, cfg.Mode)
+	memberRoutes(secured, service, cfg.Mode, cfg.PrivacyNoticeURL)
 	automationRoutes(secured, service, cfg.AutomationCommands, cfg.AlertsShadow)
 	floorplanRoutes(secured, service)
 	assetRoutes(secured, service)
@@ -222,7 +232,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	edgeRoutes(secured, service, cfg)
 	tuyaCloudRoutes(secured, service)
 	edgePublicRoutes(api, service, cfg)
-	realtimeRoutes(api, service, cfg, hub)
+	realtimeRoutes(api, service, cfg, hub, reads)
 	secured.Get("/catalog", func(c fiber.Ctx) error {
 		// Tuya Cloud mode is listed only when this deployment enabled it (TUYA_CLOUD).
 		return c.JSON(fiber.Map{"gateway_models": service.GatewayModels(), "device_profiles": service.DeviceProfiles(), "tuya_cloud": service.TuyaCloudEnabled, "alerts_shadow": cfg.AlertsShadow, "automation_commands": cfg.AutomationCommands, "verification": "verified=true means a captured packet from the physical device passes a golden test in this repository"})

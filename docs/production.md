@@ -454,6 +454,19 @@ curl -s https://aether.hospital.local/health/ready
 
 ช่วงที่ระบบสะดุดคือข้อ 6.5 ประมาณ 10–30 วินาที gateway จะ reconnect เอง (QoS 1 + persistent session ทำให้ packet ที่ค้างถูกส่งซ้ำ)
 
+### Migration `00038`/`00039`: บันทึกการเข้าถึงข้อมูลส่วนบุคคล, ส่งออกและลบ (PDPA)
+
+ไม่ต้องหยุดระบบ: `00038` สร้างตาราง `core.access_log` (แบ่งรายเดือน) และขยาย `core.maintain_partitions` / `core.prune_history` ให้ดูแลตารางนี้ด้วย ส่วน `00039` เพิ่มคอลัมน์ `erased_at` / `notice_ack_version` ใน `identity.users` (metadata อย่างเดียว) ตาราง `core.erasure_log` และฟังก์ชันลบข้อมูล หลังอัปเกรด:
+
+- **ทุกการเปิดดูข้อมูลส่วนบุคคลผ่าน API ถูกบันทึก** (รายชื่อสมาชิก ตำแหน่งแท็ก การแจ้งเตือน เหตุการณ์ ภาพรวม Studio การเปิด WebSocket การส่งออก) อ่านซ้ำเรื่องเดิมภายใน 10 นาทีนับครั้งเดียว ถ้าบันทึกไม่ได้ API ตอบ **503 และไม่ส่งข้อมูลออก** (fail closed) — ถ้าเห็น 503 ทั้งระบบ ให้ดู log `access log write failed`
+- ค่าใหม่ใน `.env.prod` (`setup.py` เขียนให้และเก็บค่าเดิมไว้ตอนรันซ้ำ): `ACCESS_LOG_RETENTION_DAYS` (ค่าเริ่มต้น 400 วัน, `--access-log-days`) และ `PRIVACY_NOTICE_URL` (ประกาศความเป็นส่วนตัวขององค์กร, `--privacy-notice-url https://...`; ว่าง = ใช้หน้าแม่แบบภาษาไทย `/privacy`)
+- `ACCESS_LOG_RETENTION_DAYS` ถูกส่งให้ service **`migrate`** ไม่ใช่ `api`: migrate บันทึกลง `core.retention_policy` ทุกครั้งที่รัน (log `access log retention: N days`; ถ้าไม่ได้ตั้งค่าไว้ = คงค่าเดิมในฐานข้อมูล) API อ่านหรือแก้ค่านี้ไม่ได้ จึงลดอายุบันทึกการเข้าถึงเองไม่ได้ · เปลี่ยนค่า = แก้ `.env.prod` แล้ว `run --rm migrate`
+- ส่งออกประวัติแท็ก (ZIP) ทยอยส่งจากฐานข้อมูลโดยตรง ครั้งละไม่เกิน 2 งานต่อ workspace และ 4 งานต่อ API (เกินได้ 429) · ลูกข่ายช้าได้ไฟล์ครบ (เลื่อน write deadline ทีละ 30 วินาทีตามความคืบหน้า) ลูกข่ายที่หยุดอ่านถูกตัดราว 30 วินาที
+- บันทึกการเข้าถึงล้ม (503) ไม่กระทบการแจ้งเตือน: การประเมินและส่ง LINE / อีเมล / webhook ทำใน worker ไม่ผ่าน API
+- สมาชิกทุกคนจะเห็นแถบ “ประกาศความเป็นส่วนตัว” ให้กดรับทราบหนึ่งครั้ง
+- เจ้าของ workspace มีเมนูใหม่ “ความเป็นส่วนตัว” (ใครเปิดดูอะไร ใครเปลี่ยนอะไร การลบข้อมูล) และปุ่มส่งออก/ลบข้อมูลของสมาชิก (หน้าทีม) และของแท็กที่มีคนสวม (แผงอุปกรณ์ roaming)
+- ขนาด: log ราว 1 แถว (~200 B) ต่อผู้ใช้ต่อหน้าจอต่อ 10 นาทีที่เปิดใช้งาน — 50 คนเปิดทั้งวันประมาณ 50 MB ต่อปี
+
 ### Migration `00036`/`00037`: แบ่ง partition ประวัติ sensor
 
 อัปเกรดที่มีสองไฟล์นี้ทำแบบออนไลน์ ไม่ต้องหยุดระบบ แต่เป็นการเปลี่ยนโครงสร้างตารางใหญ่ที่สุดของระบบ ให้ทำตามนี้:
@@ -573,6 +586,18 @@ sudo sh infra/prod/restore.sh aether-20260920-023001.dump --database aether --fo
 ```
 
 `restore.sh` จะ **ปฏิเสธ** ถ้า database ปลายทางมีตารางอยู่แล้วและไม่ได้ใส่ `--force` (ออกด้วย exit code 2) และจะสร้าง role `aether_owner` / `aether_app` / `aether_mqtt_provisioner` ให้ก่อนเสมอ เพราะ dump มี ownership และ grant ติดมาด้วย
+
+**การลบข้อมูลตาม PDPA ต้องทำซ้ำหลังกู้คืนทุกครั้ง** (ทั้ง dump และ PITR §7.1): สำรองที่เก่ากว่าการลบจะพาข้อมูลของคนที่ลบไปแล้วกลับมา และ `core.erasure_log` ในสำรองนั้นก็ไม่มีรายการลบ จึงต้องเก็บรายการจากฐานข้อมูลตัวจริง **ก่อน** กู้ แล้วรันซ้ำ **หลัง** กู้ (docs/platform/privacy.md):
+
+```sh
+# ก่อนกู้ (ถ้าตัวจริงยังเปิดได้) — ถ้าเปิดไม่ได้ ใช้ไฟล์ ledger ล่าสุดที่เก็บไว้
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml run --rm -T --entrypoint /app/admin migrate export-erasures > erasures-$(date +%F).jsonl
+# ... restore.sh หรือ restore-pitr.sh ...
+# หลังกู้: ลบซ้ำทุกรายการ (ทำซ้ำได้ ไม่เสียหาย) และใส่รายการ ledger ที่หายกลับ
+# (รายการที่จะทำให้ workspace ไม่เหลือ owner จะถูกข้ามพร้อมแจ้ง ให้ใช้ admin erase-user --force <uuid> เองเมื่อมี owner อื่นแล้ว)
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml run --rm -T --entrypoint /app/admin migrate reapply-erasures < erasures-YYYY-MM-DD.jsonl
+```
+เก็บไฟล์ ledger (`export-erasures`) ไว้คู่กับ backup ด้วย เช่นทุกครั้งที่มีการลบ หรือทุกคืน: ไฟล์มีแค่รหัส uuid / MAC ของแท็ก ไม่มีชื่อหรืออีเมล
 
 ### 7.1 กู้คืนย้อนเวลา (PITR) ด้วย pgBackRest
 
@@ -770,6 +795,7 @@ sudo grep -h '"status":5' <log-dir>/access.log | tail -20
 | `pitr` / `backup` | `unhealthy` = มีปัญหาการสำรอง ดู `logs pitr` บรรทัด `PITR ALERT` |
 | ขนาด `core.sensor_samples` | โตเร็วกว่าที่ประมาณไว้ในข้อ 1 เกิน 30% → ลด interval หรือ retention |
 | `logs api` บรรทัด `PARTITION ALERT` | มีแถวตกใน partition `DEFAULT`, partition ล่วงหน้าเหลือไม่ถึง 7 วัน (งานดูแล partition ไม่ได้รันหรือล้ม ดู `partition maintenance failed`) หรือ constraint `*_cutover` ค้าง (`00037` ยังไม่รัน ดู §6) · `drop_held` ระดับ Warn = partition หมดอายุตามนาฬิกาแต่ข้อมูลล่าสุดยังไม่ยืนยัน (นาฬิกาเครื่องเดินเร็วเกิน? ตรวจ `timedatectl`) |
+| `logs api` บรรทัด `access log write failed` / ผู้ใช้เห็น 503 | บันทึกการเข้าถึงข้อมูลส่วนบุคคล (`core.access_log`) เขียนไม่ได้ API จึงไม่ส่งข้อมูลนั้นออก (fail closed): ตรวจฐานข้อมูล ดิสก์เต็ม หรือ partition ของ `access_log` (ดู `PARTITION ALERT`) |
 | HTTP 429 ใน access log | ถ้าเยอะจากผู้ใช้จริง ให้เพิ่ม `API_RATE_LIMIT` |
 | จำนวน gateway ที่ออนไลน์ | ลดลงโดยไม่มีเหตุผล = ปัญหาเครือข่าย หรือใบรับรองหมดอายุ |
 | เวลาเซิร์ฟเวอร์ | `timedatectl` ต้อง synchronized ตลอด |

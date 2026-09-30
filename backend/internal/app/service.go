@@ -243,6 +243,25 @@ func (s *Service) CreateDevice(ctx context.Context, p domain.Principal, gateway,
 }
 
 // UpdateDevice renames and/or moves a registration; at least one change is required.
+// EraseIdentityHistory checks the request and erases a registration's tag history (owner only, in the
+// repository); a new name is validated like any device name and applied in the same transaction.
+func (s *Service) EraseIdentityHistory(ctx context.Context, p domain.Principal, id string, name *string, tenantWide bool) (domain.ErasureResult, error) {
+	if p.Role != "owner" {
+		return domain.ErasureResult{}, domain.ErrForbidden
+	}
+	if !security.ValidID(id) {
+		return domain.ErasureResult{}, domain.ErrInvalid
+	}
+	if name != nil {
+		trimmed := strings.TrimSpace(*name)
+		if !validName(trimmed) {
+			return domain.ErasureResult{}, domain.ErrInvalid
+		}
+		name = &trimmed
+	}
+	return s.Repo.EraseIdentityHistory(ctx, p, id, name, tenantWide)
+}
+
 func (s *Service) UpdateDevice(ctx context.Context, p domain.Principal, id string, name, gateway *string) (domain.Device, error) {
 	if !p.CanManageDevices() {
 		return domain.Device{}, domain.ErrForbidden

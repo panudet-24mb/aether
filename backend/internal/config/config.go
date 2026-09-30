@@ -23,13 +23,15 @@ type Config struct {
 	// several live pages open, share this budget, so deployments may raise it.
 	APIRateLimit int
 	// Storage and rollout controls (see docs/production.md).
-	SampleRetentionDays  int  // decoded samples are kept this long, dropped by weekly partition: up to 7 days more (default 90)
-	SampleMinIntervalSec int  // store at most one environment sample per stream per interval (0 = every uplink)
-	BLEHistoryHours      int  // raw BLE advertisement archive for Studio decoders, dropped by daily partition: up to 24 h more (default 24)
-	DiscoveryLimit       int  // streams per gateway for tags that are NOT registered devices (default 100)
-	AlertsShadow         bool // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
-	AutomationCommands   bool // automations may command devices (action.command); off by default, see docs/platform/automation.md
-	TuyaCloud            bool // Tuya Cloud mode (TUYA_CLOUD): the tuya-cloud gateway model and profile exist; off by default
+	SampleRetentionDays  int // decoded samples are kept this long, dropped by weekly partition: up to 7 days more (default 90)
+	SampleMinIntervalSec int // store at most one environment sample per stream per interval (0 = every uplink)
+	BLEHistoryHours      int // raw BLE advertisement archive for Studio decoders, dropped by daily partition: up to 24 h more (default 24)
+	// PrivacyNoticeURL is the deployment's own privacy notice; empty means the built-in Thai template at /privacy.
+	PrivacyNoticeURL   string
+	DiscoveryLimit     int  // streams per gateway for tags that are NOT registered devices (default 100)
+	AlertsShadow       bool // record events but open no alerts, send nothing and run no automations; SOS (button) and hazard still alert
+	AutomationCommands bool // automations may command devices (action.command); off by default, see docs/platform/automation.md
+	TuyaCloud          bool // Tuya Cloud mode (TUYA_CLOUD): the tuya-cloud gateway model and profile exist; off by default
 	// TuyaCloudPublicKey is the tuya-cloud worker's X25519 public key (TUYA_CLOUD_PUBLIC_KEY): the API seals project
 	// credentials to it and can never open them. Nil means linking is unavailable (tuya_cloud_unconfigured).
 	TuyaCloudPublicKey *[32]byte
@@ -102,6 +104,13 @@ func Load() (Config, error) {
 	}
 	if c.BLEHistoryHours, e = intEnv("BLE_HISTORY_HOURS", 24, 1, 720); e != nil {
 		return c, e
+	}
+	if raw := strings.TrimSpace(os.Getenv("PRIVACY_NOTICE_URL")); raw != "" {
+		u, e := url.Parse(raw)
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || len(raw) > 512 {
+			return c, errors.New("PRIVACY_NOTICE_URL must be an https:// URL")
+		}
+		c.PrivacyNoticeURL = u.String()
 	}
 	if c.DiscoveryLimit, e = intEnv("DISCOVERY_LIMIT", 100, 0, 5000); e != nil {
 		return c, e

@@ -13,6 +13,7 @@ import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, suggestProf
 import { gatewayHealthLabel } from "./nodes";
 import { CopyButton, Step } from "./panel-bits";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
+import PrivacyPanel, { type PrivacyClient } from "./privacy-panel";
 
 export type Selection = { kind: "broker" } | { kind: "gateway"; id: string } | { kind: "device"; external: string } | { kind: "draft"; id: string; profile: string } | null;
 
@@ -47,9 +48,11 @@ export type InspectorProps = {
   /** Collapses the whole panel (distinct from onClose, which only clears the selection). */
   onHide: () => void;
   /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") and the device controls. */
-  client: SignalClient & CommandClient & CatalogClient & EdgeClient & TuyaCloudClient;
+  client: SignalClient & CommandClient & CatalogClient & EdgeClient & TuyaCloudClient & PrivacyClient;
   /** Owner/admin: may install an Aether Edge, import and forget Tuya keys. */
   canManage: boolean;
+  /** Owner: may export and erase a worn tag's history (PDPA). */
+  isOwner: boolean;
   /** Reload the page's snapshot (after an import or a forgotten key). */
   onReload: () => void;
 };
@@ -686,7 +689,16 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
             ))}
           </ul>
           <label className="topo-check">
-            <input type="checkbox" checked={d.roaming} disabled={busy} onChange={(e) => p.onSetRoaming(d.registrations, e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={d.roaming}
+              disabled={busy}
+              onChange={(e) => {
+                // Following a tag across every gateway tracks where its wearer is: the wearer must be told (PDPA §23).
+                if (e.target.checked && !window.confirm("โหมด roaming ติดตามตำแหน่งของผู้ที่สวมแท็กนี้ข้ามทุก gateway และเก็บประวัติไว้\n\nต้องแจ้งผู้สวมใส่ก่อนว่าเก็บข้อมูลตำแหน่งเพื่ออะไรและนานเท่าใด (ประกาศความเป็นส่วนตัว) · ยืนยันว่าแจ้งแล้ว?")) return;
+                p.onSetRoaming(d.registrations, e.target.checked);
+              }}
+            />
             <span>
               <strong>ใช้ได้หลาย gateway (roaming)</strong>
               <small>
@@ -694,10 +706,11 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
                   ? here
                     ? `ตอนนี้อยู่ที่ ${gatewayName(here.gatewayId)}${here.rssi != null ? ` (${here.rssi} dBm)` : ""} · ค่าและ widget ตามจาก gateway ที่สัญญาณแรงสุด · offline เมื่อไม่มี gateway ใดได้ยิน`
                     : "ตอนนี้ไม่มี gateway ใดได้ยิน · จะแจ้ง offline ครั้งเดียวเมื่อเงียบทุก gateway"
-                  : "เปิดสำหรับ wearable หรืออุปกรณ์พกพา · ไม่ต้องลงทะเบียนซ้ำทุก gateway"}
+                  : "เปิดสำหรับ wearable หรืออุปกรณ์พกพา · ไม่ต้องลงทะเบียนซ้ำทุก gateway · ติดตามตำแหน่งผู้สวมใส่ ต้องแจ้งเจ้าตัวก่อน"}
               </small>
             </span>
           </label>
+          {p.isOwner && d.roaming && d.registrations[0] && <PrivacyPanel registration={d.registrations[0]} client={p.client} busy={busy} onNotice={p.onNotice} onDone={p.onReload} />}
           <p className="topo-note">ย้ายได้ด้วยการลากปลายเส้นสีเขียวบน canvas ไปยัง gateway อื่น · การยกเลิกไม่ลบประวัติ และกู้คืนได้</p>
         </>
       )}

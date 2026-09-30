@@ -247,6 +247,13 @@ def main() -> int:
     p.add_argument("--automation-commands", choices=["true", "false"], default=None,
                    help="AUTOMATION_COMMANDS: let enabled automations command devices (action.command). Off on a "
                         "fresh install; a re-run without this flag keeps the value already in the env file")
+    p.add_argument("--privacy-notice-url", default=None,
+                   help="PRIVACY_NOTICE_URL: the organisation's own privacy notice (https://...). Empty or unset: the "
+                        "built-in Thai template at /privacy. A re-run without this flag keeps the value already set; "
+                        "'off' clears it")
+    p.add_argument("--access-log-days", type=int, default=None,
+                   help="ACCESS_LOG_RETENTION_DAYS: how long the read-access log of personal data is kept (30-3650, "
+                        "default 400); a re-run without this flag keeps the value already set")
     p.add_argument("--tuya-cloud", choices=["true", "false"], default=None,
                    help="TUYA_CLOUD: offer Tuya Cloud (zero-install) gateways and run the tuya-cloud worker. Off on a "
                         "fresh install; a re-run without this flag keeps the value already in the env file "
@@ -276,6 +283,10 @@ def main() -> int:
         return fail("--pitr-backup-at must be HH:MM")
     if a.ops_webhook and not re.fullmatch(r"https://[^\s'\"]{1,2000}", a.ops_webhook):
         return fail("--ops-webhook must be an https:// URL")
+    if a.privacy_notice_url not in (None, "", "off") and not re.fullmatch(r"https://[^\s'\"<>]{3,500}", a.privacy_notice_url):
+        return fail("--privacy-notice-url must be an https:// URL (or 'off')")
+    if a.access_log_days is not None and not 30 <= a.access_log_days <= 3650:
+        return fail("--access-log-days must be between 30 and 3650")
     if a.offsite and a.offsite != "off" and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}:[A-Za-z0-9_./\-]{0,500}", a.offsite):
         return fail("--offsite must be an rclone remote:path, e.g. offsite-crypt:aether")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", a.project):
@@ -624,6 +635,9 @@ pg1-database=aether
         "SAMPLE_RETENTION_DAYS": str(a.retention_days),
         "SAMPLE_MIN_INTERVAL_SEC": str(a.sample_min_interval),
         "BLE_HISTORY_HOURS": "24",
+        # Personal data (docs/platform/privacy.md): the read-access log's retention and the privacy notice link.
+        "ACCESS_LOG_RETENTION_DAYS": str(a.access_log_days) if a.access_log_days is not None else old.get("ACCESS_LOG_RETENTION_DAYS", "400"),
+        "PRIVACY_NOTICE_URL": ("" if a.privacy_notice_url == "off" else a.privacy_notice_url) if a.privacy_notice_url is not None else old.get("PRIVACY_NOTICE_URL", ""),
         "DISCOVERY_LIMIT": "100",
         "ALERTS_SHADOW": a.shadow,
         # Kept across re-runs unless given: switching device commands on or off must always be a deliberate act.

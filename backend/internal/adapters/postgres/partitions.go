@@ -37,11 +37,13 @@ type PartitionHealth struct {
 // several hourly runs instead of vanishing at once.
 const MaxDropsPerRun = 2
 
-// MaintainPartitions keeps core.sensor_samples and core.ble_history partitioned (migration 00037): it creates the
-// ranges ahead, drops those past the retention (at most MaxDropsPerRun; a partition with rows only when the newest
-// stored row confirms it expired, so a clock that jumped ahead expires nothing) and deletes expired rows from the two partitions that are not dropped by range (legacy and DEFAULT).
-// Each step is its own transaction. Global, not per tenant. Pruning runs even when a step failed; the errors are
-// joined.
+// MaintainPartitions keeps core.sensor_samples and core.ble_history (migration 00037) and core.access_log
+// (migration 00038; its retention is core.retention_policy's, never passed from here) partitioned: it creates the
+// ranges ahead, drops those past the retention (at most
+// MaxDropsPerRun; a partition with rows only when the newest stored row confirms it expired, so a clock that jumped
+// ahead expires nothing) and deletes expired rows from the partitions that are not dropped by range (legacy and
+// DEFAULT). Each step is its own transaction. Global, not per tenant. Pruning runs even when a step failed; the
+// errors are joined.
 func (r *Repository) MaintainPartitions(ctx context.Context) ([]PartitionStep, int64, error) {
 	days, hours := r.retention()
 	steps := []PartitionStep{}

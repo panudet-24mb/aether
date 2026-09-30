@@ -787,6 +787,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             setAdopt({ external, gatewayId, draftId, name });
           }}
           canManage={role === "owner" || role === "admin"}
+          isOwner={role === "owner"}
           onReload={() => void reload()}
           onOpenStudio={onAdd}
           onRemoveDraft={(id) => {

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Copy, KeyRound, Pencil, RefreshCw, Search, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { Copy, Download, KeyRound, Pencil, RefreshCw, Search, ShieldCheck, Trash2, UserPlus, UserX, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./team.css";
@@ -20,6 +20,11 @@ export type Me = {
   project_ids: string[] | null;
   must_change_password: boolean;
   deployment_mode: string;
+  /** The privacy notice: its current version, the one this person acknowledged (0: never) and where it lives
+   *  (empty: the built-in page at /privacy). */
+  notice_version?: number;
+  notice_ack_version?: number;
+  notice_url?: string;
 };
 
 /** The shell reads the signed-in member's role and project scope through this one call. */
@@ -39,7 +44,8 @@ type Member = {
   last_seen_at: string | null;
 };
 type Project = { id: string; name: string; color: string };
-type Editor = { userId: string | null; email: string; role: string; projectIds: string[]; password: string };
+/** informed: the admin confirms the new member was told how their data is used (PDPA §23), before adding them. */
+type Editor = { userId: string | null; email: string; role: string; projectIds: string[]; password: string; informed: boolean };
 
 const ROLES: [string, string][] = [
   ["owner", "เจ้าของ"],
@@ -95,6 +101,7 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
   const [editorError, setEditorError] = useState("");
   const [handover, setHandover] = useState<{ email: string; password: string } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
+  const [eraseTarget, setEraseTarget] = useState<Member | null>(null);
   const [resetTarget, setResetTarget] = useState<{ member: Member; password: string } | null>(null);
   const [own, setOwn] = useState({ current: "", next: "", confirm: "" });
   const [ownError, setOwnError] = useState("");
@@ -204,11 +211,11 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
 
   const openAdd = () => {
     setEditorError("");
-    setEditor({ userId: null, email: "", role: "viewer", projectIds: [], password: generatePassword() });
+    setEditor({ userId: null, email: "", role: "viewer", projectIds: [], password: generatePassword(), informed: false });
   };
   const openEdit = (m: Member) => {
     setEditorError("");
-    setEditor({ userId: m.user_id, email: m.email, role: m.role, projectIds: m.project_ids, password: "" });
+    setEditor({ userId: m.user_id, email: m.email, role: m.role, projectIds: m.project_ids, password: "", informed: true });
   };
   const openReset = (m: Member) => setResetTarget({ member: m, password: generatePassword() });
 
@@ -217,6 +224,10 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
     const email = editor.email.trim().toLowerCase();
     if (editor.userId === null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setEditorError("อีเมลไม่ถูกต้อง");
+      return;
+    }
+    if (!editor.informed) {
+      setEditorError("ยืนยันก่อนว่าได้แจ้งเจ้าตัวเรื่องการเก็บและใช้ข้อมูลส่วนบุคคลแล้ว");
       return;
     }
     const body = { role: editor.role, project_ids: editor.projectIds };
@@ -421,6 +432,16 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
                         <button type="button" className="tm-icon-btn is-danger" onClick={() => setRemoveTarget(m)} disabled={locked} aria-label={`นำ ${m.email} ออกจาก workspace`} title="นำออกจาก workspace">
                           <Trash2 size={14} />
                         </button>
+                        {me?.role === "owner" && m.user_id !== me.user_id && (
+                          <>
+                            <button type="button" className="tm-icon-btn" disabled={busy} aria-label={`ส่งออกข้อมูลส่วนบุคคลของ ${m.email}`} title="ส่งออกข้อมูลส่วนบุคคล (PDPA)" onClick={() => void run(() => client.download(`/members/${m.user_id}/export`, `aether-member-${m.user_id}.json`, {}), "ส่งออกข้อมูลแล้ว", "ส่งออกข้อมูลไม่สำเร็จ")}>
+                              <Download size={14} />
+                            </button>
+                            <button type="button" className="tm-icon-btn is-danger" disabled={busy} aria-label={`ลบข้อมูลส่วนบุคคลของ ${m.email}`} title="ลบข้อมูลส่วนบุคคล (PDPA)" onClick={() => setEraseTarget(m)}>
+                              <UserX size={14} />
+                            </button>
+                          </>
+                        )}
                       </span>
                     </td>
                   </tr>
@@ -459,6 +480,14 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
             </p>
           )}
           <p className="tm-hint">การเปลี่ยนรหัสผ่านจะตัดการเข้าระบบของอุปกรณ์อื่นทั้งหมด ยกเว้นหน้าต่างนี้</p>
+          <div className="tm-self-privacy">
+            <button type="button" className="tm-btn" disabled={busy} onClick={() => void run(() => client.download("/me/export", "aether-my-data.json"), "ส่งออกข้อมูลของคุณแล้ว", "ส่งออกข้อมูลไม่สำเร็จ", setOwnError)}>
+              <Download size={15} /> ส่งออกข้อมูลของฉัน
+            </button>
+            <p className="tm-hint">
+              ไฟล์ JSON ของทุกอย่างที่ workspace นี้เก็บเกี่ยวกับคุณ: ข้อมูลบัญชี สิทธิ์ เซสชัน สิ่งที่คุณทำ และบันทึกว่าใครเปิดดูข้อมูลของคุณ · <a href={me?.notice_url || "/privacy"} target="_blank" rel="noreferrer">ประกาศความเป็นส่วนตัว</a>
+            </p>
+          </div>
         </section>
       </div>
 
@@ -538,6 +567,10 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
                       </button>
                     </span>
                   </label>
+                  <label className="tm-check">
+                    <input type="checkbox" checked={editor.informed} onChange={(e) => setEditor({ ...editor, informed: e.target.checked })} />
+                    <span>ได้แจ้งเจ้าตัวแล้วว่า workspace นี้เก็บอีเมล ชื่อ และบันทึกการใช้งานของเขา เพื่ออะไร และนานเท่าใด (ประกาศความเป็นส่วนตัว)</span>
+                  </label>
                   <p className="tm-warn">
                     ระบบนี้ไม่ส่งอีเมล · ต้องส่งรหัสผ่านนี้ให้เจ้าตัวด้วยตัวเอง และรหัสผ่านจะแสดงครั้งเดียวเท่านั้น เมื่อเข้าระบบครั้งแรกสมาชิกจะถูกขอให้ตั้งรหัสผ่านของตัวเองก่อนใช้งานอะไรได้
                     หากอีเมลนี้มีบัญชีผูกกับ workspace อื่นอยู่แล้ว ระบบจะไม่เพิ่มให้ · ให้ใช้อีเมลอื่นของเขาแทน
@@ -602,6 +635,41 @@ export default function TeamPage({ getToken, refresh, onUnauthorized }: { getTok
             <AlertDialogCancel disabled={busy}>ยกเลิก</AlertDialogCancel>
             <AlertDialogAction onClick={() => void submitReset()} disabled={busy}>
               ตั้งรหัสผ่านใหม่
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={eraseTarget !== null} onOpenChange={(open) => !open && !busy && setEraseTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>ลบข้อมูลส่วนบุคคลของ “{eraseTarget?.email}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              เขาจะออกจากระบบทันที บัญชีถูกลบอีเมล ชื่อ และรหัสผ่านออกถาวร และเข้าระบบไม่ได้อีก · ส่งออกข้อมูลให้เจ้าตัวก่อนหากเขาขอ · สิ่งที่ยังเก็บไว้: บันทึกการตรวจสอบ (audit) และบันทึกการเข้าถึงข้อมูล
+              โดยอ้างถึงรหัสบัญชีที่ไม่ระบุตัวตนแล้ว เพื่อความปลอดภัยและหน้าที่ตามกฎหมาย จนครบระยะเก็บรักษา · สำเนาสำรองข้อมูลอาจยังมีข้อมูลเดิมจนหมดอายุ (สูงสุดประมาณ 8 สัปดาห์)
+              · บัญชีที่ใช้ร่วมกับองค์กรอื่นลบจากที่นี่ไม่ได้ ต้องให้ผู้ดูแลระบบลบ
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>ยกเลิก</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy}
+              onClick={() => {
+                const target = eraseTarget;
+                setEraseTarget(null);
+                if (target !== null)
+                  void run(
+                    () =>
+                      client.post<void>(`/members/${target.user_id}/erase`, {}).catch((e: unknown) => {
+                        if (e instanceof ApiError && e.reason === "shared_identity") throw new ApiError(409, "บัญชีนี้อยู่ในองค์กรอื่นด้วย · ต้องให้ผู้ดูแลระบบ (platform) ลบ");
+                        throw e;
+                      }),
+                    "ลบข้อมูลส่วนบุคคลแล้ว",
+                    "ลบข้อมูลไม่สำเร็จ",
+                  );
+              }}
+            >
+              ลบข้อมูลถาวร
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

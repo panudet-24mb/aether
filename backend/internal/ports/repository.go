@@ -15,6 +15,17 @@ import (
 )
 
 type Repository interface {
+	// Privacy (docs/platform/privacy.md): the read-access log, exports and erasure.
+	LogAccess(context.Context, domain.Principal, domain.AccessRead) error
+	ListAccessLog(context.Context, domain.Principal, domain.LogFilter) ([]domain.AccessEntry, error)
+	ListAuditLog(context.Context, domain.Principal, domain.LogFilter) ([]domain.AuditEntry, error)
+	ListErasures(context.Context, domain.Principal, int) ([]domain.ErasureEntry, error)
+	EraseMember(context.Context, domain.Principal, string) (domain.ErasureResult, error)
+	EraseIdentityHistory(ctx context.Context, p domain.Principal, device string, name *string, tenantWide bool) (domain.ErasureResult, error)
+	ExportMember(context.Context, domain.Principal, string) (domain.MemberExport, error)
+	IdentityExportSummary(context.Context, domain.Principal, string) (domain.IdentityExport, error)
+	StreamIdentityHistory(ctx context.Context, p domain.Principal, external, kind string, limit int, emit func([]byte) error) (bool, error)
+	AckNotice(context.Context, domain.Principal, int) (int, error)
 	MemberAccess(context.Context, domain.Principal, string) (map[string]string, error)
 	SetMemberAccess(context.Context, domain.Principal, string, map[string]string) error
 	DiscoverDevices(context.Context, domain.Principal, string, time.Time) ([]domain.DiscoveredDevice, error)

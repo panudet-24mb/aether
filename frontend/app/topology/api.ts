@@ -273,6 +273,38 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       if (!r.ok) throw new ApiError(r.status, describe(r.status));
       return r.blob();
     },
+    /** Authenticated download of an export: GET, or POST when a body is given. Saved under `name`. Exports can be
+     *  large (a tag's whole history), so the wait is longer than for ordinary calls. */
+    download: async (path: string, name: string, body?: unknown): Promise<void> => {
+      const send = () =>
+        fetch(`${API}/api/v1${path}`, {
+          method: body === undefined ? "GET" : "POST",
+          headers: { Authorization: `Bearer ${getToken()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          cache: "no-store",
+          signal: AbortSignal.timeout(90000),
+        });
+      let r = await send();
+      if (r.status === 401 && (await refresh())) r = await send();
+      if (!r.ok) {
+        let reason: string | undefined;
+        try {
+          const b = (await r.json()) as { error?: unknown };
+          if (typeof b.error === "string") reason = b.error;
+        } catch {
+          // no JSON body
+        }
+        throw new ApiError(r.status, describe(r.status), reason);
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a); // Firefox ignores click() on a detached anchor
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000); // revoking synchronously can cancel the download
+    },
     me: () => call<Me>("/me"),
     catalog: () => call<CatalogResponse>("/catalog"),
     zigbeeCatalog: (q: string, opts: { vendor?: string; category?: string; limit?: number; vendors?: boolean } = {}) => {

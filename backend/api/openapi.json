@@ -6134,6 +6134,613 @@
      }
     }
    }
+  },
+  "/api/v1/notice": {
+   "get": {
+    "summary": "The privacy notice pointer shown before sign-in: its version and URL (empty: the built-in /privacy page).",
+    "operationId": "get__api_v1_notice",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/privacy/access-log": {
+   "get": {
+    "summary": "Read-access log of personal data in this workspace, newest first (owner). Keyset paging via next.before_at/before_id.",
+    "operationId": "get__api_v1_privacy_access_log",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "actor",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "resource",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "subject_kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "subject_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "before_at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "before_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/privacy/audit": {
+   "get": {
+    "summary": "Audit trail of changes in this workspace, newest first (owner); action filters by prefix.",
+    "operationId": "get__api_v1_privacy_audit",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "actor",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "resource",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "subject_kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "subject_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "before_at",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "before_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/privacy/erasures": {
+   "get": {
+    "summary": "Erasure ledger of this workspace (owner).",
+    "operationId": "get__api_v1_privacy_erasures",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
+   }
+  },
+  "/api/v1/me/export": {
+   "get": {
+    "summary": "Everything this workspace holds about the caller, as a JSON download (PDPA §30). Audited and logged. At most 2 exports per workspace and 4 per process (429).",
+    "operationId": "get__api_v1_me_export",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
+   }
+  },
+  "/api/v1/me/notice-ack": {
+   "post": {
+    "summary": "Acknowledge privacy notice version N (1..current).",
+    "operationId": "post__api_v1_me_notice_ack",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "version"
+        ],
+        "properties": {
+         "version": {
+          "type": "integer",
+          "minimum": 1
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/members/{user_id}/export": {
+   "post": {
+    "summary": "Everything this workspace holds about a member, as a JSON download (owner). Audited and logged. At most 2 exports per workspace and 4 per process (429).",
+    "operationId": "post__api_v1_members__user_id__export",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/members/{user_id}/erase": {
+   "post": {
+    "summary": "Erase a member (owner): sessions and membership go, the identity is anonymised in place. 409 shared_identity / last_owner.",
+    "operationId": "post__api_v1_members__user_id__erase",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "user_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/privacy-export": {
+   "post": {
+    "summary": "A tag's history streamed as a ZIP (summary.json, samples.ndjson, ble_history.ndjson, manifest.json with complete/truncated) (owner). At most 2 exports per workspace and 4 per process (429). Audited and logged before streaming.",
+    "operationId": "post__api_v1_devices__id__privacy_export",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/zip": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/devices/{id}/erase-history": {
+   "post": {
+    "summary": "Erase a registration's tag history (owner): samples, raw advertisements, presence and events within the registration's project (tenant_wide: every project); alerts stay under a generic title. An optional name renames the registration in the same transaction.",
+    "operationId": "post__api_v1_devices__id__erase_history",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 128
+         },
+         "tenant_wide": {
+          "type": "boolean"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
@@ -6351,6 +6958,15 @@
      },
      "must_change_password": {
       "type": "boolean"
+     },
+     "notice_version": {
+      "type": "integer"
+     },
+     "notice_ack_version": {
+      "type": "integer"
+     },
+     "notice_url": {
+      "type": "string"
      }
     },
     "required": [

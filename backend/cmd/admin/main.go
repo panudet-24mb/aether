@@ -18,9 +18,23 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+const usage = `usage:
+  admin bootstrap           one-time owner (DATABASE_URL, ADMIN_EMAIL, ADMIN_NAME, TENANT_NAME, ADMIN_PASSWORD_FILE)
+  admin export-erasures     the erasure ledger as JSON lines on stdout (MIGRATION_DATABASE_URL)
+  admin reapply-erasures    re-applies a ledger read from stdin after a restore (MIGRATION_DATABASE_URL)
+  admin erase-user [--force] <uuid>   erases an identity in every workspace it belongs to; --force also when it is
+                            a workspace's last owner (MIGRATION_DATABASE_URL)`
+
 func run() error {
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "export-erasures", "reapply-erasures", "erase-user":
+			return privacyCommand(os.Args[1], os.Args[2:])
+		}
+	}
 	if len(os.Args) != 2 || os.Args[1] != "bootstrap" {
-		return fmt.Errorf("usage: admin bootstrap (set DATABASE_URL, ADMIN_EMAIL, ADMIN_NAME, TENANT_NAME, ADMIN_PASSWORD_FILE)")
+		return fmt.Errorf("%s", usage)
 	}
 	path := os.Getenv("ADMIN_PASSWORD_FILE")
 	if path == "" {

@@ -461,3 +461,14 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .topo-cloud-panel .topo-h3 .topo-icon-btn { margin-left: auto; }
 .topo-cloud-panel .topo-tuya-table td small.topo-cloud-reason { color: var(--color-warning); }
 .topo-cloud-panel .topo-tuya-table td:nth-child(2), .topo-cloud-panel .topo-tuya-table td:nth-child(3) { white-space: nowrap; }
+
+/* A worn tag's history (PDPA): export and erase, owner only. */
+.topo-privacy { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.topo-privacy-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.topo-privacy-confirm { display: flex; flex-direction: column; gap: 10px; }
+.topo-privacy-confirm p { margin: 0; }
+.topo-privacy-rename { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--color-muted); }
+.topo-privacy-rename input { width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 13px; }
+.topo-privacy-rename input:focus { outline: none; border-color: var(--color-accent); }
+.topo-privacy-wide { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--color-ink); line-height: 1.6; cursor: pointer; }
+.topo-privacy-wide input { width: 16px; height: 16px; margin-top: 2px; flex-shrink: 0; accent-color: var(--color-accent); }

@@ -15,6 +15,10 @@ import (
 // transaction as the write, under the per-tenant advisory lock, so two concurrent calls cannot race past
 // them. Password hashes are read only to verify the caller's own current password and never returned.
 
+// AddRefusalLimit is how many refused adds (member.add_refused:*) one actor may collect in 24 hours before
+// AddMember stops answering and returns ErrRateLimited.
+const AddRefusalLimit = 20
+
 // memberLock serialises member changes of one workspace (counting owners, counting members).
 func memberLock(tx *gorm.DB, tenant string) error {
 	return tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(?,4))`, tenant).Error
@@ -127,13 +131,17 @@ func (r *Repository) ListMembers(ctx context.Context, p domain.Principal) ([]dom
 // adopted and given the supplied password. An identity that still belongs to ANY workspace is refused
 // with the same undifferentiated conflict a duplicate member produces: silently attaching a second
 // membership to a stranger's account would change where their next login lands, because login picks the
-// workspace automatically when an identity has exactly one, and a distinguishable answer would turn this
-// route into a platform-wide "does this email have an account?" oracle.
+// workspace automatically when an identity has exactly one. What remains observable is 201 versus 409 for
+// an email; the route is owner/admin only, bounded by MaxMembers, every refusal is audited as
+// member.add_refused:<reason> (taken, self, role, limit) so probing leaves a trail, and an actor with
+// AddRefusalLimit refusals in 24 hours is answered ErrRateLimited. See docs/platform/team-access.md §2.6.
 func (r *Repository) AddMember(ctx context.Context, p domain.Principal, in domain.NewMember) (domain.Member, error) {
 	out := domain.Member{Email: in.Email, Name: in.Name, Role: in.Role, ProjectIDs: in.ProjectIDs, MustChangePassword: true}
 	if out.ProjectIDs == nil {
 		out.ProjectIDs = []string{}
 	}
+	// A refusal is audited and committed, then answered: the audit row must survive the error.
+	var refusal error
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		if e := memberLock(tx, p.TenantID); e != nil {
 			return e
@@ -142,77 +150,80 @@ func (r *Repository) AddMember(ctx context.Context, p domain.Principal, in domai
 		if e != nil {
 			return e
 		}
+		var recent int64
+		if e := tx.Raw(`SELECT count(*) FROM core.audit_logs WHERE tenant_id=? AND actor_id=? AND action LIKE 'member.add_refused%' AND at > now() - interval '24 hours'`,
+			p.TenantID, p.UserID).Scan(&recent).Error; e != nil {
+			return e
+		}
+		if recent >= AddRefusalLimit {
+			return domain.ErrRateLimited
+		}
+		refuse := func(reason string, answer error) error {
+			refusal = answer
+			return audit(tx, p, "member.add_refused:"+reason, uuid.Nil.String())
+		}
 		if !mayTouch(actor, in.Role) {
-			return domain.ErrForbidden
+			return refuse("role", domain.ErrForbidden)
 		}
 		var n int64
 		if e := tx.Raw(`SELECT count(*) FROM core.memberships WHERE tenant_id=?`, p.TenantID).Scan(&n).Error; e != nil {
 			return e
 		}
 		if n >= domain.MaxMembers {
+			return refuse("limit", domain.ErrConflict)
+		}
+		// One SECURITY DEFINER call decides and writes: it locks an existing identity row before counting
+		// where it belongs, creates or adopts it, and inserts the membership. A taken identity comes back
+		// without its id and is answered with the plain 409.
+		var res []struct {
+			MemberID *string
+			Outcome  string
+		}
+		if e := tx.Raw(`SELECT member_id,outcome FROM identity.create_member_identity(?,?,?,?,?)`,
+			uuid.NewString(), in.Email, in.Name, in.PasswordHash, in.Role).Scan(&res).Error; e != nil {
+			return e
+		}
+		if len(res) != 1 {
 			return domain.ErrConflict
 		}
-		// Same path login and CreateAccount use to reach identity.users: one exact-email lookup.
-		var ids []struct{ ID string }
-		if e := tx.Raw(`SELECT id FROM identity.users WHERE email=?`, in.Email).Scan(&ids).Error; e != nil {
-			return e
+		switch res[0].Outcome {
+		case "created", "adopted":
+		case "self":
+			return refuse("self", domain.ErrForbidden)
+		case "refused":
+			return refuse("role", domain.ErrForbidden)
+		default:
+			return refuse("taken", domain.ErrConflict)
 		}
-		if len(ids) > 1 {
+		if res[0].MemberID == nil {
 			return domain.ErrConflict
 		}
-		adopted := len(ids) == 1
-		user := uuid.NewString()
-		if adopted {
-			user = ids[0].ID
-			if user == p.UserID {
-				return domain.ErrForbidden
-			}
-			// The count is over every workspace, which is why it needs the SECURITY DEFINER path.
-			var elsewhere int
-			if e := tx.Raw(`SELECT core.identity_membership_count(?)`, user).Scan(&elsewhere).Error; e != nil {
-				return e
-			}
-			if elsewhere != 0 {
-				return domain.ErrConflict
-			}
-		} else if e := tx.Exec(`INSERT INTO identity.users(id,email,name,password_hash) VALUES(?,?,?,?)`, user, in.Email, in.Name, in.PasswordHash).Error; e != nil {
-			return e
-		}
-		if e := tx.Exec(`INSERT INTO core.memberships(tenant_id,user_id,role,must_change_password) VALUES(?,?,?,true)`, p.TenantID, user, in.Role).Error; e != nil {
-			return e
-		}
-		if adopted {
-			// Now that the membership exists this identity has exactly one, so the guarded password path
-			// accepts it: the account is re-issued with the password the owner is about to hand over.
-			var ok bool
-			if e := tx.Raw(`SELECT identity.set_member_password(?,?)`, user, in.PasswordHash).Scan(&ok).Error; e != nil {
-				return e
-			}
-			if !ok {
-				return domain.ErrConflict
-			}
-		}
+		user := *res[0].MemberID
 		if e := setProjects(tx, p.TenantID, user, in.ProjectIDs); e != nil {
 			return e
 		}
 		out.UserID = user
-		// Read the row back: an adopted identity keeps its own stored name, not the one just supplied.
+		// Read the row back for the stored email and creation time. The name is the supplied one: an adopted
+		// identity was re-issued with it, so nothing of the earlier account is returned.
 		var stored []struct {
-			Email, Name string
-			CreatedAt   time.Time
+			Email     string
+			CreatedAt time.Time
 		}
-		if e := tx.Raw(`SELECT u.email,u.name,m.created_at FROM core.memberships m JOIN identity.users u ON u.id=m.user_id
+		if e := tx.Raw(`SELECT u.email,m.created_at FROM core.memberships m JOIN identity.users u ON u.id=m.user_id
       WHERE m.tenant_id=? AND m.user_id=?`, p.TenantID, user).Scan(&stored).Error; e != nil {
 			return e
 		}
 		if len(stored) != 1 {
 			return domain.ErrConflict
 		}
-		out.Email, out.Name, out.CreatedAt = stored[0].Email, stored[0].Name, stored[0].CreatedAt
+		out.Email, out.CreatedAt = stored[0].Email, stored[0].CreatedAt
 		return audit(tx, p, "member.added", user)
 	})
 	if e != nil {
 		return domain.Member{}, classify(e)
+	}
+	if refusal != nil {
+		return domain.Member{}, refusal
 	}
 	return out, nil
 }
@@ -361,11 +372,12 @@ func (r *Repository) ResetMemberPassword(ctx context.Context, p domain.Principal
 // identity — in any workspace, because the password is global to the identity.
 func (r *Repository) ChangeOwnPassword(ctx context.Context, p domain.Principal, check func(currentHash string) bool, hash string) error {
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		var rows []struct{ PasswordHash string }
-		if e := tx.Raw(`SELECT password_hash FROM identity.users WHERE id=?`, p.UserID).Scan(&rows).Error; e != nil {
+		// The runtime has no SELECT on password_hash; the definer returns the caller's own hash only.
+		var rows []struct{ PasswordHash *string }
+		if e := tx.Raw(`SELECT identity.own_password_hash() AS password_hash`).Scan(&rows).Error; e != nil {
 			return e
 		}
-		if len(rows) != 1 || !check(rows[0].PasswordHash) {
+		if len(rows) != 1 || rows[0].PasswordHash == nil || !check(*rows[0].PasswordHash) {
 			return domain.ErrUnauthorized
 		}
 		var ok bool

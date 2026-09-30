@@ -99,42 +99,80 @@ $$;
 
 และ `CREATE POLICY memberships_owner_access ON core.memberships FOR ALL TO aether_owner USING(true) WITH CHECK(true)` (รูปแบบเดียวกับ migration `00007`) เพื่อให้ฟังก์ชันนี้มองเห็นแถวใต้ FORCE RLS · policy ของ runtime ทั้งสี่ (`tenant_admin_membership_read/insert/update/delete`) เป็น `TO aether_app` เท่านั้น การประเมิน policy ในฐานะ `aether_owner` จึงเข้าฟังก์ชันซ้ำไม่ได้ · `REVOKE ALL ... FROM PUBLIC` และ `GRANT EXECUTE ... TO aether_app`
 
+ตั้งแต่ `00035` policy ของ `core.memberships` บอกกฎเดียวกับที่ `members.go` บังคับ SQL ที่ข้าม repository จึงทำได้ไม่เกิน API:
+
+| policy | เงื่อนไข (ทุก `is_tenant_*` เป็น scalar sub-select = InitPlan) |
+|---|---|
+| `tenant_admin_membership_insert` | **ถูกลบ** · การเพิ่มสมาชิกไปผ่าน `identity.create_member_identity` (definer) เท่านั้น |
+| `own_membership_insert` | แถวของตัวเองใน tenant ปัจจุบัน **และ tenant ยังไม่มีสมาชิกเลย** (`core.tenant_unclaimed()`) · เหลือไว้ให้ `CreateAccount` ใส่ owner คนแรกของ workspace ใหม่ · เดิม (`00001`) identity ใดก็ใส่ตัวเองเข้า tenant id ที่ตั้งใน context ได้ |
+| `tenant_admin_membership_update` | USING และ WITH CHECK: admin ของ tenant ปัจจุบัน · **ไม่ใช่แถวของตัวเอง** · แถว/ค่า `role='owner'` ได้เฉพาะเมื่อผู้เรียกเป็น owner (`core.is_tenant_owner()`) · ตรงกับ `UpdateMember` (ห้ามแก้ตัวเอง, `mayTouch`) · การโอนความเป็นเจ้าของคือ owner ตั้งอีกคนเป็น owner ผ่าน `UpdateMember` ซึ่งยังทำได้ · กฎ "owner คนสุดท้าย" ยังอยู่ใน Go ใต้ `memberLock` |
+| `tenant_admin_membership_delete` | เงื่อนไขเดียวกับ update ฝั่ง USING · ตรงกับ `RemoveMember` |
+
+`core.is_tenant_owner()` เป็น definer รูปแบบเดียวกับ `is_tenant_admin` (`search_path = pg_catalog, pg_temp`)
+
 สิทธิ์ที่ให้ runtime ถูกจำกัดระดับคอลัมน์: `GRANT UPDATE(role)` เท่านั้น · `must_change_password` เขียนได้จากฟังก์ชันรหัสผ่านเท่านั้น และ `user_id`/`tenant_id` เขียนทับไม่ได้เลย
 
 `core.member_projects` มี `own_member_projects_read` (แถวของตัวเอง) และ `tenant_admin_member_projects` (`FOR ALL`, owner/admin ของ tenant ปัจจุบัน) และไม่มี policy scope ทับตัวเอง จึงไม่วนซ้ำ
 
 ### 2.6 `identity.users`
 
-`identity.users` ไม่ใช้ tenant RLS (คนเดียวอยู่หลายองค์กร) และ **ไม่มีการเพิ่ม policy ใด ๆ ที่ให้ runtime ไล่อ่าน identity ทั้งหมด** การเข้าถึงยังเป็นทางเดิมที่ `CreateAccount`/login ใช้: ค้นด้วยอีเมลแบบตรงตัวหนึ่งแถว และ join จาก `core.memberships` (ซึ่ง RLS จำกัดไว้ที่ tenant ปัจจุบันแล้ว) เพื่อแสดงรายชื่อสมาชิก · สิ่งที่ RLS เดิมทำไม่ได้ถูกยกให้ SECURITY DEFINER สี่ตัวที่แคบที่สุดเท่าที่พอใช้งาน
+`identity.users` ไม่มีคอลัมน์ tenant (คนเดียวอยู่หลายองค์กร) ตั้งแต่ migration `00035` จึงเปิด RLS แบบ **ENABLE + FORCE** ด้วย policy ที่อิงตัวตนและการเป็นสมาชิก แทน tenant_scope ปกติ
+
+| policy | สำหรับ | เงื่อนไข |
+|---|---|---|
+| `users_owner_access` | `aether_owner` (FOR ALL) | `true` — ให้ SECURITY DEFINER ทุกตัวทำงานได้ (FORCE RLS คลุมเจ้าของตารางด้วย) |
+| `users_self_read` | `aether_app` SELECT | `id = identity.user_id()` — ทุกคนเห็นแถวของตัวเอง (`MemberSelf`, `/me`) |
+| `users_tenant_admin_read` | `aether_app` SELECT | owner/admin ของ tenant ปัจจุบัน เห็นเฉพาะ identity ที่มี membership ใน tenant นี้ (`ListMembers`, read-back หลัง `AddMember`) · `is_tenant_admin()` อยู่ใน scalar sub-select จึงเป็น InitPlan ครั้งเดียวต่อ statement |
+| `users_insert` | `aether_app` INSERT | `id = identity.user_id()` **เท่านั้น** — สมัคร/bootstrap ซึ่ง transaction รันเป็น id ใหม่อยู่แล้ว · admin สร้างสมาชิกผ่าน `identity.create_member_identity` เท่านั้น ไม่ใช่ INSERT ตรง |
+
+ไม่มี policy UPDATE/DELETE และ runtime ไม่มีสิทธิ์ทั้งสองอย่าง · **สิทธิ์ SELECT เป็นรายคอลัมน์** `id, email, name, created_at` เท่านั้น — `aether_app` อ่าน `password_hash` ตรง ๆ ไม่ได้เลยแม้แถวของตัวเอง (42501)
+
+`postgres.CheckRuntimeRole` (เรียกจาก `postgres.Open()` ตอน startup) ไม่ยอมเปิดถ้า role ของ API มีสิทธิ์พิเศษหรือเป็นสมาชิก `aether_owner` · ถ้าตารางใดใน schema `core` **หรือ** `identity` (รวม partitioned parent `relkind='p'`) ไม่ได้เปิด RLS + FORCE · หรือถ้า `has_column_privilege(current_user,'identity.users','password_hash','SELECT')` เป็นจริง · หรือถ้า runtime มีสิทธิ์ UPDATE (ทั้งตารางหรือคอลัมน์ใดก็ตาม) หรือ DELETE บน `identity.users`
+
+login ตรวจรหัสผ่านใน Go แล้วค่อยเปิด session · `StartSession` อ่าน `identity.own_password_hash()` อีกครั้งใน transaction ของตัวเองและเทียบกับ hash ที่ `Service.Login` ตรวจผ่าน ถ้ารหัสผ่านถูกเปลี่ยนหรือ reset ในระหว่างนั้นจะได้ Unauthorized
+
+ทางที่ RLS ให้ไม่ได้ ถูกยกให้ SECURITY DEFINER (ตัวใหม่และตัวที่แก้ใน `00035` ใช้ `search_path = pg_catalog, pg_temp`, `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO aether_app`)
 
 | ฟังก์ชัน | ทำอะไร | ป้องกันอย่างไร |
 |---|---|---|
-| `core.identity_membership_count(uuid)` | จำนวน workspace ที่ identity นี้อยู่ (ทุก tenant) | ต้องเป็น admin ของ tenant ปัจจุบัน · คืนเป็น "จำนวน" เท่านั้น และตัวเลขไม่เคยออกจาก server — คำตอบทาง HTTP คือ 409 ธรรมดา |
+| `identity.login_candidate(text)` | id/email/name/password_hash ของอีเมลนี้ สำหรับ login (`UserByEmail`) ซึ่งทำงานก่อนรู้ตัวตน | ค้นแบบตรงตัวหนึ่งแถว ไล่ทั้งตารางไม่ได้ · **แต่คืน hash** ดูข้อจำกัดด้านล่าง |
+| `identity.any_user_exists()` | มีบัญชีใดอยู่แล้วหรือยัง (boolean) | ใช้บังคับ bootstrap ครั้งเดียวใน `CreateAccount` · RLS จะทำให้ `count(*)` เห็นแค่ตัวเองและนับได้ 0 เสมอ จึงต้องมาทางนี้ |
+| `identity.own_password_hash()` | hash ของ `identity.user_id()` | ใช้ใน `ChangeOwnPassword` เพื่อตรวจรหัสเดิม (Argon2id ยังอยู่ใน Go) · ไม่มีตัวตน → NULL |
+| `identity.create_member_identity(uuid, text, text, text, text)` | เพิ่มสมาชิกแบบ atomic: สร้าง identity ใหม่ หรือรับ identity ที่ไม่อยู่ workspace ใดเลยกลับมา (adopt) แล้ว insert membership · ผลคือ `created` / `adopted` / `self` / `taken` / `refused` | ผู้เรียกต้องเป็น owner/admin ของ tenant ปัจจุบัน และเฉพาะ owner เพิ่ม owner ได้ (ไม่งั้น `refused`) · **ล็อกแถว identity `FOR UPDATE` ก่อนนับ membership** และเป็น VOLATILE จึงนับด้วย snapshot ใหม่หลังรอล็อก: สอง workspace adopt คนเดียวกันพร้อมกัน คนที่สองได้ `taken` · อีเมลใหม่ที่สร้างพร้อมกันชนกันที่ unique index (`ON CONFLICT DO NOTHING` → `taken`) · adopt แล้ว **แทนชื่อและรหัสผ่านด้วยค่าที่ admin ใส่** ไม่มีอะไรของบัญชีเดิมโผล่ออกมา · `taken` ไม่คืน id และไม่เขียนอะไร |
+| `core.identity_membership_count(uuid)` | จำนวน workspace ที่ identity นี้อยู่ (ทุก tenant) | ต้องเป็น admin **และ identity ต้องเป็นสมาชิกของ tenant ปัจจุบัน** ไม่งั้นคืน -1 (ตั้งแต่ `00035`) · ใช้ใน `ResetMemberPassword` เท่านั้น · ตัวเลขไม่เคยออกจาก server |
 | `identity.tenant_last_seen()` | เวลา session ล่าสุดของสมาชิกแต่ละคน | ต้องเป็น admin · จำกัดที่ `core.tenant_id()` |
 | `identity.purge_tenant_sessions(uuid)` | ลบ session + refresh token ของสมาชิกใน tenant นี้ | ต้องเป็น admin · ห้ามเป้าหมายเป็นตัวเอง · จำกัดที่ `core.tenant_id()` · **ถ้าเป้าหมายเป็น owner ผู้เรียกต้องเป็น owner** |
-| `identity.set_member_password(uuid, text)` | ตั้งรหัสผ่านใหม่ + ตั้ง must_change_password | ต้องเป็น admin · ห้ามเป้าหมายเป็นตัวเอง · เป้าหมายต้องอยู่ tenant นี้ **และไม่มีที่อื่น** · **ถ้าเป้าหมายเป็น owner ผู้เรียกต้องเป็น owner** |
+| `identity.set_member_password(uuid, text)` | ตั้งรหัสผ่านใหม่ + ตั้ง must_change_password | ต้องเป็น admin · ห้ามเป้าหมายเป็นตัวเอง · เป้าหมายต้องอยู่ tenant นี้ **และไม่มีที่อื่น** · **ถ้าเป้าหมายเป็น owner ผู้เรียกต้องเป็น owner** · ตั้งแต่ `00035` ล็อกแถว identity `FOR UPDATE` ก่อนนับ จึงไม่สลับกับการ adopt ที่เกิดพร้อมกัน |
 | `identity.change_own_password(text)` | เปลี่ยนรหัสผ่านตัวเอง + ล้าง must_change_password | เขียนเฉพาะแถวของ `identity.user_id()` · ผู้เรียกตรวจรหัสผ่านเดิมแล้วใน transaction เดียวกัน |
 
 กฎ "owner แตะได้เฉพาะ owner" ถูกย้ายลงมาอยู่ใน SQL ด้วย (migration `00022`) ไม่ใช่อยู่แค่ชั้น Go: ถ้าวันหนึ่ง handler ลืมตรวจ หรือมี path ใหม่เรียกฟังก์ชันตรง ๆ ฐานข้อมูลยังปฏิเสธเอง · integration test เรียกสองฟังก์ชันนี้ผ่าน connection ของ `aether_app` ตรง ๆ ในฐานะ admin เพื่อพิสูจน์ข้อนี้โดยไม่ผ่าน route
 
-### ทำไม `identity.users` ยังไม่เปิด RLS
+`00035` ยังเปลี่ยน policy สมาชิกของ `00019` (`tenant_admin_membership_*` และ `tenant_admin_member_projects`) ให้เรียก `(SELECT core.is_tenant_admin())` เป็น InitPlan ครั้งเดียวต่อ statement แทนต่อแถว
 
-เปิดแล้วจะพังสี่จุดที่ต่างกัน และแต่ละจุดต้องมี SECURITY DEFINER มารับแทน:
+**สิ่งที่ RLS นี้ได้ และไม่ได้**
 
-1. `UserByEmail` (login) ทำงาน **นอก transaction** จึงไม่มี `app.user_id`/`app.tenant_id` เลย policy แบบ `id = identity.user_id()` จะทำให้ login คืนศูนย์แถวเสมอ · ต้องเปลี่ยนเป็นฟังก์ชัน definer ที่รับอีเมลแล้วคืน id/name/password_hash ซึ่ง **แรงเท่าเดิมทุกประการ** (นั่นคือสิ่งที่ login ทำอยู่) จึงไม่ได้ปิดช่องอะไรเพิ่ม
-2. `CreateAccount` นับ `count(*) FROM identity.users` เพื่อบังคับว่า bootstrap ทำได้ครั้งเดียว · ถ้า policy ตัดให้เหลือแถวตัวเอง ตัวนับจะเป็น 0 เสมอ และ `admin bootstrap` จะสร้าง owner ซ้ำได้ — เป็นการ *ลด* ความปลอดภัย
-3. `ListMembers` / `MemberSelf` join `identity.users` เพื่อเอาอีเมลกับชื่อ · ต้องมีฟังก์ชัน definer คืนสมาชิกของ tenant ปัจจุบัน
-4. `AddMember` ค้นอีเมลแบบตรงตัวหนึ่งแถว · ต้องมีฟังก์ชัน definer อีกตัว
+- ได้: bug ในชั้น query เช่นลืม `WHERE`, `SELECT *` หรือ join ผิดทิศ ไม่ทำให้ hash หรือรายชื่อคนของ workspace อื่นหลุดอีกแล้ว เพราะ runtime ไม่มีสิทธิ์คอลัมน์ hash และเห็นเฉพาะแถวที่ policy อนุญาต
+- ไม่ได้: `identity.login_candidate` ยังคืน hash ให้ใครก็ได้ที่รัน SQL เป็น `aether_app` และรู้อีเมล (ส่วน `set_member_password` และ `own_password_hash` ทำงานตาม id) · ผู้ที่ได้ SQL ในนาม `aether_app` จึงยังดึง hash ของอีเมลที่รู้ได้ทีละตัว — **ไม่ได้ "แรงเท่า route login"** เพราะ route login ไม่เคยคืน hash · งานต่อที่วางไว้: role สำหรับ login โดยเฉพาะ (`aether_auth`) บน pool แยก ให้เป็น role เดียวที่ EXECUTE `login_candidate` ได้ (แตะ `infra/` จึงทำหลัง PITR)
 
-รวมแล้วคือการรื้อเส้นทาง authentication ซึ่งเป็นโค้ดที่เสี่ยงที่สุดในระบบ เพื่อแลกกับการปิด `SELECT * FROM identity.users` อย่างเดียว ขณะที่ช่องที่ใหญ่ที่สุด (อีเมล → password hash) ยังต้องเปิดไว้ให้ login อยู่ดี จึงเลือกไม่ทำในรอบนี้ และบันทึกไว้ว่าอะไรกันอยู่ตอนนี้:
+**การไล่ถามอีเมล (enumeration) ผ่าน `POST /api/v1/members`** ยังเหลือสัญญาณอยู่หนึ่งอย่าง: อีเมลที่ยังไม่มีบัญชี (หรือไม่อยู่ workspace ใดแล้ว) ได้ **201** อีเมลที่อยู่ workspace อื่นได้ **409** · สิ่งที่ลดความเสี่ยง: route นี้ใช้ได้เฉพาะ owner/admin · ถูกจำกัดด้วย `domain.MaxMembers` ต่อ workspace (201 ทุกครั้งกินโควตา และต้องลบสมาชิกออกเองทีละคน) · 409 ไม่มีรายละเอียดและไม่คืน id · ทุกครั้งที่ถูกปฏิเสธจะบันทึกใน `core.audit_logs` เป็น `member.add_refused:<เหตุผล>` — `taken` (อยู่ workspace อื่นหรืออยู่ที่นี่แล้ว), `self`, `role` (ให้ role ที่ไม่มีสิทธิ์ให้) หรือ `limit` (ครบ `MaxMembers`) · `audit_logs` ไม่มีคอลัมน์รายละเอียด เหตุผลจึงอยู่ท้ายชื่อ action · target เป็น nil UUID ไม่ระบุ identity จึงเห็นร่องรอยการไล่ถาม · **ผู้เรียกที่ถูกปฏิเสธครบ 20 ครั้งใน 24 ชั่วโมง** (`postgres.AddRefusalLimit`, นับต่อ actor ต่อ workspace ด้วย partial index `audit_logs_add_refused`) จะได้ **429** ก่อนระบบตรวจอะไรต่อ และครั้งที่ได้ 429 ไม่ถูกนับเพิ่ม · adopt แล้วคืนและเก็บชื่อที่ admin ใส่ ไม่ใช่ชื่อเดิมของบัญชี
 
-- ไม่มี API route ใดอ่าน `identity.users` ตรง ๆ · เข้าถึงได้เฉพาะผ่าน repository
-- runtime มีแค่ `SELECT` และ `INSERT` — ไม่มี `UPDATE`/`DELETE` เลย การเขียนรหัสผ่านทุกกรณีไปผ่าน definer สองตัวข้างบนซึ่งตรวจสิทธิ์เอง
-- `password_hash` ไม่เคยถูก serialize (`json:"-"` ใน `domain.User`)
-- รายชื่อสมาชิกถูกขับด้วย `core.memberships` (ซึ่ง RLS ตัดไว้ที่ tenant ปัจจุบันแล้ว) ไม่ใช่การไล่อ่าน `identity.users`
-- `POST /api/v1/members` ปฏิเสธอีเมลที่ identity ยังผูกกับ workspace ใดอยู่ จึงไม่กลายเป็นเครื่องมือไล่ถามว่าอีเมลไหนมีบัญชี (ดู §4)
+สิ่งที่ `backend/tests/identity_rls_test.go` พิสูจน์ผ่าน connection ของ `aether_app` ตรง ๆ:
 
-Argon2id ยังอยู่ใน Go เท่านั้น `ChangeOwnPassword` ส่ง callback ตรวจ hash เข้าไปใน transaction จึงไม่มี hash หลุดออกจาก repository และไม่มีการแฮชใน SQL
+- owner ของ tenant A เห็น identity ของ A พอดี (ค้นอีเมลของ B ได้ 0 แถว) · viewer เห็นแค่ตัวเอง · ไม่มี context เห็น 0 แถว
+- `SELECT password_hash`, `UPDATE identity.users` และ INSERT identity ที่ไม่ใช่ตัวเอง (แม้เป็น owner) ได้ 42501
+- non-admin เรียก `create_member_identity` ได้ `refused` · อีเมลของ workspace อื่นได้ `taken` ไม่มี id
+- สอง transaction adopt คนเดียวกันพร้อมกัน คนที่สองรอล็อกแล้วได้ `taken` และชื่อที่เก็บเป็นชื่อที่ใส่ใหม่ (ลองเอา `FOR UPDATE` ออกแล้ว test นี้ fail)
+- `set_member_password` ถือล็อกแถว identity (probe `FOR UPDATE NOWAIT` ได้ 55P03) · reset รหัสของสมาชิกที่อยู่ workspace เดียวได้ 204 และของ identity ที่แชร์ได้ 409 · `identity_membership_count` ของคนนอก workspace ได้ -1
+- การปฏิเสธถูก audit เป็น `member.add_refused:taken|self|role` โดยไม่ระบุ identity · ครบ 20 ครั้งใน 24 ชั่วโมงได้ 429 เฉพาะ actor คนนั้น และพ้นหน้าต่าง 24 ชั่วโมงแล้วใช้ได้อีก
+- `create_member_identity` เองได้ `refused` เมื่อ admin ขอ `owner`, role `root` หรืออาร์กิวเมนต์ใดเป็น NULL
+- ในฐานะ `aether_app`: admin/owner INSERT membership ตรง ๆ ไม่ได้ · ใส่ตัวเองเข้า workspace อื่นที่มีสมาชิกแล้วไม่ได้ · admin ตั้ง `role='owner'` ไม่ได้ (42501) · admin แก้/ลบแถว owner และใครก็แก้แถวของตัวเองไม่ได้ (0 แถว) · ส่วนที่ Go อนุญาต (admin เปลี่ยน role คนที่ไม่ใช่ owner, owner ตั้ง owner ใหม่และลด owner อื่น, สมัครบัญชีใหม่) ยังทำได้
+- `StartSession` ที่ได้ hash ไม่ตรงกับที่เก็บอยู่ (เปลี่ยนไปแล้วหรือว่าง) ได้ Unauthorized
+- login, refresh, `/me`, `/members`, เปลี่ยนรหัสตัวเอง ยังทำงาน
+- `CheckRuntimeRole` ปฏิเสธเมื่อ `identity.users` ไม่ FORCE RLS / ไม่เปิด RLS / runtime อ่าน `password_hash` ได้ / มี UPDATE (ตารางหรือคอลัมน์) หรือ DELETE · แต่ละกรณีจัดฉากใน transaction ของ admin ภายใต้ `SET LOCAL ROLE aether_app` แล้ว rollback ฐานข้อมูลทดสอบที่ใช้ร่วมกันจึงไม่ถูกแก้ค้างแม้ test ตายกลางทาง
+
+Argon2id ยังอยู่ใน Go เท่านั้น `ChangeOwnPassword` ส่ง callback ตรวจ hash เข้าไปใน transaction จึงไม่มี hash หลุดออกจาก repository และไม่มีการแฮชใน SQL · `password_hash` ไม่เคยถูก serialize (`json:"-"` ใน `domain.User`)
+
+ย้อนกลับ: `00035` มี Down ที่คืน grant SELECT ทั้งตาราง คืน body ของ `set_member_password`/`identity_membership_count` ตาม `00022` และ policy สมาชิกตาม `00001`/`00019` (สร้าง `tenant_admin_membership_insert` คืน) ลบ index `audit_logs_add_refused` ลบ policy/ฟังก์ชันใหม่ (รวม `is_tenant_owner`, `tenant_unclaimed`) และปิด RLS · ต้องย้อนโค้ด API ไปรุ่นก่อนหน้าด้วย เพราะโค้ดใหม่เรียกฟังก์ชันที่ Down ลบทิ้ง
 
 ## 3. ตารางทั้งหมดและวิธี scope
 
@@ -208,7 +246,7 @@ policy ที่เพิ่มเข้าไปทำให้ query **ให�
 
 ### ทำไมถึงห้ามผูก identity ของ workspace อื่น
 
-login เลือก workspace ให้อัตโนมัติเมื่อ identity มี membership เพียงอันเดียว การแอบเพิ่ม membership ที่สองให้บัญชีของคนแปลกหน้าจึงเปลี่ยนว่า "ครั้งหน้าเขา login ไปโผล่ที่ไหน" — owner ที่ไม่หวังดีล็อกคนอื่นออกจากองค์กรของตัวเองได้โดยไม่ต้องรู้รหัสผ่านเลย และคำตอบที่แยกแยะได้ (`existing_identity`) ก็กลายเป็นเครื่องมือถามทั้งแพลตฟอร์มว่า "อีเมลนี้มีบัญชีไหม" · ตอนนี้ทั้งสองกรณีตอบ 409 เหมือนกับการเพิ่มคนซ้ำ ไม่มี `detail` ไม่มีอะไรเพิ่ม · ถ้าคนๆ นั้นควรอยู่สองที่จริง ต้องใช้คนละอีเมล จนกว่าจะมีระบบคำเชิญที่เจ้าของบัญชีกดยอมรับเอง
+login เลือก workspace ให้อัตโนมัติเมื่อ identity มี membership เพียงอันเดียว การแอบเพิ่ม membership ที่สองให้บัญชีของคนแปลกหน้าจึงเปลี่ยนว่า "ครั้งหน้าเขา login ไปโผล่ที่ไหน" — owner ที่ไม่หวังดีล็อกคนอื่นออกจากองค์กรของตัวเองได้โดยไม่ต้องรู้รหัสผ่านเลย และคำตอบที่แยกแยะได้ (`existing_identity`) ก็กลายเป็นเครื่องมือถามทั้งแพลตฟอร์มว่า "อีเมลนี้มีบัญชีไหม" · ตอนนี้ทั้งสองกรณีตอบ 409 เหมือนกับการเพิ่มคนซ้ำ ไม่มี `detail` ไม่มีอะไรเพิ่ม · สัญญาณที่ยังเหลือคือ 201 กับ 409 (อีเมลว่างหรือถูกใช้อยู่) ซึ่งจำกัดไว้ที่ owner/admin, `MaxMembers`, ถูก audit เป็น `member.add_refused:*` และได้ 429 เมื่อถูกปฏิเสธครบ 20 ครั้งใน 24 ชั่วโมง (§2.6) · ถ้าคนๆ นั้นควรอยู่สองที่จริง ต้องใช้คนละอีเมล จนกว่าจะมีระบบคำเชิญที่เจ้าของบัญชีกดยอมรับเอง
 
 ### must_change_password ถูกบังคับ ไม่ใช่แค่บอก
 
@@ -239,9 +277,9 @@ login เลือก workspace ให้อัตโนมัติเมื่
 2. **ไม่มีการส่งอีเมล จึงไม่มีคำเชิญและไม่มี reset ด้วยตัวเอง** owner ต้องส่งรหัสผ่านแรกให้เจ้าตัวเอง ถ้าสมาชิกลืมรหัสผ่าน owner ต้องตั้งให้ใหม่และส่งให้ใหม่
 3. **หนึ่งคนหนึ่ง role ต่อ workspace** ไม่มี role รายโปรเจค `core.member_projects` จำกัดว่า *เห็นอะไร* ไม่ได้เปลี่ยนว่า *ทำอะไรได้* เช่น operator ที่ถูกจำกัดไว้โปรเจคเดียว ยังคงปิดการแจ้งเตือนได้ทุกรายการ **ที่เขาเห็น**
 4. **`/api/v1/studio/sources` ยังเป็น owner/admin เท่านั้น** (กฎเดิมก่อน migration นี้) สมาชิกที่ถูกจำกัดจึงได้ 403 ไม่ใช่ผลลัพธ์ที่ถูกตัดให้แคบลง · ข้อมูลเบื้องหลัง (`ListPackets`, `StreamHistory`) ถูก scope แล้วและมี test ยืนยัน · `/api/v1/live` เปิดให้สมาชิกทุกระดับแล้ว และถูกตัดด้วย RLS ตามปกติ
-5. **`identity.users` ยังไม่เปิด RLS** เหตุผลและสิ่งที่กันอยู่ตอนนี้อยู่ใน §2.6
+5. **`login_candidate` ยังคืน hash ให้ SQL ในนาม `aether_app`** `identity.users` เปิด RLS แล้วตั้งแต่ `00035` (§2.6) แต่ login ต้องได้ hash ก่อนรู้ตัวตน ใครที่รัน SQL เป็น `aether_app` ได้จึงยังดึง hash ของอีเมลที่รู้ได้ทีละตัว · งานต่อ: role `aether_auth` บน pool แยกสำหรับ login · และ `POST /api/v1/members` ยังบอกได้ว่าอีเมลอยู่ workspace อื่น (409) หรือไม่ (201) โดยจำกัดไว้ที่ owner/admin, `MaxMembers`, audit `member.add_refused:*` และ 429 ที่ 20 ครั้งต่อ 24 ชั่วโมง
 6. **การเปลี่ยนรหัสผ่านเพิกถอน session ในทุก workspace** เพราะรหัสผ่านเป็นของ identity ไม่ใช่ของ workspace · ส่วน `must_change_password` เป็นของ membership จึงถูกล้างเฉพาะ workspace ที่เปลี่ยน
-7. **ตารางใหม่ต้องเพิ่ม policy เอง** `postgres.Open()` ตรวจตอน startup ว่าทุกตารางใน `core` เปิด FORCE RLS แต่ไม่ได้ตรวจว่ามี `project_scope` ครบ · migration ที่สร้างตาราง tenant ใหม่ต้องเพิ่มแถวในตาราง §3 และเพิ่ม policy ด้วย
+7. **ตารางใหม่ต้องเพิ่ม policy เอง** `postgres.Open()` ตรวจตอน startup ว่าทุกตารางใน `core` และ `identity` เปิด FORCE RLS แต่ไม่ได้ตรวจว่ามี `project_scope` ครบ · migration ที่สร้างตาราง tenant ใหม่ต้องเพิ่มแถวในตาราง §3 และเพิ่ม policy ด้วย
 
 ## 7. คู่มือผู้ดูแล: เพิ่มช่างที่ให้เห็นไซต์เดียว
 
@@ -260,7 +298,7 @@ login เลือก workspace ให้อัตโนมัติเมื่
 7. **ตรวจว่าใช้ได้จริง** ให้ช่างเข้าระบบแล้วดูว่าหน้า "เชื่อมต่ออุปกรณ์" มีเฉพาะ gateway ของโรงพยาบาล A การแจ้งเตือนของไซต์อื่นจะไม่ขึ้นเลย
 8. **เมื่อจบงาน** กลับมาที่ "ทีมและสิทธิ์" แล้วกดปุ่มถังขยะเพื่อนำออก เขาจะหลุดจากระบบทันที ไม่ต้องรอ token หมดอายุ ข้อมูลอุปกรณ์และประวัติทั้งหมดยังอยู่ครบ
 
-**ถ้าระบบปฏิเสธด้วย "เพิ่มอีเมลนี้ไม่ได้"** แปลว่าอีเมลนั้นมีบัญชี Aether ที่ผูกกับ workspace อื่นอยู่แล้ว (หรือเป็นสมาชิกที่นี่อยู่แล้ว) ระบบจะไม่บอกว่ากรณีไหน เพื่อไม่ให้หน้านี้กลายเป็นเครื่องไล่ถามว่าใครมีบัญชีบ้าง · ให้ขออีเมลอื่นของเขา หรือถ้าเขาเคยอยู่ใน workspace นี้แล้วถูกถอดออกไป การเพิ่มกลับเข้ามาจะทำงานตามปกติ และเขาจะได้รหัสผ่านแรกอันใหม่
+**ถ้าระบบปฏิเสธด้วย "เพิ่มอีเมลนี้ไม่ได้"** แปลว่าอีเมลนั้นมีบัญชี Aether ที่ผูกกับ workspace อื่นอยู่แล้ว (หรือเป็นสมาชิกที่นี่อยู่แล้ว) ระบบจะไม่บอกว่ากรณีไหน และบันทึกการปฏิเสธทุกครั้งไว้ใน audit log เพื่อลดการใช้หน้านี้ไล่ถามว่าใครมีบัญชีบ้าง · ให้ขออีเมลอื่นของเขา หรือถ้าเขาเคยอยู่ใน workspace นี้แล้วถูกถอดออกไป การเพิ่มกลับเข้ามาจะทำงานตามปกติ และเขาจะได้รหัสผ่านแรกอันใหม่
 
 ## Module permissions and scoped administrators (2026-09-22)
 

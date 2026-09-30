@@ -84,7 +84,9 @@ type Repository interface {
 
 	CreateAccount(context.Context, domain.User, string, string, bool) error
 	UserByEmail(context.Context, string) (domain.User, error)
-	StartSession(context.Context, domain.Session, string) (domain.Session, error)
+	// StartSession takes the refresh digest and the password hash the caller verified; it refuses when the
+	// stored hash changed in between.
+	StartSession(ctx context.Context, s domain.Session, digest, verifiedHash string) (domain.Session, error)
 	RotateRefresh(context.Context, string, string, string, time.Time) (domain.Session, error)
 	Authorize(context.Context, domain.Principal) (domain.Principal, error)
 	RevokeSession(context.Context, domain.Principal) error

@@ -3,6 +3,8 @@ package postgres
 import (
 	"aether/backend/internal/adapters/minew"
 	"context"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,25 +69,50 @@ func Open(dsn string) (*Repository, error) {
 	if e = sqlDB.PingContext(ctx); e != nil {
 		return nil, e
 	}
-	var unsafe bool
-	e = db.Raw(`SELECT rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR pg_has_role(current_user,'aether_owner','MEMBER') FROM pg_roles WHERE rolname=current_user`).Scan(&unsafe).Error
-	if e != nil || unsafe {
+	if e = CheckRuntimeRole(ctx, sqlDB); e != nil {
 		sqlDB.Close()
-		return nil, errors.New("API database role must be unprivileged and not an owner")
-	}
-	var count int64
-	if e := db.Raw(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core' AND c.relkind='r'`).Scan(&count).Error; e != nil || count < 8 {
-		sqlDB.Close()
-		return nil, errors.New("database migrations required")
-	}
-	var bad int64
-	e = db.Raw(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core' AND c.relkind='r' AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)`).Scan(&bad).Error
-	if e != nil || bad > 0 {
-		sqlDB.Close()
-		return nil, errors.New("RLS is required on every tenant table")
+		return nil, e
 	}
 	return &Repository{db: db, opts: Options{DiscoveryLimit: 100}}, nil
 }
+
+// Queryer is what CheckRuntimeRole needs: *sql.DB and *sql.Tx both satisfy it.
+type Queryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// CheckRuntimeRole refuses a database the API must not run against: a privileged role, missing migrations,
+// a core or identity table without FORCE RLS, or a role that can still read identity.users.password_hash or
+// update or delete identities.
+// Open runs it on the pool; tests run it inside a rolled-back transaction under SET LOCAL ROLE.
+func CheckRuntimeRole(ctx context.Context, q Queryer) error {
+	var unsafe bool
+	e := q.QueryRowContext(ctx, `SELECT rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR pg_has_role(current_user,'aether_owner','MEMBER') FROM pg_roles WHERE rolname=current_user`).Scan(&unsafe)
+	if e != nil || unsafe {
+		return errors.New("API database role must be unprivileged and not an owner")
+	}
+	var count int64
+	if e := q.QueryRowContext(ctx, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core' AND c.relkind IN ('r','p')`).Scan(&count); e != nil || count < 8 {
+		return errors.New("database migrations required")
+	}
+	// Every table of both schemas, partitioned parents included; identity.users joined the list in 00035.
+	var bad int64
+	e = q.QueryRowContext(ctx, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('core','identity') AND c.relkind IN ('r','p') AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity)`).Scan(&bad)
+	if e != nil || bad > 0 {
+		return errors.New("RLS is required on every tenant table")
+	}
+	// Hashes are reached only through the definer functions of 00035, never by a column grant, and identities
+	// are rewritten only by those functions: no UPDATE (table or any column) and no DELETE for the runtime.
+	var hashes, writes bool
+	if e := q.QueryRowContext(ctx, `SELECT has_column_privilege(current_user,'identity.users','password_hash','SELECT')`).Scan(&hashes); e != nil || hashes {
+		return errors.New("API database role must not read identity.users.password_hash")
+	}
+	if e := q.QueryRowContext(ctx, `SELECT has_any_column_privilege(current_user,'identity.users','UPDATE') OR has_table_privilege(current_user,'identity.users','DELETE')`).Scan(&writes); e != nil || writes {
+		return errors.New("API database role must not update or delete identity.users")
+	}
+	return nil
+}
+
 func (r *Repository) Close() error {
 	db, e := r.db.DB()
 	if e != nil {
@@ -161,11 +188,12 @@ func (r *Repository) CreateAccount(ctx context.Context, u domain.User, tenant, n
 			if e := tx.Exec(`SELECT pg_advisory_xact_lock(42870111)`).Error; e != nil {
 				return e
 			}
-			var count int64
-			if e := tx.Raw(`SELECT count(*) FROM identity.users`).Scan(&count).Error; e != nil {
+			// RLS shows the runtime only its own identity, so the global question goes through a definer.
+			var exists bool
+			if e := tx.Raw(`SELECT identity.any_user_exists()`).Scan(&exists).Error; e != nil {
 				return e
 			}
-			if count != 0 {
+			if exists {
 				return domain.ErrConflict
 			}
 		}
@@ -188,7 +216,8 @@ func (r *Repository) CreateAccount(ctx context.Context, u domain.User, tenant, n
 }
 func (r *Repository) UserByEmail(ctx context.Context, email string) (domain.User, error) {
 	var u domain.User
-	res := r.db.WithContext(ctx).Raw(`SELECT id,email,name,password_hash FROM identity.users WHERE email=?`, email).Scan(&u)
+	// Login runs before any identity is known; the definer function is the only path from an email to a hash.
+	res := r.db.WithContext(ctx).Raw(`SELECT id,email,name,password_hash FROM identity.login_candidate(?)`, email).Scan(&u)
 	if res.Error != nil {
 		return u, res.Error
 	}
@@ -197,8 +226,19 @@ func (r *Repository) UserByEmail(ctx context.Context, email string) (domain.User
 	}
 	return u, nil
 }
-func (r *Repository) StartSession(ctx context.Context, s domain.Session, digest string) (domain.Session, error) {
+
+// StartSession opens a session for a password the service has just verified against verifiedHash. The hash
+// is read again inside this transaction: a password changed or reset between the check and here refuses.
+func (r *Repository) StartSession(ctx context.Context, s domain.Session, digest, verifiedHash string) (domain.Session, error) {
 	e := r.tx(ctx, s.UserID, s.TenantID, func(tx *gorm.DB) error {
+		var current []struct{ Hash *string }
+		if e := tx.Raw(`SELECT identity.own_password_hash() AS hash`).Scan(&current).Error; e != nil {
+			return e
+		}
+		if len(current) != 1 || current[0].Hash == nil || verifiedHash == "" ||
+			subtle.ConstantTimeCompare([]byte(*current[0].Hash), []byte(verifiedHash)) != 1 {
+			return domain.ErrUnauthorized
+		}
 		var memberships []struct{ TenantID string }
 		if e := tx.Raw(`SELECT tenant_id FROM core.memberships WHERE user_id=? ORDER BY tenant_id`, s.UserID).Scan(&memberships).Error; e != nil {
 			return e

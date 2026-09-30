@@ -125,7 +125,7 @@ func (s *Service) Login(ctx context.Context, email, password, tenant string) (Au
 	}
 	now := time.Now().UTC()
 	refresh := security.NewRefresh(u.ID)
-	session, e := s.Repo.StartSession(ctx, domain.Session{ID: uuid.NewString(), UserID: u.ID, TenantID: tenant, ExpiresAt: now.Add(30 * 24 * time.Hour)}, security.Digest(refresh))
+	session, e := s.Repo.StartSession(ctx, domain.Session{ID: uuid.NewString(), UserID: u.ID, TenantID: tenant, ExpiresAt: now.Add(30 * 24 * time.Hour)}, security.Digest(refresh), u.PasswordHash)
 	if e != nil {
 		return AuthResult{}, e
 	}

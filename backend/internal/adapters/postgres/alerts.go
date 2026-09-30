@@ -735,6 +735,16 @@ func backoff(attempts int) time.Duration {
 func (r *Repository) ClaimNotifications(ctx context.Context, tenant string, limit int, now time.Time) ([]domain.NotificationJob, error) {
 	out := []domain.NotificationJob{}
 	e := r.tx(ctx, "", tenant, func(tx *gorm.DB) error {
+		// A demo workspace (cmd/demo-twin) is fictional people and sensors: its alerts are never delivered, whatever
+		// channels someone adds to it (the channel test button still sends). Notifications stay queued and are pruned
+		// with the alerts.
+		var demo bool
+		if e := tx.Raw(`SELECT coalesce((SELECT demo FROM core.tenants WHERE id=?),false)`, tenant).Scan(&demo).Error; e != nil {
+			return e
+		}
+		if demo {
+			return nil
+		}
 		var claimed []struct {
 			ID, AlertID string
 			ChannelID   *string

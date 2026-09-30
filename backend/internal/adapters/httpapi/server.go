@@ -189,6 +189,11 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 		if !strings.HasPrefix(raw, "Bearer ") || len(raw) > 4096 {
 			return domain.ErrUnauthorized
 		}
+		// A wall TV's display token is valid only on /api/v1/kiosk and /ws (docs/platform/display.md): every
+		// member route refuses it outright, so no route can be reached with it by accident.
+		if app.IsDisplayToken(strings.TrimPrefix(raw, "Bearer ")) {
+			return c.Status(403).JSON(fiber.Map{"error": "forbidden", "detail": "display_token", "request_id": c.GetRespHeader("X-Request-ID")})
+		}
 		p, e := service.Authenticate(c.Context(), strings.TrimPrefix(raw, "Bearer "))
 		if e != nil {
 			return e
@@ -214,7 +219,10 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	// Before the secured group: the login screen links to the privacy notice.
 	noticeRoutes(api, cfg.PrivacyNoticeURL)
 	reads := newReadLog(service)
+	// Before the secured group, whose middleware would otherwise take every /api/v1 path first.
+	kioskRoutes(api, service, reads)
 	secured := api.Group("/api/v1", authenticate, accessGate(service), reads.middleware)
+	displayRoutes(secured, service)
 	privacyRoutes(secured, service, reads)
 	memberAccessRoutes(secured, service)
 	studioRoutes(secured, service)
@@ -227,6 +235,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	memberRoutes(secured, service, cfg.Mode, cfg.PrivacyNoticeURL)
 	automationRoutes(secured, service, cfg.AutomationCommands, cfg.AlertsShadow)
 	floorplanRoutes(secured, service)
+	twinRoutes(secured, service)
 	topologyRoutes(secured, service)
 	systemRoutes(secured, cfg.OpsStatusFile, cfg.OpsStatusTenant)
 	assetRoutes(secured, service)

@@ -7193,6 +7193,893 @@
      }
     ]
    }
+  },
+  "/api/v1/twin/sites/{id}/state": {
+   "get": {
+    "summary": "Digital twin: live state of one building (placed devices with their latest values, worn tags per zone as the people mode allows, open alerts). Floor plan module; every read is in the access log.",
+    "operationId": "get__api_v1_twin_sites_id_state",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "people",
+      "in": "query",
+      "required": false,
+      "description": "counts (default: headcount per gateway, no identity), tracks (per person a pseudonym drawn per response, so it never matches across responses; zone; times rounded to the minute; sorted by pseudonym) or named (device names and exact times; demo workspaces and owner/admin/operator only until twin settings exist). The server may clamp the mode; the response says which one it used. Outside named, a personal tag (roaming, worn or button profile, or unknown) placed on the plan has a generic name and no ext, and alerts about personal tags have titles that name nobody.",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "counts",
+        "tracks",
+        "named"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "server_time",
+          "site_id",
+          "demo",
+          "layout_revision",
+          "devices",
+          "presence",
+          "alerts"
+         ],
+         "properties": {
+          "server_time": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "site_id": {
+           "type": "string"
+          },
+          "demo": {
+           "type": "boolean"
+          },
+          "layout_revision": {
+           "type": "object",
+           "additionalProperties": {
+            "type": "integer"
+           }
+          },
+          "devices": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string"
+             },
+             "kind": {
+              "type": "string",
+              "enum": [
+               "gateway",
+               "device"
+              ]
+             },
+             "ext": {
+              "type": "string",
+              "description": "The tag's external id; absent for a personal tag outside named mode."
+             },
+             "name": {
+              "type": "string",
+              "description": "Registration name; 'แท็กบุคคล' for a personal tag outside named mode."
+             },
+             "profile": {
+              "type": "string"
+             },
+             "floor_id": {
+              "type": "string"
+             },
+             "x": {
+              "type": "number"
+             },
+             "y": {
+              "type": "number"
+             },
+             "z": {
+              "type": "number"
+             },
+             "online": {
+              "type": "boolean"
+             },
+             "last_at": {
+              "type": [
+               "string",
+               "null"
+              ],
+              "format": "date-time"
+             },
+             "t": {
+              "type": "number"
+             },
+             "h": {
+              "type": "number"
+             },
+             "battery": {
+              "type": "number"
+             },
+             "door": {
+              "type": "integer",
+              "enum": [
+               0,
+               1
+              ]
+             },
+             "motion_at": {
+              "type": "string",
+              "format": "date-time"
+             },
+             "alert": {
+              "type": "boolean"
+             },
+             "sos": {
+              "type": "boolean"
+             }
+            }
+           }
+          },
+          "presence": {
+           "type": "object",
+           "properties": {
+            "mode": {
+             "type": "string",
+             "enum": [
+              "counts",
+              "tracks",
+              "named"
+             ]
+            },
+            "counts": {
+             "type": "array",
+             "items": {
+              "type": "object",
+              "properties": {
+               "gateway_id": {
+                "type": "string"
+               },
+               "n": {
+                "type": "integer"
+               }
+              }
+             }
+            },
+            "people": {
+             "type": "array",
+             "items": {
+              "type": "object",
+              "properties": {
+               "pid": {
+                "type": "string"
+               },
+               "name": {
+                "type": "string"
+               },
+               "gateway_id": {
+                "type": [
+                 "string",
+                 "null"
+                ]
+               },
+               "since": {
+                "type": [
+                 "string",
+                 "null"
+                ],
+                "format": "date-time"
+               },
+               "candidate_gateway_id": {
+                "type": "string"
+               },
+               "last_at": {
+                "type": [
+                 "string",
+                 "null"
+                ],
+                "format": "date-time"
+               },
+               "sos": {
+                "type": "boolean"
+               }
+              }
+             }
+            }
+           }
+          },
+          "alerts": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string"
+             },
+             "severity": {
+              "type": "string"
+             },
+             "status": {
+              "type": "string"
+             },
+             "event": {
+              "type": "string"
+             },
+             "sos": {
+              "type": "boolean"
+             },
+             "hazard": {
+              "type": "boolean"
+             },
+             "title": {
+              "type": "string"
+             },
+             "device_id": {
+              "type": "string"
+             },
+             "pid": {
+              "type": "string"
+             },
+             "opened_at": {
+              "type": "string",
+              "format": "date-time"
+             },
+             "gateway_id": {
+              "type": "string",
+              "description": "Where to look: the zone gateway of a worn tag, else the gateway that raised the alert."
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/displays": {
+   "get": {
+    "summary": "Wall displays of this workspace (owner, or an admin who sees every project). Pairing codes and tokens are never returned.",
+    "operationId": "get__api_v1_displays",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
+   },
+   "post": {
+    "summary": "Create a display; answers its one-time pairing code (8 symbols, 10 minutes, shown once).",
+    "operationId": "post__api_v1_displays",
+    "responses": {
+     "201": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 80
+         },
+         "project_ids": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "description": "Empty: every project"
+         },
+         "playlist": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+           "type": "object",
+           "required": [
+            "kind",
+            "seconds"
+           ],
+           "properties": {
+            "kind": {
+             "type": "string",
+             "enum": [
+              "overview",
+              "alerts",
+              "floorplan",
+              "devices",
+              "presence",
+              "studio"
+             ]
+            },
+            "seconds": {
+             "type": "integer",
+             "minimum": 10,
+             "maximum": 600
+            },
+            "ref": {
+             "type": "string",
+             "format": "uuid",
+             "description": "studio: the dashboard (required); floorplan: the site (optional)"
+            }
+           }
+          }
+         },
+         "show_names": {
+          "type": "boolean",
+          "description": "Show worn tags' names (each such read is in the access log)"
+         },
+         "allow_ack": {
+          "type": "boolean",
+          "description": "Acknowledge SOS/hazard alerts from the TV"
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/displays/{id}/update": {
+   "post": {
+    "summary": "Change a display's name, projects, playlist and switches; the TV follows within a minute (at once over /ws).",
+    "operationId": "post__api_v1_displays_id_update",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "name"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 80
+         },
+         "project_ids": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "description": "Empty: every project"
+         },
+         "playlist": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+           "type": "object",
+           "required": [
+            "kind",
+            "seconds"
+           ],
+           "properties": {
+            "kind": {
+             "type": "string",
+             "enum": [
+              "overview",
+              "alerts",
+              "floorplan",
+              "devices",
+              "presence",
+              "studio"
+             ]
+            },
+            "seconds": {
+             "type": "integer",
+             "minimum": 10,
+             "maximum": 600
+            },
+            "ref": {
+             "type": "string",
+             "format": "uuid",
+             "description": "studio: the dashboard (required); floorplan: the site (optional)"
+            }
+           }
+          }
+         },
+         "show_names": {
+          "type": "boolean",
+          "description": "Show worn tags' names (each such read is in the access log)"
+         },
+         "allow_ack": {
+          "type": "boolean",
+          "description": "Acknowledge SOS/hazard alerts from the TV"
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/displays/{id}/repair": {
+   "post": {
+    "summary": "Issue a new pairing code; the display's current token stops working at once.",
+    "operationId": "post__api_v1_displays_id_repair",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/displays/{id}/revoke": {
+   "post": {
+    "summary": "Revoke a display: its token, any pairing code and its open /ws stream end.",
+    "operationId": "post__api_v1_displays_id_revoke",
+    "responses": {
+     "204": {
+      "description": "No content"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/pair": {
+   "post": {
+    "summary": "Exchange a pairing code for a display token (dsp_…). Unauthenticated; 10 attempts per minute per address and a global failure budget.",
+    "operationId": "post__api_v1_kiosk_pair",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "code"
+        ],
+        "properties": {
+         "code": {
+          "type": "string",
+          "maxLength": 32
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/kiosk/session": {
+   "get": {
+    "summary": "The display itself (display token): name, workspace name, projects, playlist and switches.",
+    "operationId": "get__api_v1_kiosk_session",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/board": {
+   "get": {
+    "summary": "What the TV draws, narrowed to the display's projects: gateways, devices, open and acknowledged alerts (takeover=true for an open SOS or hazard), counts and worn tags per zone. Names of worn tags are replaced unless show_names; when shown, the read is logged.",
+    "operationId": "get__api_v1_kiosk_board",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/floorplan": {
+   "get": {
+    "summary": "A site with its floors (the one named, or the first the display sees).",
+    "operationId": "get__api_v1_kiosk_floorplan",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "site",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/floors/{id}/image": {
+   "get": {
+    "summary": "A floor's scanned plan, within the display's projects.",
+    "operationId": "get__api_v1_kiosk_floors_id_image",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/studio/{id}": {
+   "get": {
+    "summary": "A Dashboard Studio dashboard of the display's playlist, rendered as the display sees the data (the read is logged).",
+    "operationId": "get__api_v1_kiosk_studio_id",
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/kiosk/alerts/{id}/ack": {
+   "post": {
+    "summary": "Acknowledge an open alert from the TV when the owner allowed it (allow_ack); recorded as the display, never a member.",
+    "operationId": "post__api_v1_kiosk_alerts_id_ack",
+    "responses": {
+     "204": {
+      "description": "No content"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials (a display token that is revoked, re-paired or unknown), 403 authorization (display_token: a display token on a member route; display_ack_disabled), 404 inaccessible resource, 409 conflict (display_limit), 429 rate limit, 503 the read-access log could not be written (data withheld).",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
   }
  },
  "components": {

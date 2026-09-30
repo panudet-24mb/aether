@@ -26,11 +26,12 @@ still names a registered route):
 |---|---|
 | Members | `GET /members`, `GET /members/:id/access` (the member) |
 | Devices and readings | `GET /devices`, `GET /devices/:id/state` and `/controls` (the device), `GET /gateways/:id/packets` (the gateway), `GET /discovery`, `GET /live`, `POST /studio/render`, `GET /studio/sources`, `GET /presence/:external` (the tag) |
-| Assets and plans | `GET /assets`, `GET /assets/:kind/:id`, `GET /assets/export.csv`, `GET /sites/:id` |
+| Assets and plans | `GET /assets`, `GET /assets/:kind/:id`, `GET /assets/export.csv`, `GET /sites/:id`, `GET /twin/sites/:id/state` (digital twin; people as counts, pseudonyms or names, see `digital-twin.md`) |
 | Learned signals | `GET /signals`, `GET /signals/sessions/:id` |
 | Events and alerts | `GET /events` (`?external_id=` → the tag), `GET /alerts`, `GET /alerts/summary`, `GET /notifications` |
 | What flows and people did | `GET /automations/:id/runs`, `GET /commands` (`?device_id=` → the device), `GET /commands/:id` |
 | Realtime | `GET /ws`, on subscribe |
+| Wall displays (docs/platform/display.md) | `GET /kiosk/board` when it includes wearer names (only with the owner's `show_names`), `GET /kiosk/studio/:id`, `GET /kiosk/floorplan` (the site); the actor is the display (`actor_kind = 'display'`) |
 | Privacy views and exports | `GET /privacy/access-log`, `/privacy/audit`, `/privacy/erasures`; every export (never deduplicated) |
 
 Not logged: routes that return no personal data (gateways, projects, rules, channels, templates, catalogs, flows'
@@ -55,7 +56,8 @@ webhooks) run in the worker and never wait on the trail, so an access-log outage
   `ACCESS_LOG_RETENTION_DAYS` on every `migrate` run (`core.set_access_log_retention`). Sample and BLE retention stay
   runtime settings, because the runtime already holds DELETE on those tables.
 - **Writing.** The runtime role may `INSERT` a row only with its own tenant and actor, and only as a member of that
-  workspace. It has no `UPDATE` or `DELETE`.
+  workspace, or, for a wall display, only as that paired and unrevoked display (`core.display_active()`). It has no
+  `UPDATE` or `DELETE`.
 - **Reading.** Only an owner of the workspace reads the trail (`core.is_tenant_owner()`), and partitions are not
   reachable directly.
 

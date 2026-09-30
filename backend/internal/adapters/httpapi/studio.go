@@ -6,6 +6,7 @@ import (
 	"aether/backend/internal/domain"
 	"aether/backend/internal/security"
 	"aether/backend/internal/studio"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -55,17 +56,6 @@ func studioRoutes(r fiber.Router, s *app.Service) {
 			return p, domain.ErrForbidden
 		}
 		return p, nil
-	}
-	get := func(c fiber.Ctx, p domain.Principal, id string) (studio.Item, error) {
-		for _, i := range studio.Official() {
-			if i.ID == id {
-				return i, nil
-			}
-		}
-		if !security.ValidID(id) {
-			return studio.Item{}, domain.ErrInvalid
-		}
-		return s.Repo.StudioGet(c.Context(), p, id)
 	}
 	r.Get("/studio/sources", func(c fiber.Ctx) error {
 		p, e := principal(c)
@@ -250,144 +240,171 @@ func studioRoutes(r fiber.Router, s *app.Service) {
 		default:
 			return domain.ErrInvalid
 		}
-		out := []fiber.Map{}
-		// Fetched once per render call and shared by all panels: the persisted event log and open alerts.
-		events, e := s.Repo.ListEvents(c.Context(), p, "", 200)
+		out, e := renderStudioPanels(c.Context(), s, p, in.Panels, window, nil)
 		if e != nil {
 			return e
-		}
-		openAlerts, e := s.Repo.ListAlerts(c.Context(), p, "open", 20)
-		if e != nil {
-			return e
-		}
-		presences := map[string]domain.Presence{}
-		for _, panel := range in.Panels {
-			result := fiber.Map{"id": panel.ID}
-			out = append(out, result)
-			if !security.ValidID(panel.GatewayID) || len(panel.ExternalID) != 12 {
-				result["error"] = "Invalid source"
-				continue
-			}
-			widget, err := get(c, p, panel.WidgetID)
-			if err != nil || widget.Kind != "widget" {
-				result["error"] = "Widget unavailable"
-				continue
-			}
-			// Where the tag is heard now. A roaming wearable renders from the gateway that currently hears it best,
-			// so one panel keeps working while the person walks between zones.
-			presence, known := presences[strings.ToLower(panel.ExternalID)]
-			if !known {
-				presence, err = s.Repo.Presence(c.Context(), p, strings.ToLower(panel.ExternalID))
-				if err != nil {
-					return err
-				}
-				presences[strings.ToLower(panel.ExternalID)] = presence
-			}
-			sourceGateway := panel.GatewayID
-			if presence.Roaming && presence.Current != nil {
-				sourceGateway = presence.Current.GatewayID
-			} else if presence.Roaming && len(presence.Sightings) > 0 {
-				sourceGateway = presence.Sightings[0].GatewayID // nobody hears it now: show the last place it was heard
-			}
-			streams, err := s.Repo.StreamHistory(c.Context(), p, sourceGateway, time.Now().Add(-window), 200)
-			if err != nil {
-				return err
-			}
-			var input map[string]any
-			for _, sensor := range streams {
-				if strings.EqualFold(sensor.ID, panel.ExternalID) {
-					input = map[string]any{"data": sensor.Latest, "history": compactHistory(sensor.History), "source": sensor.Latest.Source}
-					result["received_at"] = sensor.Latest.ReceivedAt
-					result["source"] = sensor.Latest.Source
-					result["gateway_id"] = sourceGateway
-					break
-				}
-			}
-			var widgetDefinition studio.Definition
-			_ = json.Unmarshal(widget.Definition, &widgetDefinition)
-			if input == nil && panel.DecoderID == "" && widgetDefinition.DecodeCode == "" {
-				result["error"] = "No received sensor data"
-				continue
-			}
-			if input == nil {
-				input = map[string]any{"data": map[string]any{}, "history": []any{}, "source": "device"}
-			}
-			if panel.DecoderID != "" || widgetDefinition.DecodeCode != "" {
-				d := studio.Definition{Code: widgetDefinition.DecodeCode}
-				// Preserve existing saved panel overrides; new panels use the bundled decoder.
-				if panel.DecoderID != "" {
-					decoder, err := get(c, p, panel.DecoderID)
-					if err != nil || decoder.Kind != "decoder" {
-						result["error"] = "Decoder unavailable"
-						continue
-					}
-					_ = json.Unmarshal(decoder.Definition, &d)
-				}
-
-				observations, err := s.Repo.BLEHistory(c.Context(), p, sourceGateway, panel.ExternalID, time.Now().Add(-window))
-				if err != nil {
-					return err
-				}
-				history, err := studio.DecodeHistory(c.Context(), d.Code, observations)
-				if err != nil {
-					result["error"] = "No decodable history in this range, or decoder exceeded limits"
-					continue
-				}
-				input["data"] = history.Data
-				input["history"] = history.History
-				input["source"] = history.Source
-				result["source"] = history.Source
-				result["received_at"] = history.ReceivedAt
-				result["history_points"] = len(history.History)
-				result["skipped_frames"] = history.Skipped
-
-			}
-			deviceEvents := []domain.DeviceEvent{}
-			for _, ev := range events {
-				if strings.EqualFold(ev.ExternalID, panel.ExternalID) && len(deviceEvents) < 20 {
-					deviceEvents = append(deviceEvents, ev)
-				}
-			}
-			input["events"] = deviceEvents
-			input["alerts"] = openAlerts
-			input["presence"] = presence
-			input["now"] = time.Now().UTC()
-			var d studio.Definition
-			_ = json.Unmarshal(widget.Definition, &d)
-			markup := d.HTML
-			if d.Code != "" {
-				payload, _ := json.Marshal(input)
-				// The sandbox accepts 64 KiB; keep the newest history that fits instead of failing the panel.
-				for len(payload) > 60000 {
-					h, ok := input["history"].([]map[string]any)
-					if !ok || len(h) < 2 {
-						break
-					}
-					input["history"] = h[len(h)/2:]
-					payload, _ = json.Marshal(input)
-				}
-				rendered, err := studio.Run(c.Context(), d.Code, "render", payload)
-				if err != nil {
-					result["error"] = "Widget failed or exceeded limits"
-					continue
-				}
-				var fields map[string]any
-				_ = json.Unmarshal(rendered, &fields)
-				if custom, ok := fields["html"].(string); ok {
-					markup = custom
-				} else {
-					markup = binding.ReplaceAllStringFunc(markup, func(key string) string {
-						v := fields[key[2:len(key)-2]]
-						if v == nil {
-							return "—"
-						}
-						return html.EscapeString(fmt.Sprint(v))
-					})
-				}
-			}
-			result["html"] = studio.SafeHTML(markup)
-			result["css"] = d.CSS
 		}
 		return c.JSON(fiber.Map{"panels": out})
 	})
+}
+
+// studioItem finds a widget or decoder: a bundled official one, or one of the workspace's.
+func studioItem(ctx context.Context, s *app.Service, p domain.Principal, id string) (studio.Item, error) {
+	for _, i := range studio.Official() {
+		if i.ID == id {
+			return i, nil
+		}
+	}
+	if !security.ValidID(id) {
+		return studio.Item{}, domain.ErrInvalid
+	}
+	return s.Repo.StudioGet(ctx, p, id)
+}
+
+// renderStudioPanels renders dashboard panels as p sees the data. A display (a wall TV) calls it with its own
+// context and principal (docs/platform/display.md), so the same project scope narrows what the widgets read.
+// mask is nil for members; for a display it strips member ids and notes and hides who wore a tag (display.go).
+func renderStudioPanels(ctx context.Context, s *app.Service, p domain.Principal, panels []studio.Panel, window time.Duration, mask *displayMask) ([]fiber.Map, error) {
+	out := []fiber.Map{}
+	// Fetched once per render call and shared by all panels: the persisted event log and open alerts.
+	events, e := s.Repo.ListEvents(ctx, p, "", 200)
+	if e != nil {
+		return nil, e
+	}
+	openAlerts, e := s.Repo.ListAlerts(ctx, p, "open", 20)
+	if e != nil {
+		return nil, e
+	}
+	presences := map[string]domain.Presence{}
+	for _, panel := range panels {
+		result := fiber.Map{"id": panel.ID}
+		out = append(out, result)
+		if !security.ValidID(panel.GatewayID) || len(panel.ExternalID) != 12 {
+			result["error"] = "Invalid source"
+			continue
+		}
+		widget, err := studioItem(ctx, s, p, panel.WidgetID)
+		if err != nil || widget.Kind != "widget" {
+			result["error"] = "Widget unavailable"
+			continue
+		}
+		// Where the tag is heard now. A roaming wearable renders from the gateway that currently hears it best,
+		// so one panel keeps working while the person walks between zones.
+		presence, known := presences[strings.ToLower(panel.ExternalID)]
+		if !known {
+			presence, err = s.Repo.Presence(ctx, p, strings.ToLower(panel.ExternalID))
+			if err != nil {
+				return nil, err
+			}
+			presences[strings.ToLower(panel.ExternalID)] = presence
+		}
+		sourceGateway := panel.GatewayID
+		if presence.Roaming && presence.Current != nil {
+			sourceGateway = presence.Current.GatewayID
+		} else if presence.Roaming && len(presence.Sightings) > 0 {
+			sourceGateway = presence.Sightings[0].GatewayID // nobody hears it now: show the last place it was heard
+		}
+		streams, err := s.Repo.StreamHistory(ctx, p, sourceGateway, time.Now().Add(-window), 200)
+		if err != nil {
+			return nil, err
+		}
+		var input map[string]any
+		for _, sensor := range streams {
+			if strings.EqualFold(sensor.ID, panel.ExternalID) {
+				input = map[string]any{"data": sensor.Latest, "history": compactHistory(sensor.History), "source": sensor.Latest.Source}
+				result["received_at"] = sensor.Latest.ReceivedAt
+				result["source"] = sensor.Latest.Source
+				result["gateway_id"] = sourceGateway
+				break
+			}
+		}
+		var widgetDefinition studio.Definition
+		_ = json.Unmarshal(widget.Definition, &widgetDefinition)
+		if input == nil && panel.DecoderID == "" && widgetDefinition.DecodeCode == "" {
+			result["error"] = "No received sensor data"
+			continue
+		}
+		if input == nil {
+			input = map[string]any{"data": map[string]any{}, "history": []any{}, "source": "device"}
+		}
+		if panel.DecoderID != "" || widgetDefinition.DecodeCode != "" {
+			d := studio.Definition{Code: widgetDefinition.DecodeCode}
+			// Preserve existing saved panel overrides; new panels use the bundled decoder.
+			if panel.DecoderID != "" {
+				decoder, err := studioItem(ctx, s, p, panel.DecoderID)
+				if err != nil || decoder.Kind != "decoder" {
+					result["error"] = "Decoder unavailable"
+					continue
+				}
+				_ = json.Unmarshal(decoder.Definition, &d)
+			}
+
+			observations, err := s.Repo.BLEHistory(ctx, p, sourceGateway, panel.ExternalID, time.Now().Add(-window))
+			if err != nil {
+				return nil, err
+			}
+			history, err := studio.DecodeHistory(ctx, d.Code, observations)
+			if err != nil {
+				result["error"] = "No decodable history in this range, or decoder exceeded limits"
+				continue
+			}
+			input["data"] = history.Data
+			input["history"] = history.History
+			input["source"] = history.Source
+			result["source"] = history.Source
+			result["received_at"] = history.ReceivedAt
+			result["history_points"] = len(history.History)
+			result["skipped_frames"] = history.Skipped
+
+		}
+		deviceEvents := []domain.DeviceEvent{}
+		for _, ev := range events {
+			if strings.EqualFold(ev.ExternalID, panel.ExternalID) && len(deviceEvents) < 20 {
+				deviceEvents = append(deviceEvents, ev)
+			}
+		}
+		input["events"] = deviceEvents
+		input["alerts"] = openAlerts
+		input["presence"] = presence
+		if mask != nil {
+			input["events"], input["alerts"], input["presence"] = mask.events(deviceEvents), mask.alerts(openAlerts), mask.presence(presence)
+		}
+		input["now"] = time.Now().UTC()
+		var d studio.Definition
+		_ = json.Unmarshal(widget.Definition, &d)
+		markup := d.HTML
+		if d.Code != "" {
+			payload, _ := json.Marshal(input)
+			// The sandbox accepts 64 KiB; keep the newest history that fits instead of failing the panel.
+			for len(payload) > 60000 {
+				h, ok := input["history"].([]map[string]any)
+				if !ok || len(h) < 2 {
+					break
+				}
+				input["history"] = h[len(h)/2:]
+				payload, _ = json.Marshal(input)
+			}
+			rendered, err := studio.Run(ctx, d.Code, "render", payload)
+			if err != nil {
+				result["error"] = "Widget failed or exceeded limits"
+				continue
+			}
+			var fields map[string]any
+			_ = json.Unmarshal(rendered, &fields)
+			if custom, ok := fields["html"].(string); ok {
+				markup = custom
+			} else {
+				markup = binding.ReplaceAllStringFunc(markup, func(key string) string {
+					v := fields[key[2:len(key)-2]]
+					if v == nil {
+						return "—"
+					}
+					return html.EscapeString(fmt.Sprint(v))
+				})
+			}
+		}
+		result["html"] = studio.SafeHTML(markup)
+		result["css"] = d.CSS
+	}
+	return out, nil
 }

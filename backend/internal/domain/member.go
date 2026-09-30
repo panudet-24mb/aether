@@ -51,6 +51,8 @@ type MemberSelf struct {
 	MustChangePassword bool     `json:"must_change_password"`
 	// NoticeAckVersion is the privacy notice version this identity acknowledged (0: never).
 	NoticeAckVersion int `json:"notice_ack_version"`
+	// Demo: a demo workspace (cmd/demo-twin): fictional data, no notifications sent.
+	Demo bool `json:"demo"`
 }
 
 // ValidMemberRole reports whether role is one of MemberRoles.

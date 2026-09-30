@@ -53,6 +53,12 @@ func realtimeRoutes(api *fiber.App, s *app.Service, cfg config.Config, hub *real
 		if e != nil || json.Unmarshal(raw, &hello) != nil || hello.Type != "auth" || len(hello.Token) > 4096 {
 			return
 		}
+		// A wall TV (docs/platform/display.md) holds a display token, not a member session.
+		if app.IsDisplayToken(hello.Token) {
+			release()
+			serveDisplaySocket(conn, s, hub, hello.Token)
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		principal, e := s.Authenticate(ctx, hello.Token)
 		cancel()
@@ -128,4 +134,84 @@ func realtimeRoutes(api *fiber.App, s *app.Service, cfg config.Config, hub *real
 			}
 		}
 	}, websocket.Config{Origins: []string{cfg.Origin}, ReadBufferSize: 1024, WriteBufferSize: 1024}))
+}
+
+// displayRecheck is how often an open display stream re-reads its display; a revocation also ends it at once
+// through the "display" signal.
+const displayRecheck = 30 * time.Second
+
+// serveDisplaySocket is the signal stream of a paired TV: the same refetch signals as a member's (without gateway
+// ids when the display is limited to some projects). It ends when the display is revoked or re-paired.
+func serveDisplaySocket(conn *websocket.Conn, s *app.Service, hub *realtime.Hub, token string) {
+	check := func() (domain.DisplaySession, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.AuthenticateDisplay(ctx, token, conn.IP())
+	}
+	session, e := check()
+	if e != nil {
+		_ = conn.WriteJSON(fiber.Map{"type": "error", "error": "unauthorized"})
+		return
+	}
+	client := hub.RegisterDisplay(session.TenantID, len(session.ProjectIDs) > 0)
+	if client == nil {
+		_ = conn.WriteJSON(fiber.Map{"type": "error", "error": "too_many_connections"})
+		return
+	}
+	defer hub.Unregister(client)
+	if conn.WriteJSON(realtime.Message{Type: "ready"}) != nil {
+		return
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(75 * time.Second))
+			if _, _, e := conn.ReadMessage(); e != nil {
+				return
+			}
+		}
+	}()
+	recheck := time.NewTicker(displayRecheck)
+	defer recheck.Stop()
+	revoked := func() bool {
+		if _, e := check(); e != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			_ = conn.WriteJSON(fiber.Map{"type": "error", "error": "unauthorized"})
+			return true
+		}
+		return false
+	}
+	for {
+		select {
+		case <-closed:
+			return
+		case msg, ok := <-client.Send:
+			if !ok {
+				return
+			}
+			// Signals about other displays are not this TV's business.
+			if msg.Kind == "display" {
+				if msg.GatewayID != session.ID {
+					continue
+				}
+				if revoked() {
+					return
+				}
+				// Its settings changed (projects among them): tell the TV, then close, so it reconnects under the new
+				// scope instead of keeping the old one for the life of this socket.
+				_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				_ = conn.WriteJSON(msg)
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if conn.WriteJSON(msg) != nil {
+				return
+			}
+		case <-recheck.C:
+			if revoked() {
+				return
+			}
+		}
+	}
 }

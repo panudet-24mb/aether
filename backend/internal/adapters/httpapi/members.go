@@ -87,7 +87,7 @@ func meHandler(s *app.Service, mode, noticeURL string) fiber.Handler {
 		}
 		return c.JSON(fiber.Map{"permissions": permissions, "user_id": self.UserID, "tenant_id": self.TenantID, "email": self.Email, "name": self.Name,
 			"role": self.Role, "project_ids": self.ProjectIDs, "must_change_password": self.MustChangePassword, "deployment_mode": mode,
-			"notice_version": domain.NoticeVersion, "notice_ack_version": self.NoticeAckVersion, "notice_url": noticeURL})
+			"notice_version": domain.NoticeVersion, "notice_ack_version": self.NoticeAckVersion, "notice_url": noticeURL, "demo": self.Demo})
 	}
 }
 

@@ -415,8 +415,10 @@ func (r *Repository) MemberSelf(ctx context.Context, p domain.Principal) (domain
 			Role               string
 			MustChangePassword bool
 			NoticeAckVersion   int
+			Demo               bool
 		}
-		if e := tx.Raw(`SELECT u.email,u.name,m.role,m.must_change_password,u.notice_ack_version FROM core.memberships m
+		if e := tx.Raw(`SELECT u.email,u.name,m.role,m.must_change_password,u.notice_ack_version,
+      coalesce((SELECT t.demo FROM core.tenants t WHERE t.id=m.tenant_id),false) AS demo FROM core.memberships m
       JOIN identity.users u ON u.id=m.user_id WHERE m.tenant_id=? AND m.user_id=?`, p.TenantID, p.UserID).Scan(&rows).Error; e != nil {
 			return e
 		}
@@ -424,7 +426,7 @@ func (r *Repository) MemberSelf(ctx context.Context, p domain.Principal) (domain
 			return domain.ErrUnauthorized
 		}
 		out.Email, out.Name, out.Role, out.MustChangePassword = rows[0].Email, rows[0].Name, rows[0].Role, rows[0].MustChangePassword
-		out.NoticeAckVersion = rows[0].NoticeAckVersion
+		out.NoticeAckVersion, out.Demo = rows[0].NoticeAckVersion, rows[0].Demo
 		if out.Role == "owner" {
 			return nil
 		}

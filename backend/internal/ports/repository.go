@@ -15,6 +15,18 @@ import (
 )
 
 type Repository interface {
+	// Display links (docs/platform/display.md): wall TVs with their own read-only principal.
+	ListDisplays(context.Context, domain.Principal) ([]domain.Display, error)
+	CreateDisplay(ctx context.Context, p domain.Principal, id string, s domain.DisplaySettings, pairingHash string, expires time.Time) (domain.Display, error)
+	UpdateDisplay(context.Context, domain.Principal, string, domain.DisplaySettings) (domain.Display, error)
+	RepairDisplay(ctx context.Context, p domain.Principal, id, pairingHash string, expires time.Time) (domain.Display, error)
+	RevokeDisplay(context.Context, domain.Principal, string) error
+	PairDisplay(ctx context.Context, codeHash, tokenHash string) (string, string, error)
+	DisplaySession(ctx context.Context, tokenHash, ip string) (domain.DisplaySession, error)
+	DisplayBoard(context.Context, domain.DisplaySession) (domain.DisplayBoard, bool, error)
+	AckFromDisplay(context.Context, domain.DisplaySession, string) error
+	DisplayStudioDashboard(context.Context, domain.DisplaySession, string) (json.RawMessage, string, error)
+	DisplayImpersonal(context.Context, domain.DisplaySession) (map[string]bool, error)
 	// Privacy (docs/platform/privacy.md): the read-access log, exports and erasure.
 	LogAccess(context.Context, domain.Principal, domain.AccessRead) error
 	ListAccessLog(context.Context, domain.Principal, domain.LogFilter) ([]domain.AccessEntry, error)
@@ -39,6 +51,7 @@ type Repository interface {
 	SaveLayout(context.Context, domain.Principal, domain.LayoutChange) (domain.LayoutSaved, error)
 	ListSites(context.Context, domain.Principal) ([]domain.Site, error)
 	GetSite(context.Context, domain.Principal, string) (domain.Site, error)
+	TwinState(context.Context, domain.Principal, string, string) (domain.TwinState, error)
 	CreateSite(context.Context, domain.Principal, domain.Site) (domain.Site, error)
 	UpdateSite(context.Context, domain.Principal, domain.Site) error
 	ArchiveSite(context.Context, domain.Principal, string) error

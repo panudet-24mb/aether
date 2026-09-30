@@ -6,7 +6,7 @@ import { doorStateOf, doorText, isDoorSensor, isOccupancySensor, occupancyOf, oc
 /** Floor plans are drawn in metres, origin at the top-left corner of the floor, y growing downwards. */
 export type Point = [number, number];
 export type Wall = { id: string; points: Point[]; thickness: number; closed?: boolean };
-export type Zone = { id: string; name: string; kind: string; color: string; points: Point[]; gateway_ids?: string[]; note?: string };
+export type Zone = { id: string; name: string; kind: string; color: string; points: Point[]; gateway_ids?: string[]; note?: string; /** Temperature band (°C) the digital twin colours against; absent: the zone kind's default. */ comfort?: [number, number] };
 export type Item = { id: string; type: string; x: number; y: number; w: number; h: number; rot: number; text?: string };
 export type Background = { opacity: number; x: number; y: number; width_m: number; locked?: boolean };
 export type Layout = { walls: Wall[]; zones: Zone[]; items: Item[]; background?: Background | null };

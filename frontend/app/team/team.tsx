@@ -25,6 +25,8 @@ export type Me = {
   notice_version?: number;
   notice_ack_version?: number;
   notice_url?: string;
+  /** A demo workspace (cmd/demo-twin): fictional data, notifications are not sent. */
+  demo?: boolean;
 };
 
 /** The shell reads the signed-in member's role and project scope through this one call. */

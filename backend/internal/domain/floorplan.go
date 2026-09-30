@@ -60,6 +60,9 @@ type FloorZone struct {
 	// GatewayIDs: gateways that cover this zone. A roaming wearable whose current gateway is listed is shown here.
 	GatewayIDs []string `json:"gateway_ids,omitempty"`
 	Note       string   `json:"note,omitempty"`
+	// Comfort is the temperature band (°C, low and high) this zone should stay in; the digital twin colours the zone
+	// by its distance from the band. Empty: the default of the zone kind (docs/platform/digital-twin.md).
+	Comfort *[2]float64 `json:"comfort,omitempty"`
 }
 
 type FloorItem struct {
@@ -153,6 +156,9 @@ func (l *FloorLayout) Validate() error {
 			if !uuidShape.MatchString(g) {
 				return ErrInvalid
 			}
+		}
+		if c := z.Comfort; c != nil && (!finite(c[0], c[1]) || c[0] < -60 || c[1] > 100 || c[0] >= c[1]) {
+			return ErrInvalid
 		}
 	}
 	for _, it := range l.Items {

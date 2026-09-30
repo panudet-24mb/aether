@@ -28,6 +28,8 @@ type Client struct {
 	// it (the client simply refetches, and the REST API narrows the answer), but without the gateway id:
 	// otherwise the stream would report activity in a project the member may not see.
 	Scoped bool
+	// Display marks a wall display's socket (docs/platform/display.md); only these receive "display" signals.
+	Display bool
 }
 
 type Hub struct {
@@ -57,6 +59,17 @@ func (h *Hub) RegisterScoped(tenant string, scoped bool) *Client {
 	return c
 }
 
+// RegisterDisplay is RegisterScoped for a wall display.
+func (h *Hub) RegisterDisplay(tenant string, scoped bool) *Client {
+	c := h.RegisterScoped(tenant, scoped)
+	if c != nil {
+		h.mu.Lock()
+		c.Display = true
+		h.mu.Unlock()
+	}
+	return c
+}
+
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -77,7 +90,12 @@ func (h *Hub) Broadcast(s domain.Signal) {
 	defer h.mu.RUnlock()
 	for c := range h.clients[s.Tenant] {
 		gateway := s.Gateway
-		if c.Scoped {
+		// A "display" signal carries a display id, not a gateway, and only wall displays care: members never get
+		// it, and a display gets it (with the id) to notice its own revocation or new settings.
+		if s.Kind == "display" && !c.Display {
+			continue
+		}
+		if c.Scoped && s.Kind != "display" {
 			gateway = ""
 		}
 		select {

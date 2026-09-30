@@ -32,7 +32,8 @@ func routeHead(path string) string {
 func moduleFor(path, method string) string {
 	head := routeHead(path)
 	switch head {
-	case "sites", "floors":
+	case "sites", "floors", "twin":
+		// The digital twin is the live side of the floor plan: whoever may not see the plans may not see it.
 		return "floorplan"
 	case "automations":
 		return "automation"

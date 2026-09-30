@@ -22,6 +22,14 @@ func (r *Repository) LogAccess(ctx context.Context, p domain.Principal, in domai
 	if parsed := net.ParseIP(in.ClientIP); parsed != nil {
 		ip = parsed.String()
 	}
+	// A display logs its own reads with itself as the actor (migration 00044); the policy pins that too.
+	if _, ok := domain.DisplayFrom(ctx); ok {
+		return r.tx(domain.WithDisplayWrite(ctx), "", p.TenantID, func(tx *gorm.DB) error {
+			return tx.Exec(`INSERT INTO core.access_log(tenant_id,id,actor_id,actor_kind,resource,subject_kind,subject_id,request_id,client_ip)
+      VALUES(core.tenant_id(),?,core.display_id(),'display',?,?,?,NULLIF(?,''),NULLIF(?,'')::inet)`,
+				uuid.NewString(), clip(in.Resource, 64), clip(in.SubjectKind, 32), clip(in.SubjectID, 128), clip(in.RequestID, 128), ip).Error
+		})
+	}
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
 		return tx.Exec(`INSERT INTO core.access_log(tenant_id,id,actor_id,resource,subject_kind,subject_id,request_id,client_ip)
       VALUES(core.tenant_id(),?,identity.user_id(),?,?,?,NULLIF(?,''),NULLIF(?,'')::inet)`,
@@ -79,8 +87,11 @@ func (r *Repository) ListAccessLog(ctx context.Context, p domain.Principal, f do
 		}
 		where, args = timeWindow(where, args, "a", f)
 		args = append(args, pageLimit(f.Limit))
-		return tx.Raw(`SELECT a.id::text AS id,a.at,a.actor_id::text AS actor_id,u.name AS actor_name,a.resource,a.subject_kind,a.subject_id,a.request_id,host(a.client_ip) AS client_ip
-      FROM core.access_log a LEFT JOIN identity.users u ON u.id=a.actor_id
+		// A display (a wall TV, migration 00044) is named after itself; its id is never a user's.
+		return tx.Raw(`SELECT a.id::text AS id,a.at,a.actor_id::text AS actor_id,a.actor_kind,
+      CASE WHEN a.actor_kind='display' THEN 'จอ · '||d.name ELSE u.name END AS actor_name,a.resource,a.subject_kind,a.subject_id,a.request_id,host(a.client_ip) AS client_ip
+      FROM core.access_log a LEFT JOIN identity.users u ON u.id=a.actor_id AND a.actor_kind='member'
+      LEFT JOIN core.displays d ON d.id=a.actor_id AND a.actor_kind='display'
       WHERE `+strings.Join(where, " AND ")+` ORDER BY a.at DESC,a.id DESC LIMIT ?`, args...).Scan(&out).Error
 	})
 	return out, e
@@ -116,8 +127,8 @@ func (r *Repository) ListAuditLog(ctx context.Context, p domain.Principal, f dom
 		}
 		where, args = timeWindow(where, args, "l", f)
 		args = append(args, pageLimit(f.Limit))
-		return tx.Raw(`SELECT l.id::text AS id,l.at,l.actor_id::text AS actor_id,u.name AS actor_name,l.action,l.target_id::text AS target_id
-      FROM core.audit_logs l LEFT JOIN identity.users u ON u.id=l.actor_id
+		return tx.Raw(`SELECT l.id::text AS id,l.at,l.actor_id::text AS actor_id,coalesce(u.name,'จอ · '||d.name) AS actor_name,l.action,l.target_id::text AS target_id
+      FROM core.audit_logs l LEFT JOIN identity.users u ON u.id=l.actor_id LEFT JOIN core.displays d ON d.id=l.actor_id
       WHERE `+strings.Join(where, " AND ")+` ORDER BY l.at DESC,l.id DESC LIMIT ?`, args...).Scan(&out).Error
 	})
 	return out, e

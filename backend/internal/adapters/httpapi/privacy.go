@@ -59,6 +59,7 @@ var readRules = map[string]readRule{
 	"GET /api/v1/assets/:kind/:id":     {resource: "asset", kind: "asset", subject: param("id")},
 	"GET /api/v1/assets/export.csv":    {resource: "assets_export", kind: "device_list", subject: everything},
 	"GET /api/v1/sites/:id":            {resource: "site", kind: "site", subject: param("id")},
+	"GET /api/v1/twin/sites/:id/state": {resource: "twin_live", kind: "site", subject: param("id")},
 	"GET /api/v1/signals":              {resource: "signals", kind: "signal_list", subject: everything},
 	"GET /api/v1/signals/sessions/:id": {resource: "signal_session", kind: "signal_session", subject: param("id")},
 	// Events, alerts and what was sent about them.
@@ -78,6 +79,9 @@ var readRules = map[string]readRule{
 	"POST /api/v1/members/:user_id/export":    {resource: "export", kind: "member", subject: param("user_id"), always: true},
 	"POST /api/v1/devices/:id/privacy-export": {resource: "export", kind: "device", subject: param("id"), always: true, handled: true},
 }
+
+// readResourceLocal is the Locals key a handler sets to log a narrower resource than its rule names.
+const readResourceLocal = "read_resource"
 
 // readDedupe is how long the same actor reading the same subject is one log row (screens poll).
 const readDedupe = 10 * time.Minute
@@ -193,7 +197,12 @@ func (l *readLog) middleware(c fiber.Ctx) error {
 			kind, subject = rule.byQuery[1], v
 		}
 	}
-	in := domain.AccessRead{Resource: rule.resource, SubjectKind: kind, SubjectID: subject, RequestID: requestID(c), ClientIP: c.IP()}
+	resource := rule.resource
+	// A handler may name a narrower resource for what it actually returned (the twin with names: twin_live_named).
+	if r, ok := c.Locals(readResourceLocal).(string); ok && r != "" {
+		resource = r
+	}
+	in := domain.AccessRead{Resource: resource, SubjectKind: kind, SubjectID: subject, RequestID: requestID(c), ClientIP: c.IP()}
 	if e := l.write(c.Context(), p, in, rule.always); e != nil {
 		// The handler already produced the body; the error handler replaces it, and nothing names a download.
 		c.Response().Header.Del(fiber.HeaderContentDisposition)

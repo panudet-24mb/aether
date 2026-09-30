@@ -11,15 +11,17 @@ const NoticeVersion = 1
 
 // AccessEntry is one row of the read-access log (core.access_log): who read which personal data, when.
 type AccessEntry struct {
-	At          time.Time `json:"at"`
-	ActorID     string    `json:"actor_id"`
-	ActorName   *string   `json:"actor_name"`
-	Resource    string    `json:"resource"`
-	SubjectKind string    `json:"subject_kind"`
-	SubjectID   string    `json:"subject_id"`
-	RequestID   *string   `json:"request_id,omitempty"`
-	ClientIP    *string   `json:"client_ip"`
-	ID          string    `json:"id"`
+	At      time.Time `json:"at"`
+	ActorID string    `json:"actor_id"`
+	// ActorKind is "member", or "display" for a wall TV (docs/platform/display.md).
+	ActorKind   string  `json:"actor_kind"`
+	ActorName   *string `json:"actor_name"`
+	Resource    string  `json:"resource"`
+	SubjectKind string  `json:"subject_kind"`
+	SubjectID   string  `json:"subject_id"`
+	RequestID   *string `json:"request_id,omitempty"`
+	ClientIP    *string `json:"client_ip"`
+	ID          string  `json:"id"`
 }
 
 // AccessRead is what the read-access middleware records for one request.

@@ -206,8 +206,20 @@ func (r *Repository) Ready(ctx context.Context) error {
 	return nil
 }
 func (r *Repository) tx(ctx context.Context, user, tenant string, fn func(*gorm.DB) error) error {
+	// A display (a wall TV, domain.WithDisplay) is never a user: its transactions carry app.display_id, take their
+	// project scope from the display row, and are READ ONLY unless the caller opened them for one of the two writes a
+	// display may do (its own access-log rows, acknowledging an alert when the owner allowed it).
+	display, isDisplay := domain.DisplayFrom(ctx)
+	if isDisplay {
+		user = ""
+	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Exec(`SELECT set_config('app.user_id',?,true),set_config('app.tenant_id',?,true)`, user, tenant).Error; e != nil {
+		if isDisplay && !display.Write {
+			if e := tx.Exec(`SET TRANSACTION READ ONLY`).Error; e != nil {
+				return e
+			}
+		}
+		if e := tx.Exec(`SELECT set_config('app.user_id',?,true),set_config('app.tenant_id',?,true),set_config('app.display_id',?,true)`, user, tenant, display.ID).Error; e != nil {
 			return e
 		}
 		// Project access is decided by the database from the identity above, never passed in from Go:

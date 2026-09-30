@@ -131,6 +131,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
 
   const pending = useRef<{ timer?: ReturnType<typeof setTimeout>; force: boolean }>({ force: false });
   const connected = useSignals(handlers, (signal) => {
+    if (signal === "layout") return; // the connect canvas layout does not change this page
     const p = pending.current;
     p.force = p.force || signal === "inventory" || signal === "event";
     clearTimeout(p.timer);

@@ -10,10 +10,13 @@ export class ApiError extends Error {
   status: number;
   /** Machine-readable refusal the server gives for some requests (e.g. a command: "offline", "in_flight"). */
   reason?: string;
-  constructor(status: number, message: string, reason?: string) {
+  /** The parsed JSON error body, for refusals that carry data (a layout version conflict returns the current layout). */
+  body?: unknown;
+  constructor(status: number, message: string, reason?: string, body?: unknown) {
     super(message);
     this.status = status;
     this.reason = reason;
+    this.body = body;
   }
 }
 
@@ -84,7 +87,12 @@ export type MQTTCredentials = MQTTSettings & {
   z2m_yaml?: string;
 };
 export type GatewayCreated = { gateway: Gateway; token: string; capture_path: string };
-export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string };
+export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string; /** Module access levels ("none" | "read" | "write"). */ permissions?: Record<string, string>; /** Set when the member sees only some projects. */ project_ids?: string[] | null };
+
+/** The connect view's canvas layout as the server stores it for the workspace (only nodes the member may see). */
+export type Layout = { view: string; version: number; positions: Record<string, { x: number; y: number }>; updated_by: string | null; updated_at: string | null };
+export type LayoutSaved = { layout: Layout; ignored: string[] };
+export type LayoutChange = { version: number; positions: Record<string, { x: number; y: number }>; remove?: string[] };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
 export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key) or a Tuya Cloud link (source "tuya_cloud"). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string };
@@ -247,14 +255,16 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       // Some endpoints explain the failure (e.g. a channel test); prefer that over the generic status text.
       let detail = "";
       let reason: string | undefined;
+      let parsed: unknown;
       try {
         const body = (await r.json()) as { detail?: unknown; error?: unknown };
+        parsed = body;
         if (typeof body.detail === "string") detail = body.detail;
         if (typeof body.error === "string") reason = body.error;
       } catch {
         // no JSON body
       }
-      throw new ApiError(r.status, detail ? `${describe(r.status)} · ${detail}` : describe(r.status), reason);
+      throw new ApiError(r.status, detail ? `${describe(r.status)} · ${detail}` : describe(r.status), reason, parsed);
     }
     if (r.status === 204) return undefined as T;
     return (await r.json()) as T;
@@ -306,6 +316,8 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       setTimeout(() => URL.revokeObjectURL(url), 1000); // revoking synchronously can cancel the download
     },
     me: () => call<Me>("/me"),
+    layout: () => call<Layout>("/topology/layout"),
+    saveLayout: (change: LayoutChange) => call<LayoutSaved>("/topology/layout", change),
     catalog: () => call<CatalogResponse>("/catalog"),
     zigbeeCatalog: (q: string, opts: { vendor?: string; category?: string; limit?: number; vendors?: boolean } = {}) => {
       const params = new URLSearchParams({ q, limit: String(opts.limit ?? 50) });

@@ -3,8 +3,9 @@ package postgres
 import (
 	"aether/backend/internal/adapters/minew"
 	"context"
-	"crypto/subtle"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,13 +17,17 @@ import (
 	"aether/backend/internal/security"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 type Repository struct {
-	db   *gorm.DB
+	db *gorm.DB
+	// auth is the login pool (aether_auth, migration 00040): the only connection that can read a password hash.
+	// Nil until AttachAuth; login and change-password then answer ErrUnavailable.
+	auth *sql.DB
 	opts Options
 }
 
@@ -110,10 +115,76 @@ func CheckRuntimeRole(ctx context.Context, q Queryer) error {
 	if e := q.QueryRowContext(ctx, `SELECT has_any_column_privilege(current_user,'identity.users','UPDATE') OR has_table_privilege(current_user,'identity.users','DELETE')`).Scan(&writes); e != nil || writes {
 		return errors.New("API database role must not update or delete identity.users")
 	}
+	// Since 00040 no function hands the runtime a hash: those belong to aether_auth, which the runtime must not be.
+	var loginPath bool
+	if e := q.QueryRowContext(ctx, `SELECT to_regprocedure('identity.own_password_is(bytea)') IS NULL
+	  OR coalesce((SELECT bool_or(has_function_privilege(current_user,f,'EXECUTE')) FROM unnest(ARRAY[to_regprocedure('identity.login_candidate(text)'),to_regprocedure('identity.own_password_hash()')]) f WHERE f IS NOT NULL),false)
+	  OR coalesce((SELECT pg_has_role(current_user,oid,'MEMBER') FROM pg_roles WHERE rolname='aether_auth'),false)`).Scan(&loginPath); e != nil || loginPath {
+		return errors.New("API database role must not reach password hashes (migration 00040 required)")
+	}
+	return nil
+}
+
+// CheckAuthRole refuses a login pool that can do more than turn an email into id, name and password hash through
+// identity.login_candidate (migration 00040): a privileged, replication or owner role, a member of any role at all
+// (grants reach it only directly), any table or column privilege in the application schemas, USAGE on core, or
+// EXECUTE on any other SECURITY DEFINER function. Invoker functions stay callable (PUBLIC) but run with this role's
+// rights, which are none.
+func CheckAuthRole(ctx context.Context, q Queryer) error {
+	var unsafe bool
+	e := q.QueryRowContext(ctx, `SELECT r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication
+	  OR EXISTS(SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid)
+	  FROM pg_roles r WHERE r.rolname=current_user`).Scan(&unsafe)
+	if e != nil || unsafe {
+		return errors.New("auth database role must be unprivileged and a member of no other role")
+	}
+	var usable bool
+	if e := q.QueryRowContext(ctx, `SELECT to_regprocedure('identity.own_password_is(bytea)') IS NOT NULL AND has_function_privilege(current_user,'identity.login_candidate(text)','EXECUTE')`).Scan(&usable); e != nil || !usable {
+		return errors.New("auth database role cannot run the login function (migration 00040 required)")
+	}
+	var extra int64
+	if e := q.QueryRowContext(ctx, `SELECT
+	  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+	    WHERE n.nspname IN ('core','identity','public') AND c.relkind IN ('r','p','v','m','f','S')
+	      AND (has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+	        OR (c.relkind <> 'S' AND has_any_column_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))))
+	+ (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+	    WHERE n.nspname IN ('core','identity','public') AND p.prosecdef
+	      AND p.oid <> 'identity.login_candidate(text)'::regprocedure AND has_function_privilege(current_user,p.oid,'EXECUTE'))
+	+ (CASE WHEN has_schema_privilege(current_user,'core','USAGE') THEN 1 ELSE 0 END)`).Scan(&extra); e != nil || extra > 0 {
+		return errors.New("auth database role must hold nothing but the login function")
+	}
+	return nil
+}
+
+// AttachAuth opens the login pool (AUTH_DATABASE_URL, role aether_auth) the API reads password hashes through.
+// Only the API needs it; ingest, workers and admin commands never read a hash.
+func (r *Repository) AttachAuth(dsn string) error {
+	db, e := sql.Open("pgx", dsn)
+	if e != nil {
+		return errors.New("auth database connection failed")
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if e = db.PingContext(ctx); e != nil {
+		db.Close()
+		return e
+	}
+	if e = CheckAuthRole(ctx, db); e != nil {
+		db.Close()
+		return e
+	}
+	r.auth = db
 	return nil
 }
 
 func (r *Repository) Close() error {
+	if r.auth != nil {
+		r.auth.Close()
+	}
 	db, e := r.db.DB()
 	if e != nil {
 		return e
@@ -125,7 +196,14 @@ func (r *Repository) Ready(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	return db.PingContext(ctx)
+	if e := db.PingContext(ctx); e != nil {
+		return e
+	}
+	// The API cannot log anyone in without its login pool, so it is part of readiness where it is attached.
+	if r.auth != nil {
+		return r.auth.PingContext(ctx)
+	}
+	return nil
 }
 func (r *Repository) tx(ctx context.Context, user, tenant string, fn func(*gorm.DB) error) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -216,27 +294,67 @@ func (r *Repository) CreateAccount(ctx context.Context, u domain.User, tenant, n
 }
 func (r *Repository) UserByEmail(ctx context.Context, email string) (domain.User, error) {
 	var u domain.User
-	// Login runs before any identity is known; the definer function is the only path from an email to a hash.
-	res := r.db.WithContext(ctx).Raw(`SELECT id,email,name,password_hash FROM identity.login_candidate(?)`, email).Scan(&u)
-	if res.Error != nil {
-		return u, res.Error
+	if r.auth == nil {
+		return u, domain.ErrUnavailable
 	}
-	if res.RowsAffected == 0 {
+	// Login runs before any identity is known; only the login pool may turn an email into a hash (00040).
+	e := r.auth.QueryRowContext(ctx, `SELECT id,email,name,password_hash FROM identity.login_candidate($1)`, email).Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash)
+	if errors.Is(e, sql.ErrNoRows) {
 		return u, domain.ErrUnauthorized
 	}
-	return u, nil
+	return u, e
+}
+
+// ownPasswordHash is the caller's current hash for ChangeOwnPassword: the runtime reads the caller's own email
+// (users_self_read), the login pool looks it up, and the identity must be the caller's. No function takes a user id
+// and returns a hash (migration 00040).
+func (r *Repository) ownPasswordHash(ctx context.Context, p domain.Principal) (string, error) {
+	if r.auth == nil {
+		return "", domain.ErrUnavailable
+	}
+	var email string
+	if e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		var rows []struct{ Email string }
+		if e := tx.Raw(`SELECT email FROM identity.users WHERE id=?`, p.UserID).Scan(&rows).Error; e != nil {
+			return e
+		}
+		if len(rows) != 1 {
+			return domain.ErrUnauthorized
+		}
+		email = rows[0].Email
+		return nil
+	}); e != nil {
+		return "", e
+	}
+	var id, hash string
+	e := r.auth.QueryRowContext(ctx, `SELECT id,password_hash FROM identity.login_candidate($1)`, email).Scan(&id, &hash)
+	if errors.Is(e, sql.ErrNoRows) || (e == nil && (id != p.UserID || hash == "")) {
+		return "", domain.ErrUnauthorized
+	}
+	return hash, e
+}
+
+// hashDigest is what own_password_is takes: the sha256 of a verified hash (hex, decoded in SQL; gorm would expand a
+// []byte into a list), so the hash itself is never a bind parameter the server could log.
+func hashDigest(hash string) string {
+	sum := sha256.Sum256([]byte(hash))
+	return hex.EncodeToString(sum[:])
 }
 
 // StartSession opens a session for a password the service has just verified against verifiedHash. The hash
 // is read again inside this transaction: a password changed or reset between the check and here refuses.
 func (r *Repository) StartSession(ctx context.Context, s domain.Session, digest, verifiedHash string) (domain.Session, error) {
 	e := r.tx(ctx, s.UserID, s.TenantID, func(tx *gorm.DB) error {
-		var current []struct{ Hash *string }
-		if e := tx.Raw(`SELECT identity.own_password_hash() AS hash`).Scan(&current).Error; e != nil {
+		// The runtime never sees the hash (00040): it asks whether the stored one is still the verified one, and
+		// the identity row stays locked, so a change or reset in between waits and then revokes this session.
+		if verifiedHash == "" {
+			return domain.ErrUnauthorized
+		}
+		var same bool
+		if e := tx.Raw(`SELECT identity.own_password_is(decode(?,'hex'))`, hashDigest(verifiedHash)).Scan(&same).Error; e != nil {
 			return e
 		}
-		if len(current) != 1 || current[0].Hash == nil || verifiedHash == "" ||
-			subtle.ConstantTimeCompare([]byte(*current[0].Hash), []byte(verifiedHash)) != 1 {
+		if !same {
 			return domain.ErrUnauthorized
 		}
 		var memberships []struct{ TenantID string }
@@ -427,7 +545,11 @@ func (r *Repository) RevokeGateway(ctx context.Context, p domain.Principal, id s
 		if e := signal(tx, p.TenantID, "inventory", id); e != nil {
 			return e
 		}
-		return audit(tx, p, "gateway.revoked", id)
+		if e := audit(tx, p, "gateway.revoked", id); e != nil {
+			return e
+		}
+		// Last, after the gateway row lock: the canvas forgets the gateway and re-homes its devices' positions.
+		return syncGatewayLayout(tx, p.TenantID, id)
 	})
 }
 func (r *Repository) GatewayTenant(ctx context.Context, id, digest string) (string, error) {
@@ -482,7 +604,11 @@ func (r *Repository) CreateDevice(ctx context.Context, p domain.Principal, d dom
 		if e := bumpEdgeConfig(tx, d.GatewayID); e != nil {
 			return e
 		}
-		return audit(tx, p, "device.created", d.ID)
+		if e := audit(tx, p, "device.created", d.ID); e != nil {
+			return e
+		}
+		// A registration outranks a sighting: its canvas position now follows the registered gateway.
+		return syncDeviceLayout(tx, p.TenantID, d.ID)
 	})
 	return classify(e)
 }
@@ -708,7 +834,14 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 				return e
 			}
 		}
-		return audit(tx, p, action, id)
+		if e := audit(tx, p, action, id); e != nil {
+			return e
+		}
+		if previous != d.GatewayID {
+			// After the device and gateway row locks: the canvas position follows the device to its new gateway.
+			return syncDeviceLayout(tx, p.TenantID, id)
+		}
+		return nil
 	})
 	return d, classify(e)
 }
@@ -737,7 +870,11 @@ func (r *Repository) RemoveDevice(ctx context.Context, p domain.Principal, id st
 		if e := bumpEdgeConfigOfDevice(tx, id); e != nil {
 			return e
 		}
-		return audit(tx, p, "device.removed", id)
+		if e := audit(tx, p, "device.removed", id); e != nil {
+			return e
+		}
+		// A tag still heard by a gateway stays on the canvas under that gateway; otherwise its position goes.
+		return syncDeviceLayout(tx, p.TenantID, id)
 	})
 }
 
@@ -778,6 +915,9 @@ func (r *Repository) RestoreDevice(ctx context.Context, p domain.Principal, id s
 		if e := bumpEdgeConfigOfDevice(tx, id); e != nil {
 			return e
 		}
-		return audit(tx, p, "device.restored", id)
+		if e := audit(tx, p, "device.restored", id); e != nil {
+			return e
+		}
+		return syncDeviceLayout(tx, p.TenantID, id)
 	}))
 }

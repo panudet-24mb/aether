@@ -1,5 +1,6 @@
-// Layered auto layout (broker → gateways → devices) and per-browser persistence of manual positions.
-// Positions are a viewing convenience; they are not stored on the server.
+// Layered auto layout (broker → gateways → devices). Manual positions are stored on the server per workspace
+// (GET/POST /topology/layout) so everyone sees one board; this browser keeps only the palette's "placed" marks and,
+// until it is uploaded once, the arrangement it used to keep locally.
 
 import type { XYPosition } from "@xyflow/react";
 import type { DeviceEntity, GatewayEntity } from "./model";
@@ -102,6 +103,10 @@ export function placeNewNodes(input: LayoutInput, known: Record<string, XYPositi
   return out;
 }
 
+/** Node ids the server stores (drafts are local until adopted). Mirrors the backend's pattern. */
+const SERVER_NODE = /^(broker|gw:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|dev:[a-z0-9][a-z0-9._:-]{0,63})$/;
+export const isServerNode = (id: string) => SERVER_NODE.test(id);
+
 export type Persisted = { positions: Record<string, XYPosition>; placed: string[] };
 
 const key = (tenant: string) => `aether.topology.v1.${tenant || "default"}`;
@@ -123,4 +128,10 @@ export function savePersisted(tenant: string, value: Persisted): void {
   } catch {
     // Storage may be unavailable (private mode); the canvas still works for this session.
   }
+}
+
+/** Keeps the palette marks and drops the positions once the server holds the layout. */
+export function forgetLocalPositions(tenant: string): void {
+  const { placed } = loadPersisted(tenant);
+  savePersisted(tenant, { positions: {}, placed });
 }

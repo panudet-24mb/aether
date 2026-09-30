@@ -371,13 +371,23 @@ func (r *Repository) ResetMemberPassword(ctx context.Context, p domain.Principal
 // never in SQL), stores the new hash, clears must_change_password and ends every other session of that
 // identity — in any workspace, because the password is global to the identity.
 func (r *Repository) ChangeOwnPassword(ctx context.Context, p domain.Principal, check func(currentHash string) bool, hash string) error {
+	// The runtime cannot read a hash (00040): the current one comes through the login pool, for the caller's own
+	// email and identity, and is verified in Go before anything is written.
+	current, e := r.ownPasswordHash(ctx, p)
+	if e != nil {
+		return e
+	}
+	if !check(current) {
+		return domain.ErrUnauthorized
+	}
 	return r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		// The runtime has no SELECT on password_hash; the definer returns the caller's own hash only.
-		var rows []struct{ PasswordHash *string }
-		if e := tx.Raw(`SELECT identity.own_password_hash() AS password_hash`).Scan(&rows).Error; e != nil {
+		// Still the password just verified? The identity row stays locked until this commits, so a concurrent
+		// change or reset either finished first (refused here) or waits for this one.
+		var same bool
+		if e := tx.Raw(`SELECT identity.own_password_is(decode(?,'hex'))`, hashDigest(current)).Scan(&same).Error; e != nil {
 			return e
 		}
-		if len(rows) != 1 || rows[0].PasswordHash == nil || !check(*rows[0].PasswordHash) {
+		if !same {
 			return domain.ErrUnauthorized
 		}
 		var ok bool

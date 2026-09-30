@@ -47,6 +47,11 @@ func moduleFor(path, method string) string {
 	case "commands":
 		// Switching devices is its own module: an owner can let a member watch the live view but not operate it.
 		return "control"
+	case "topology":
+		// The shared canvas layout: reading it is part of seeing the board, moving nodes is a connect write.
+		if method != "GET" {
+			return "connect"
+		}
 	case "gateways", "devices", "mqtt", "discovery", "templates":
 		if method != "GET" || head == "discovery" {
 			return "connect"

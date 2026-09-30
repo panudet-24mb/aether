@@ -10,6 +10,9 @@ env = dict(os.environ)
 env.update(config)
 port = config.get('POSTGRES_PORT', '55432')
 env['DATABASE_URL'] = f"postgresql://aether_app:{config['APP_DB_PASSWORD']}@127.0.0.1:{port}/aether?sslmode=disable"
+# The login pool (role aether_auth, migration 00040); migrate sets its password from AUTH_DB_PASSWORD.
+if 'AUTH_DB_PASSWORD' in config:
+    env['AUTH_DATABASE_URL'] = f"postgresql://aether_auth:{config['AUTH_DB_PASSWORD']}@127.0.0.1:{port}/aether?sslmode=disable"
 env['MIGRATION_DATABASE_URL'] = f"postgresql://postgres:{config['POSTGRES_PASSWORD']}@127.0.0.1:{port}/aether?sslmode=disable"
 env['TEST_DATABASE_URL'] = f"postgresql://aether_app:{config['APP_DB_PASSWORD']}@127.0.0.1:{port}/aether_test?sslmode=disable"
 env['TEST_ADMIN_DATABASE_URL'] = f"postgresql://postgres:{config['POSTGRES_PASSWORD']}@127.0.0.1:{port}/aether_test?sslmode=disable"
@@ -24,10 +27,13 @@ commands = {
 }
 if len(sys.argv) != 2 or sys.argv[1] not in commands:
     raise SystemExit('Usage: backend-local.py migrate|api|test|bootstrap')
+if sys.argv[1] in ('migrate', 'api') and 'AUTH_DB_PASSWORD' not in config:
+    raise SystemExit('.env has no AUTH_DB_PASSWORD (migration 00040): run python3 infra/generate-env.py --add-missing, then migrate')
 # The API must never inherit migration or test-admin credentials.
 if sys.argv[1] in ('api', 'bootstrap'):
     env.pop('MIGRATION_DATABASE_URL', None)
     env.pop('TEST_ADMIN_DATABASE_URL', None)
     env.pop('POSTGRES_PASSWORD', None)
+    env.pop('AUTH_DB_PASSWORD', None)
 result = subprocess.run(commands[sys.argv[1]], cwd=root / 'backend', env=env)
 raise SystemExit(result.returncode)

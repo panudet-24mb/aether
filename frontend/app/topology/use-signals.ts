@@ -4,7 +4,8 @@ import { useLatest } from "./use-latest";
 
 const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 
-export type SignalKind = "packet" | "event" | "alert" | "inventory" | "command";
+/** "layout": someone saved the shared canvas layout of the connect view. */
+export type SignalKind = "packet" | "event" | "alert" | "inventory" | "command" | "layout";
 
 /**
  * Packet and event signals arrive about once per second per busy gateway (every Minew tag advertises every

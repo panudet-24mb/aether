@@ -21,13 +21,13 @@ import { LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search } from 
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./topology.css";
-import { ApiError, createClientFrom, type Device, type GatewayCreated, type MQTTCredentials, type Snapshot } from "./api";
+import { ApiError, createClientFrom, type Device, type GatewayCreated, type Layout, type MQTTCredentials, type Snapshot } from "./api";
 import { useLatest } from "./use-latest";
 import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
 import ZigbeeCatalogSearch from "./zigbee-catalog";
 import Inspector, { type Selection } from "./inspector";
-import { NODE_ID, autoLayout, loadPersisted, parseNodeId, placeNewNodes, savePersisted, type LayoutInput } from "./layout";
+import { NODE_ID, autoLayout, forgetLocalPositions, isServerNode, loadPersisted, parseNodeId, placeNewNodes, savePersisted, type LayoutInput } from "./layout";
 import { buildTopology, currentGateway, isAlerting, isFresh, isRecognised, scopeSnapshot, summarize, type ProjectScope, type Topology } from "./model";
 import { nodeTypes, type AppNode } from "./nodes";
 import Palette, { DRAG_MIME, type DragPayload } from "./palette";
@@ -39,6 +39,17 @@ type GatewayDialog = { model: string; position: XYPosition } | null;
 type AdoptDialog = { external: string | null; gatewayId: string | null; draftId?: string; /** A name to start from (e.g. the Tuya device name from an import). */ name?: string } | null;
 
 const POLL_MS = 8000;
+/** A drag is saved this long after it ends, so moving several nodes in a row is one save. */
+const SAVE_DEBOUNCE_MS = 800;
+/** Entries per save request; the server accepts up to 2000 (and 240 KiB). */
+const MAX_SAVE_ENTRIES = 1000;
+/** With a live socket, the layout is still re-read every this many polls in case a signal was missed. */
+const LAYOUT_CHECK_EVERY = 4;
+/** The server's coordinate range, rounded to what it stores. */
+const clampCoord = (v: number) => Math.round(Math.max(-1_000_000, Math.min(1_000_000, v)) * 100) / 100;
+const EDIT_ROLES = new Set(["owner", "admin", "operator"]);
+type SaveState = "idle" | "saving" | "saved" | "conflict" | "error";
+const SAVE_LABEL: Record<SaveState, string> = { idle: "ผังร่วมกัน", saving: "กำลังบันทึกผัง…", saved: "บันทึกผังแล้ว", conflict: "มีคนจัดผังพร้อมกัน · รวมให้แล้ว", error: "บันทึกผังไม่สำเร็จ · จะลองใหม่" };
 /** With a live signal socket the poll is only a safety net. */
 const POLL_CONNECTED_MS = 30000;
 const EMPTY: Topology = { broker: { configured: false, settings: null }, gateways: [], devices: [], serverTime: 0 };
@@ -147,6 +158,178 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
   const sequence = useRef(0);
   const unauthorized = useRef(false);
 
+  // The shared layout (server): the version this canvas last saw and the nodes moved here but not saved yet.
+  const serverVersion = useRef<number | null>(null);
+  const dirty = useRef(new Set<string>());
+  const dragging = useRef(new Set<string>());
+  const editableRef = useRef(false);
+  /** A member restricted to some projects never saves the broker (the server would skip it). */
+  const restrictedRef = useRef(false);
+  /** The one-time upload of this browser's old local layout, while it is in flight. */
+  const migrating = useRef<{ tenant: string; ids: Set<string> } | null>(null);
+  const unmounted = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saving = useRef(false);
+  const saveAgain = useRef(false);
+  const flushRef = useRef<() => Promise<void>>(async () => {});
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [canEdit, setCanEditState] = useState(false);
+  const [restricted, setRestricted] = useState(false);
+  const setCanEdit = (value: boolean) => {
+    editableRef.current = value;
+    setCanEditState(value);
+  };
+
+  /** Takes the saved positions of every node not being moved or waiting to be saved here. `full` replaces this
+   * canvas's own positions too (a lost race for the one-time upload): drafts are the only thing kept. */
+  const adoptServer = useCallback((layout: Layout, full = false) => {
+    serverVersion.current = layout.version;
+    if (full) {
+      const drafts = Object.fromEntries(Object.entries(positions.current).filter(([id]) => !isServerNode(id)));
+      positions.current = { ...drafts, ...layout.positions };
+      bumpLayout();
+      return;
+    }
+    let changed = false;
+    for (const [id, pt] of Object.entries(layout.positions)) {
+      if (dirty.current.has(id) || dragging.current.has(id)) continue;
+      const mine = positions.current[id];
+      if (!mine || mine.x !== pt.x || mine.y !== pt.y) {
+        positions.current[id] = { x: pt.x, y: pt.y };
+        changed = true;
+      }
+    }
+    if (changed) bumpLayout();
+  }, []);
+
+  /** The local layout was uploaded (or lost the race to someone else's): this browser forgets its old copy. */
+  const finishMigration = useCallback(() => {
+    const m = migrating.current;
+    if (!m || [...m.ids].some((id) => dirty.current.has(id))) return;
+    forgetLocalPositions(m.tenant);
+    migrating.current = null;
+  }, []);
+
+  const flush = useCallback(async (): Promise<void> => {
+    if (!editableRef.current || serverVersion.current === null) return;
+    if (saving.current) {
+      saveAgain.current = true;
+      return;
+    }
+    const pending = [...dirty.current].filter((id) => isServerNode(id) && positions.current[id] && !dragging.current.has(id)).sort();
+    // Out-of-range or broken coordinates would be refused by the server forever: clamp them, drop what cannot be sent.
+    const sent: string[] = [];
+    const body: Record<string, { x: number; y: number }> = {};
+    for (const id of pending) {
+      const { x, y } = positions.current[id];
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        dirty.current.delete(id);
+        continue;
+      }
+      if (sent.length >= MAX_SAVE_ENTRIES) break;
+      sent.push(id);
+      body[id] = { x: clampCoord(x), y: clampCoord(y) };
+    }
+    if (!sent.length) return;
+    // Remember exactly what was sent: a node moved again while the save is in flight stays dirty for the next one.
+    const sentAt = new Map(sent.map((id) => [id, positions.current[id]]));
+    saving.current = true;
+    setSaveState("saving");
+    try {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const saved = await client.saveLayout({ positions: body, version: serverVersion.current ?? 0 });
+          serverVersion.current = saved.layout.version;
+          for (const id of sent) if (positions.current[id] === sentAt.get(id)) dirty.current.delete(id);
+          finishMigration();
+          setSaveState("saved");
+          if (saved.ignored.length) setNotice(`ไม่ได้บันทึกตำแหน่ง ${saved.ignored.length} รายการ · อุปกรณ์ถูกถอดออกแล้ว หรืออยู่นอกโปรเจกต์ของคุณ`);
+          // A board larger than one save goes out in several.
+          if (pending.length > sent.length) saveAgain.current = true;
+          return;
+        } catch (e) {
+          const current = e instanceof ApiError && e.status === 409 ? (e.body as { layout?: Layout } | undefined)?.layout : undefined;
+          if (current && migrating.current) {
+            // Another editor uploaded first: their board wins whole, and this browser's old copy is not needed.
+            const m = migrating.current;
+            for (const id of m.ids) dirty.current.delete(id);
+            adoptServer(current, true);
+            finishMigration();
+            setSaveState("conflict");
+            return;
+          }
+          if (!current || attempt >= 3) throw e;
+          // Someone saved first: their positions win for nodes not moved here, ours win for the nodes we moved.
+          adoptServer(current);
+          setSaveState("conflict");
+        }
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 403) {
+        // The role or module access changed while the page was open: stop trying, the board is read-only now.
+        setCanEdit(false);
+        dirty.current.clear();
+        setSaveState("idle");
+        return;
+      }
+      if (e instanceof ApiError && (e.status === 400 || e.status === 413)) {
+        // The server will never accept these as they are; retrying would loop. Keep them on this screen only.
+        for (const id of sent) dirty.current.delete(id);
+        setSaveState("error");
+        setActionError(e.reason === "layout_full" ? "ผังเต็มแล้ว (5,000 ตำแหน่ง) · ให้ owner เปิดหน้านี้เพื่อล้างตำแหน่งของอุปกรณ์ที่ไม่มีแล้ว" : `บันทึกผังไม่สำเร็จ · ${e.message}`);
+        return;
+      }
+      setSaveState("error");
+      if (!unmounted.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => void flushRef.current(), 5000);
+      }
+    } finally {
+      saving.current = false;
+      if (saveAgain.current && !unmounted.current) {
+        saveAgain.current = false;
+        void flushRef.current();
+      }
+    }
+  }, [client, adoptServer, finishMigration]);
+  useEffect(() => {
+    flushRef.current = flush;
+  }, [flush]);
+  useEffect(
+    () => () => {
+      // One last save of moves still waiting; nothing is retried after the page is gone.
+      unmounted.current = true;
+      clearTimeout(saveTimer.current);
+      if (dirty.current.size) void flushRef.current();
+    },
+    [],
+  );
+
+  /** Marks nodes as moved here and saves them shortly. A member who may not edit never holds local changes, so the
+   * board they see always follows the saved one. */
+  const schedule = useCallback((ids: Iterable<string> = []) => {
+    if (!editableRef.current) return;
+    for (const id of ids) if (isServerNode(id) && !(id === NODE_ID.broker && restrictedRef.current)) dirty.current.add(id);
+    if (serverVersion.current === null) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
+  }, []);
+
+  const refreshLayout = useCallback(async () => {
+    try {
+      const layout = await client.layout();
+      // First successful load after the server was unreachable at start: moves made meanwhile are saved now.
+      const first = serverVersion.current === null;
+      if (first || layout.version > (serverVersion.current ?? 0)) adoptServer(layout);
+      if (first && editableRef.current && dirty.current.size) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
+      }
+    } catch {
+      // the next signal or poll tries again
+    }
+  }, [client, adoptServer]);
+
   // Freshness keeps decaying between polls and when polling fails, so a dead backend cannot leave devices "online".
   const serverNow = snapshot ? snapshot.serverTime + Math.max(0, now - receivedAt) : 0;
   // An archived or foreign project id falls back to "all" so the canvas never goes blank by accident.
@@ -201,15 +384,44 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     await load(true);
   }, [load]);
 
-  // Session-scoped layout: positions are keyed by tenant so two workspaces never share a canvas.
+  // The layout comes from the server (one board per workspace). A browser that still holds its old local arrangement
+  // uploads it once when the workspace has none yet, then forgets it.
   useEffect(() => {
     let active = true;
     client
       .me()
-      .then((me) => {
+      .then(async (me) => {
         if (!active) return;
         const saved = loadPersisted(me.tenant_id);
-        positions.current = saved.positions;
+        let server: Layout | null = null;
+        try {
+          server = await client.layout();
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) throw e;
+        }
+        if (!active) return;
+        // Module access narrows the role: a member whose "connect" is read-only sees the board but does not arrange it.
+        const connect = me.permissions?.connect;
+        setCanEdit(me.role === "owner" || (EDIT_ROLES.has(me.role) && connect !== "read" && connect !== "none"));
+        restrictedRef.current = (me.project_ids?.length ?? 0) > 0;
+        setRestricted(restrictedRef.current);
+        const legacy = Object.entries(saved.positions).filter(([id]) => isServerNode(id) && !(id === NODE_ID.broker && restrictedRef.current));
+        if (!server) {
+          // Server unreachable: work from this browser's copy; nothing is saved until the layout loads.
+          positions.current = saved.positions;
+        } else if (server.version === 0 && Object.keys(server.positions).length === 0 && legacy.length > 0) {
+          positions.current = Object.fromEntries(legacy);
+          serverVersion.current = 0;
+          if (editableRef.current) {
+            for (const [id] of legacy) dirty.current.add(id);
+            migrating.current = { tenant: me.tenant_id, ids: new Set(legacy.map(([id]) => id)) };
+            void flushRef.current();
+          }
+        } else {
+          positions.current = { ...server.positions };
+          serverVersion.current = server.version;
+          if (legacy.length > 0) forgetLocalPositions(me.tenant_id);
+        }
         setPlaced(new Set(saved.placed));
         try {
           setScopeState(localStorage.getItem(`aether.topology.project.${me.tenant_id}`) ?? "all");
@@ -240,6 +452,10 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     return () => clearTimeout(p.timer);
   }, []);
   const connected = useSignals(handlers, (kind) => {
+    if (kind === "layout") {
+      void refreshLayout();
+      return;
+    }
     pending.current.force = pending.current.force || kind === "inventory";
     clearTimeout(pending.current.timer);
     pending.current.timer = setTimeout(() => {
@@ -254,8 +470,12 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     if (!tenant) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let polls = 0;
     const poll = async () => {
       await load();
+      // Without the signal socket, another member's layout changes arrive with the poll instead; with it, every
+      // few polls still check, in case a signal was dropped.
+      if (!connectedRef.current || serverVersion.current === null || ++polls % LAYOUT_CHECK_EVERY === 0) void refreshLayout();
       if (active && !unauthorized.current) timer = setTimeout(poll, connectedRef.current ? POLL_CONNECTED_MS : POLL_MS);
     };
     void poll();
@@ -263,7 +483,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       active = false;
       clearTimeout(timer);
     };
-  }, [tenant, load, connectedRef]);
+  }, [tenant, load, connectedRef, refreshLayout]);
 
   useEffect(() => {
     if (!notice) return;
@@ -320,20 +540,14 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     return out;
   }, [topology, drafts, query]);
 
-  const persist = useCallback(
-    (nextPlaced?: Set<string>) => {
+  /** The palette's "placed" marks stay in this browser; positions live on the server. */
+  const savePlaced = useCallback(
+    (nextPlaced: Set<string>) => {
       if (!tenant) return;
-      // Prune keys for nodes that no longer exist so storage does not grow with every BLE device ever seen.
-      const keep = new Set<string>([NODE_ID.broker]);
-      for (const g of fullTopology.gateways) keep.add(NODE_ID.gateway(g.gateway.id));
-      const placedSet = nextPlaced ?? placed;
-      for (const d of fullTopology.devices) if (isRecognised(d, discoveredIds)) keep.add(NODE_ID.device(d.external));
-      const pruned: Record<string, XYPosition> = {};
-      for (const [id, pos] of Object.entries(positions.current)) if (keep.has(id)) pruned[id] = pos;
       const known = new Set(fullTopology.devices.map((d) => d.external));
-      savePersisted(tenant, { positions: pruned, placed: [...placedSet].filter((mac) => known.has(mac)) });
+      savePersisted(tenant, { positions: loadPersisted(tenant).positions, placed: [...nextPlaced].filter((mac) => known.has(mac)) });
     },
-    [tenant, placed, fullTopology, discoveredIds],
+    [tenant, fullTopology],
   );
 
   // Nodes are derived from the model plus the positions the user has dragged to (kept in a ref, versioned by layoutVersion).
@@ -347,7 +561,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     const next: AppNode[] = [];
     const push = (node: AppNode) => {
       const prev = nodeCache.current.get(node.id);
-      if (prev && prev.type === node.type && prev.selected === node.selected && prev.position.x === node.position.x && prev.position.y === node.position.y && shallowEqual(prev.measured, node.measured) && shallowEqual(prev.data, node.data)) {
+      if (prev && prev.type === node.type && prev.selected === node.selected && prev.draggable === node.draggable && prev.position.x === node.position.x && prev.position.y === node.position.y && shallowEqual(prev.measured, node.measured) && shallowEqual(prev.data, node.data)) {
         next.push(prev);
       } else {
         nodeCache.current.set(node.id, node);
@@ -358,6 +572,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     const settings = topology.broker.settings;
     push({
       ...base(NODE_ID.broker),
+      // Only a member who sees every project may move the broker (the server keeps it otherwise).
+      draggable: !restricted,
       type: "broker",
       data: {
         configured: topology.broker.configured,
@@ -407,19 +623,19 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       push({ ...base(id), type: "draft", data: { profile: draft.profile, label: profile?.label ?? draft.profile, dim: dimmed.has(id) } });
     }
     return { nodes: next, added };
-  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope]);
+  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope, restricted]);
 
-  // Commit auto-placed positions after render (never during it), persist them, and fit the viewport once.
+  // Commit auto-placed positions after render (never during it), save them for everyone, and fit the viewport once.
   useEffect(() => {
     if (Object.keys(added).length) {
       positions.current = { ...positions.current, ...added };
-      persist();
+      schedule(Object.keys(added));
     }
     if (!fitted.current && nodes.length >= 1) {
       fitted.current = true;
       requestAnimationFrame(() => fitView({ padding: 0.2, duration: 300 }));
     }
-  }, [nodes, added, persist, fitView]);
+  }, [nodes, added, schedule, fitView]);
 
   const edges = useMemo<Edge[]>(() => {
     const out: Edge[] = [];
@@ -557,14 +773,19 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       if (prev.has(external)) return prev;
       const next = new Set(prev);
       next.add(external);
-      persist(next);
+      savePlaced(next);
       return next;
     });
+    schedule([NODE_ID.device(external)]);
   }
 
   function relayout() {
-    positions.current = autoLayout(layoutInput);
-    persist();
+    // Only the nodes on screen are laid out and saved: under a project filter every other project's positions and
+    // the broker stay where they are, for this member and everyone else.
+    const auto = autoLayout(layoutInput);
+    const ids = Object.keys(auto).filter((id) => id !== NODE_ID.broker || (activeScope === "all" && !restrictedRef.current));
+    for (const id of ids) positions.current[id] = auto[id];
+    schedule(ids);
     bumpLayout();
     requestAnimationFrame(() => fitView({ padding: 0.2, duration: 300 }));
   }
@@ -593,6 +814,11 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "รับการเปลี่ยนแปลงแบบ real-time" : "ยังไม่ได้เชื่อม real-time · ใช้การตรวจเป็นรอบแทน"}>
             <i aria-hidden="true" /> {connected ? "Live" : "Polling"}
           </span>
+          {tenant && (
+            <span className={`topo-save is-${canEdit ? saveState : "readonly"}`} role="status" title={canEdit ? "ตำแหน่งบน canvas ใช้ร่วมกันทั้ง workspace · ลากแล้วบันทึกให้อัตโนมัติ" : "ผังนี้จัดโดย owner / admin / operator · บทบาทของคุณดูได้อย่างเดียว"}>
+              {canEdit ? SAVE_LABEL[saveState] : "ผังอ่านอย่างเดียว"}
+            </span>
+          )}
           <span title="gateway ที่กำลังส่งข้อมูล / gateway ทั้งหมดในมุมมองนี้">
             <b>{receiving}</b>/{topology.gateways.length} gateway
           </span>
@@ -733,7 +959,15 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
               else if (e.source) select(e.source);
             }}
             onPaneClick={() => setSelection(null)}
-            onNodeDragStop={() => persist()}
+            onNodeDragStart={(_, node, dragged) => {
+              for (const n of dragged.length ? dragged : [node]) dragging.current.add(n.id);
+            }}
+            onNodeDragStop={(_, node, dragged) => {
+              const ids = (dragged.length ? dragged : [node]).map((n) => n.id);
+              for (const id of ids) dragging.current.delete(id);
+              schedule(ids);
+            }}
+            nodesDraggable={canEdit}
             onConnect={onConnect}
             onReconnect={(oldEdge, connection) => {
               // Dragging the gateway end of an adopted (green) link onto another gateway moves the registration.
@@ -856,6 +1090,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
               void action(async () => {
                 const created = await client.createGateway(name, dialog.model, activeScope !== "all" && activeScope !== "none" ? activeScope : null);
                 positions.current[NODE_ID.gateway(created.gateway.id)] = dialog.position;
+                schedule([NODE_ID.gateway(created.gateway.id)]);
                 const model = gatewayModel(dialog.model);
                 if (model?.transport === "http") setHttpTokens((prev) => ({ ...prev, [created.gateway.id]: created }));
                 setGatewayDialog(null);

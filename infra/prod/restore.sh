@@ -54,9 +54,17 @@ fi
 APP_DB_PASSWORD="$(grep '^APP_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 MQTT_PROVISION_DB_PASSWORD="$(grep '^MQTT_PROVISION_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 export APP_DB_PASSWORD MQTT_PROVISION_DB_PASSWORD
+# Forwarded only when the env file has one (from migration 00040 on): psql's \getenv then sees it unset.
+AUTH_FORWARD=""
+AUTH_DB_PASSWORD="$(grep '^AUTH_DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2- || true)"
+if [ -n "$AUTH_DB_PASSWORD" ]; then
+	export AUTH_DB_PASSWORD
+	AUTH_FORWARD="-e AUTH_DB_PASSWORD"
+fi
 
 set +e
-dc exec -T -e APP_DB_PASSWORD -e MQTT_PROVISION_DB_PASSWORD \
+# shellcheck disable=SC2086 # AUTH_FORWARD is empty or one option pair
+dc exec -T -e APP_DB_PASSWORD -e MQTT_PROVISION_DB_PASSWORD $AUTH_FORWARD \
 	backup /bin/sh /opt/aether/restore-inner.sh "$INNER" "$TARGET" "$FORCE"
 STATUS=$?
 set -e

@@ -42,6 +42,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer repo.Close()
+	// Password hashes come only through the login pool (aether_auth, migration 00040); without it nobody could log in.
+	if cfg.AuthDatabaseURL == "" {
+		slog.Error("AUTH_DATABASE_URL required: the login pool (role aether_auth) is the only path to password hashes")
+		os.Exit(1)
+	}
+	if e := repo.AttachAuth(cfg.AuthDatabaseURL); e != nil {
+		slog.Error("auth database initialization failed", "reason", e.Error())
+		os.Exit(1)
+	}
 	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow, AutomationCommands: cfg.AutomationCommands, RefuseTuyaCloud: !cfg.TuyaCloud, CloudLinksPerTenant: cfg.TuyaCloudLinksPerTenant})
 	service, e := app.New(repo, security.NewTokens(cfg.JWTKey, cfg.Issuer), cfg.Registration)
 	if e != nil {

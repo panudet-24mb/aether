@@ -152,6 +152,10 @@ func reapply(ctx context.Context, db *sql.DB, entry LedgerEntry) (counts, skip s
 		if last {
 			return "", fmt.Sprintf("member %s is the last owner of %s in this database; erase by hand (admin erase-user --force) after giving the workspace another owner", entry.SubjectRef, entry.TenantID), nil
 		}
+		// Same order as EraseUser and the in-app erasure: the workspace lock, then the identity row.
+		if _, e := tx.ExecContext(ctx, `SELECT 1 FROM identity.users WHERE id=$1 FOR UPDATE`, entry.SubjectRef); e != nil {
+			return "", "", e
+		}
 		e = tx.QueryRowContext(ctx, `SELECT core.erase_member_data($1,$2,NULL)::text`, entry.TenantID, entry.SubjectRef).Scan(&counts)
 		if e != nil {
 			return "", "", e

@@ -127,23 +127,36 @@ $$;
 
 ไม่มี policy UPDATE/DELETE และ runtime ไม่มีสิทธิ์ทั้งสองอย่าง · **สิทธิ์ SELECT เป็นรายคอลัมน์** `id, email, name, created_at` เท่านั้น — `aether_app` อ่าน `password_hash` ตรง ๆ ไม่ได้เลยแม้แถวของตัวเอง (42501)
 
-`postgres.CheckRuntimeRole` (เรียกจาก `postgres.Open()` ตอน startup) ไม่ยอมเปิดถ้า role ของ API มีสิทธิ์พิเศษหรือเป็นสมาชิก `aether_owner` · ถ้าตารางใดใน schema `core` **หรือ** `identity` (รวม partitioned parent `relkind='p'`) ไม่ได้เปิด RLS + FORCE · หรือถ้า `has_column_privilege(current_user,'identity.users','password_hash','SELECT')` เป็นจริง · หรือถ้า runtime มีสิทธิ์ UPDATE (ทั้งตารางหรือคอลัมน์ใดก็ตาม) หรือ DELETE บน `identity.users`
+`postgres.CheckRuntimeRole` (เรียกจาก `postgres.Open()` ตอน startup) ไม่ยอมเปิดถ้า role ของ API มีสิทธิ์พิเศษหรือเป็นสมาชิก `aether_owner` · ถ้าตารางใดใน schema `core` **หรือ** `identity` (รวม partitioned parent `relkind='p'`) ไม่ได้เปิด RLS + FORCE · หรือถ้า `has_column_privilege(current_user,'identity.users','password_hash','SELECT')` เป็นจริง · หรือถ้า runtime มีสิทธิ์ UPDATE (ทั้งตารางหรือคอลัมน์ใดก็ตาม) หรือ DELETE บน `identity.users` · ตั้งแต่ `00040` ยังไม่ยอมเปิดถ้า runtime EXECUTE `login_candidate` หรือ `own_password_hash` ได้ หรือเป็นสมาชิกของ `aether_auth` (ต้องมี migration `00040` แล้ว)
 
-login ตรวจรหัสผ่านใน Go แล้วค่อยเปิด session · `StartSession` อ่าน `identity.own_password_hash()` อีกครั้งใน transaction ของตัวเองและเทียบกับ hash ที่ `Service.Login` ตรวจผ่าน ถ้ารหัสผ่านถูกเปลี่ยนหรือ reset ในระหว่างนั้นจะได้ Unauthorized
+login ตรวจรหัสผ่านใน Go แล้วค่อยเปิด session · `StartSession` ถาม `identity.own_password_is(hash)` ใน transaction ของตัวเองว่า hash ที่เก็บอยู่ยังเป็นตัวที่ `Service.Login` ตรวจผ่านหรือไม่ ถ้ารหัสผ่านถูกเปลี่ยนหรือ reset ในระหว่างนั้นจะได้ Unauthorized · ฟังก์ชันนี้ล็อกแถว identity (`FOR NO KEY UPDATE`) จน transaction จบ การเปลี่ยน/reset ที่เกิดพร้อมกันจึงรอ แล้วค่อยเพิกถอน session ที่เพิ่งเปิด
 
-ทางที่ RLS ให้ไม่ได้ ถูกยกให้ SECURITY DEFINER (ตัวใหม่และตัวที่แก้ใน `00035` ใช้ `search_path = pg_catalog, pg_temp`, `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO aether_app`)
+#### Login pool: role `aether_auth` (migration `00040`)
+
+Argon2id อยู่ใน Go จึงต้องมี hash มาถึง Go ตอน login · ตั้งแต่ `00040` hash มาได้ทาง **connection แยก** เท่านั้น:
+
+| role | ได้อะไร | ไม่ได้อะไร |
+|---|---|---|
+| `aether_auth` (LOGIN, pool เล็ก 2 connection ใน API จาก `AUTH_DATABASE_URL`) | CONNECT · USAGE บน schema `identity` · EXECUTE `identity.login_candidate(text)` **ฟังก์ชันเดียว** | ไม่มีสิทธิ์ตารางหรือคอลัมน์ใดเลย · ไม่มี USAGE บน `core` · ไม่มี definer อื่น · ไม่เป็นสมาชิกของ role ใดเลย · NOINHERIT, NOREPLICATION (migration บังคับ attribute ทุกครั้ง แม้ role มีอยู่ก่อน) |
+| `aether_app` | `identity.own_password_is(bytea)` → boolean ของ identity ตัวเองเท่านั้น · รับ **sha256 ของ hash** (32 byte, ความยาวอื่นได้ false) ไม่ใช่ตัว hash จึงไม่มี hash เป็น bind parameter ที่ server จะ log ได้ | EXECUTE ฟังก์ชันที่คืน hash ไม่ได้ (42501) · `own_password_hash()` ถูกลบ |
+
+`postgres.CheckAuthRole` (ตอน `AttachAuth` ใน `cmd/api`) ไม่ยอมเปิดถ้า role ของ login pool มีสิทธิ์พิเศษ (รวม REPLICATION) เป็นสมาชิกของ role ใดก็ตาม มีสิทธิ์ตาราง/คอลัมน์ใดใน `core`/`identity`/`public` มี USAGE บน `core` หรือ EXECUTE definer ตัวอื่น และต้อง EXECUTE `login_candidate` ได้ · `/health/ready` ping pool นี้ด้วย · API ไม่ยอม start ถ้าไม่มี `AUTH_DATABASE_URL` และไม่มีทาง fallback ไปใช้ `aether_app` · service อื่น (ingest, commander, tuya-cloud, admin) ไม่ได้รับค่านี้
+
+role ถูกสร้างโดย migration แบบ NOLOGIN (role เป็นของทั้ง cluster และ `init-db.sh` รันเฉพาะ volume ใหม่) แล้ว `cmd/migrate` ตั้ง LOGIN + รหัสผ่านจาก `AUTH_DB_PASSWORD` ทุกครั้งที่รัน (ส่ง SCRAM verifier ไป ไม่ส่ง plaintext) ซึ่งก็เป็นทางหมุนรหัสด้วย · `cmd/migrate` ยังตั้ง `log_parameter_max_length = 0` และ `log_parameter_max_length_on_error = 0` ให้ `aether_app` และ `aether_auth` ทุกครั้งที่รัน (ค่านี้ superuser เท่านั้นที่แก้ได้) bind parameter ของสอง role นี้ เช่น hash ใหม่ตอนสมัคร/เพิ่มสมาชิก/reset/เปลี่ยนรหัส จึงไม่ลง log ของ server แม้เปิด `log_statement` หรือ `log_min_duration_statement` · `ChangeOwnPassword` อ่านอีเมลของตัวเองผ่าน runtime (`users_self_read`) แล้วค้นผ่าน login pool ด้วย `login_candidate` และต้องได้ id เท่ากับผู้เรียก ตรวจรหัสเดิมใน Go แล้วค่อยเขียนใน transaction ของ `aether_app` ที่เริ่มด้วย `own_password_is` (ถ้ามีคนเปลี่ยนไปก่อนจะได้ Unauthorized)
+
+ทางที่ RLS ให้ไม่ได้ ถูกยกให้ SECURITY DEFINER (ตัวใหม่และตัวที่แก้ใน `00035` ใช้ `search_path = pg_catalog, pg_temp`, `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO aether_app` ยกเว้น `login_candidate` ที่คืน hash ซึ่งตั้งแต่ `00040` ให้ `aether_auth` เท่านั้น)
 
 | ฟังก์ชัน | ทำอะไร | ป้องกันอย่างไร |
 |---|---|---|
-| `identity.login_candidate(text)` | id/email/name/password_hash ของอีเมลนี้ สำหรับ login (`UserByEmail`) ซึ่งทำงานก่อนรู้ตัวตน | ค้นแบบตรงตัวหนึ่งแถว ไล่ทั้งตารางไม่ได้ · **แต่คืน hash** ดูข้อจำกัดด้านล่าง |
+| `identity.login_candidate(text)` | id/email/name/password_hash ของอีเมลนี้ สำหรับ login (`UserByEmail`) ซึ่งทำงานก่อนรู้ตัวตน | ค้นแบบตรงตัวหนึ่งแถว ไล่ทั้งตารางไม่ได้ · ข้าม identity ที่ถูกลบ (`00039`) · **ตั้งแต่ `00040` EXECUTE ได้เฉพาะ `aether_auth`** |
 | `identity.any_user_exists()` | มีบัญชีใดอยู่แล้วหรือยัง (boolean) | ใช้บังคับ bootstrap ครั้งเดียวใน `CreateAccount` · RLS จะทำให้ `count(*)` เห็นแค่ตัวเองและนับได้ 0 เสมอ จึงต้องมาทางนี้ |
-| `identity.own_password_hash()` | hash ของ `identity.user_id()` | ใช้ใน `ChangeOwnPassword` เพื่อตรวจรหัสเดิม (Argon2id ยังอยู่ใน Go) · ไม่มีตัวตน → NULL |
+| `identity.own_password_is(bytea)` (`00040`) | sha256 ของ hash ที่เก็บของ `identity.user_id()` เท่ากับ digest นี้หรือไม่ (boolean) | ของตัวเองเท่านั้น · ไม่มีตัวตน หรือ digest ไม่ใช่ 32 byte → false · ล็อกแถว `FOR NO KEY UPDATE` จนจบ transaction · ใช้ใน `StartSession` และ `ChangeOwnPassword` แทน `own_password_hash()` เดิม |
 | `identity.create_member_identity(uuid, text, text, text, text)` | เพิ่มสมาชิกแบบ atomic: สร้าง identity ใหม่ หรือรับ identity ที่ไม่อยู่ workspace ใดเลยกลับมา (adopt) แล้ว insert membership · ผลคือ `created` / `adopted` / `self` / `taken` / `refused` | ผู้เรียกต้องเป็น owner/admin ของ tenant ปัจจุบัน และเฉพาะ owner เพิ่ม owner ได้ (ไม่งั้น `refused`) · **ล็อกแถว identity `FOR UPDATE` ก่อนนับ membership** และเป็น VOLATILE จึงนับด้วย snapshot ใหม่หลังรอล็อก: สอง workspace adopt คนเดียวกันพร้อมกัน คนที่สองได้ `taken` · อีเมลใหม่ที่สร้างพร้อมกันชนกันที่ unique index (`ON CONFLICT DO NOTHING` → `taken`) · adopt แล้ว **แทนชื่อและรหัสผ่านด้วยค่าที่ admin ใส่** ไม่มีอะไรของบัญชีเดิมโผล่ออกมา · `taken` ไม่คืน id และไม่เขียนอะไร |
 | `core.identity_membership_count(uuid)` | จำนวน workspace ที่ identity นี้อยู่ (ทุก tenant) | ต้องเป็น admin **และ identity ต้องเป็นสมาชิกของ tenant ปัจจุบัน** ไม่งั้นคืน -1 (ตั้งแต่ `00035`) · ใช้ใน `ResetMemberPassword` เท่านั้น · ตัวเลขไม่เคยออกจาก server |
 | `identity.tenant_last_seen()` | เวลา session ล่าสุดของสมาชิกแต่ละคน | ต้องเป็น admin · จำกัดที่ `core.tenant_id()` |
 | `identity.purge_tenant_sessions(uuid)` | ลบ session + refresh token ของสมาชิกใน tenant นี้ | ต้องเป็น admin · ห้ามเป้าหมายเป็นตัวเอง · จำกัดที่ `core.tenant_id()` · **ถ้าเป้าหมายเป็น owner ผู้เรียกต้องเป็น owner** |
 | `identity.set_member_password(uuid, text)` | ตั้งรหัสผ่านใหม่ + ตั้ง must_change_password | ต้องเป็น admin · ห้ามเป้าหมายเป็นตัวเอง · เป้าหมายต้องอยู่ tenant นี้ **และไม่มีที่อื่น** · **ถ้าเป้าหมายเป็น owner ผู้เรียกต้องเป็น owner** · ตั้งแต่ `00035` ล็อกแถว identity `FOR UPDATE` ก่อนนับ จึงไม่สลับกับการ adopt ที่เกิดพร้อมกัน |
-| `identity.change_own_password(text)` | เปลี่ยนรหัสผ่านตัวเอง + ล้าง must_change_password | เขียนเฉพาะแถวของ `identity.user_id()` · ผู้เรียกตรวจรหัสผ่านเดิมแล้วใน transaction เดียวกัน |
+| `identity.change_own_password(text)` | เปลี่ยนรหัสผ่านตัวเอง + ล้าง must_change_password | เขียนเฉพาะแถวของ `identity.user_id()` · ผู้เรียกตรวจรหัสผ่านเดิมใน Go แล้ว และ transaction เดียวกันเริ่มด้วย `own_password_is` (`00040`) |
 
 กฎ "owner แตะได้เฉพาะ owner" ถูกย้ายลงมาอยู่ใน SQL ด้วย (migration `00022`) ไม่ใช่อยู่แค่ชั้น Go: ถ้าวันหนึ่ง handler ลืมตรวจ หรือมี path ใหม่เรียกฟังก์ชันตรง ๆ ฐานข้อมูลยังปฏิเสธเอง · integration test เรียกสองฟังก์ชันนี้ผ่าน connection ของ `aether_app` ตรง ๆ ในฐานะ admin เพื่อพิสูจน์ข้อนี้โดยไม่ผ่าน route
 
@@ -152,7 +165,8 @@ login ตรวจรหัสผ่านใน Go แล้วค่อยเ�
 **สิ่งที่ RLS นี้ได้ และไม่ได้**
 
 - ได้: bug ในชั้น query เช่นลืม `WHERE`, `SELECT *` หรือ join ผิดทิศ ไม่ทำให้ hash หรือรายชื่อคนของ workspace อื่นหลุดอีกแล้ว เพราะ runtime ไม่มีสิทธิ์คอลัมน์ hash และเห็นเฉพาะแถวที่ policy อนุญาต
-- ไม่ได้: `identity.login_candidate` ยังคืน hash ให้ใครก็ได้ที่รัน SQL เป็น `aether_app` และรู้อีเมล (ส่วน `set_member_password` และ `own_password_hash` ทำงานตาม id) · ผู้ที่ได้ SQL ในนาม `aether_app` จึงยังดึง hash ของอีเมลที่รู้ได้ทีละตัว — **ไม่ได้ "แรงเท่า route login"** เพราะ route login ไม่เคยคืน hash · งานต่อที่วางไว้: role สำหรับ login โดยเฉพาะ (`aether_auth`) บน pool แยก ให้เป็น role เดียวที่ EXECUTE `login_candidate` ได้ (แตะ `infra/` จึงทำหลัง PITR)
+- ได้เพิ่ม (`00040`): `aether_app` ดึง hash ไม่ได้อีกเลย · bug หรือ SQL injection ในชั้น runtime จึงไม่ได้ hash ไป crack offline · hash ออกจากฐานข้อมูลได้ทาง login pool (`aether_auth`) เท่านั้น ซึ่งทำอะไรอย่างอื่นไม่ได้เลยและมีแค่ API ที่ถือรหัส
+- ไม่ได้: ใครที่ได้ `AUTH_DATABASE_URL` (รหัส `AUTH_DB_PASSWORD`) หรือรันโค้ดใน process ของ API ได้ ยังดึง hash ของอีเมลที่รู้ได้ทีละตัว · และ runtime ที่ตั้ง `app.user_id` เองได้ยังเรียก `change_own_password` ของ id นั้นได้เหมือนเดิม (เรื่อง context ที่ปลอมได้ ไม่ใช่เรื่อง hash)
 
 **การไล่ถามอีเมล (enumeration) ผ่าน `POST /api/v1/members`** ยังเหลือสัญญาณอยู่หนึ่งอย่าง: อีเมลที่ยังไม่มีบัญชี (หรือไม่อยู่ workspace ใดแล้ว) ได้ **201** อีเมลที่อยู่ workspace อื่นได้ **409** · สิ่งที่ลดความเสี่ยง: route นี้ใช้ได้เฉพาะ owner/admin · ถูกจำกัดด้วย `domain.MaxMembers` ต่อ workspace (201 ทุกครั้งกินโควตา และต้องลบสมาชิกออกเองทีละคน) · 409 ไม่มีรายละเอียดและไม่คืน id · ทุกครั้งที่ถูกปฏิเสธจะบันทึกใน `core.audit_logs` เป็น `member.add_refused:<เหตุผล>` — `taken` (อยู่ workspace อื่นหรืออยู่ที่นี่แล้ว), `self`, `role` (ให้ role ที่ไม่มีสิทธิ์ให้) หรือ `limit` (ครบ `MaxMembers`) · `audit_logs` ไม่มีคอลัมน์รายละเอียด เหตุผลจึงอยู่ท้ายชื่อ action · target เป็น nil UUID ไม่ระบุ identity จึงเห็นร่องรอยการไล่ถาม · **ผู้เรียกที่ถูกปฏิเสธครบ 20 ครั้งใน 24 ชั่วโมง** (`postgres.AddRefusalLimit`, นับต่อ actor ต่อ workspace ด้วย partial index `audit_logs_add_refused`) จะได้ **429** ก่อนระบบตรวจอะไรต่อ และครั้งที่ได้ 429 ไม่ถูกนับเพิ่ม · adopt แล้วคืนและเก็บชื่อที่ admin ใส่ ไม่ใช่ชื่อเดิมของบัญชี
 

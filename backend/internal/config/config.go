@@ -13,9 +13,12 @@ import (
 
 type Config struct {
 	DatabaseURL, Listen, Mode, Environment, Origin, Issuer string
-	JWTKey                                                 []byte
-	Registration                                           bool
-	SecureCookies                                          bool
+	// AuthDatabaseURL is the login pool (role aether_auth, migration 00040): the only connection that can read a
+	// password hash. The API refuses to start without it; ingest and workers never read it.
+	AuthDatabaseURL string
+	JWTKey          []byte
+	Registration    bool
+	SecureCookies   bool
 	// Optional outbound e-mail for alert notifications; unset means the email channel is unavailable.
 	SMTPHost, SMTPUsername, SMTPPassword, SMTPFrom string
 	SMTPPort                                       int
@@ -47,7 +50,7 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), Listen: os.Getenv("LISTEN_ADDR"), Mode: os.Getenv("DEPLOYMENT_MODE"), Environment: os.Getenv("APP_ENV"), Origin: os.Getenv("APP_ORIGIN"), Issuer: "aether", SecureCookies: true}
+	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), Listen: os.Getenv("LISTEN_ADDR"), Mode: os.Getenv("DEPLOYMENT_MODE"), Environment: os.Getenv("APP_ENV"), Origin: os.Getenv("APP_ORIGIN"), Issuer: "aether", SecureCookies: true, AuthDatabaseURL: os.Getenv("AUTH_DATABASE_URL")}
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}
@@ -197,6 +200,12 @@ func Load() (Config, error) {
 		ssl := db.Query().Get("sslmode")
 		if ssl != "verify-full" {
 			return c, errors.New("production DATABASE_URL requires sslmode=verify-full")
+		}
+		if c.AuthDatabaseURL != "" {
+			auth, e := url.Parse(c.AuthDatabaseURL)
+			if e != nil || !strings.HasPrefix(auth.Scheme, "postgres") || auth.Query().Get("sslmode") != "verify-full" {
+				return c, errors.New("production AUTH_DATABASE_URL requires a PostgreSQL URL with sslmode=verify-full")
+			}
 		}
 	}
 	return c, nil

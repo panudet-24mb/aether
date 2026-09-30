@@ -71,6 +71,8 @@ IoT platform ที่ตั้งใจใช้ codebase เดียวทั
 # รันครั้งเดียว สร้าง .env แบบ 0600 และไม่พิมพ์ secrets
 python3 infra/generate-env.py
 # ถ้ามี .env ที่สร้างไว้แล้ว ให้ใช้ไฟล์เดิม ไม่ต้องสร้างทับ
+# .env เก่าที่ยังไม่มี AUTH_DB_PASSWORD (role login, migration 00040) เติมเฉพาะค่าที่ขาดด้วย
+python3 infra/generate-env.py --add-missing
 
 docker compose --env-file .env -f infra/compose.yaml up -d --build
 ```

@@ -27,7 +27,7 @@ Links that the API would reject are refused while dragging (device → device, g
 
 ## Limits in this iteration
 
-- Node positions and manually placed raw devices are stored in `localStorage` per tenant, not on the server. “จัดวางอัตโนมัติ” recomputes the broker → gateways → devices layout.
+- Node positions are shared by the whole workspace (migration 00041, `GET`/`POST /api/v1/topology/layout`). See “Shared layout” below. Only the palette's “placed” marks stay in `localStorage`. “จัดวางอัตโนมัติ” recomputes the broker → gateways → devices layout for the nodes on screen only: under a project filter every other project's positions and the broker stay where they are.
 - Registrations are withdrawn, never hard-deleted (migration `00010`): `removed_at` hides the device from lists, state and ingest while telemetry stays; withdrawn rows are listed in the gateway and device inspectors for restore. The runtime role may update only `name`, `gateway_id`, `removed_at`, `removed_by` and still cannot DELETE.
 - Status is pushed: a WebSocket signal triggers a refetch, with a 30 s safety poll (5 s while the socket is down); see [projects and real-time](projects-realtime.md). Gateways can be grouped into projects and the canvas scoped to one project. Freshness keeps decaying between polls, so a stalled backend flips nodes to stale instead of freezing them online. `GET /devices` and `/studio/sources` are capped at 100 rows; the page warns when a list is full because older registrations may then be hidden.
 - MQTT credentials and HTTP tokens are kept in memory only while the page is open, exactly like the previous form.
@@ -52,3 +52,53 @@ Verification: `TestDiscoveryRegistrationAndGatewayIsolation` covers discovery un
 Device lifecycle (2026-09-20): integration test `tests/device_lifecycle_test.go` covers rename/move, cross-tenant refusal, duplicate-identity conflict, removal keeping telemetry, re-adoption, restore conflict and the column-scoped grant. Playwright against the live stack adopted the SIM E8S with the suggested profile, renamed and moved it through the dialog, moved it again by dragging the adopted edge onto another gateway, withdrew it, restored it from the removed list and withdrew it again, with no failed API responses.
 
 `npx tsc --noEmit` and `npm run build` pass. A Playwright run in Chrome against the local stack covered: rendering broker/2 gateways/4 SIM sensors with correct health classes, gateway and device inspectors, adopt dialog prefill, search dimming, drag position persistence across reload, dropping a Generic HTTP card to create a real gateway (token shown once) and revoking it, draft device nodes, activating a palette card by keyboard, client-side 128-byte name validation, auto layout, and no console errors. A separate review pass fixed a dropped post-mutation refresh, errors hidden behind dialogs, per-frame canvas rebuilds while dragging, and drag-only palette cards before the final run. Drawing a link by pointer was validated through the same `onConnect` path the inspector “Adopt” button uses; physical hardware and a real adoption were not exercised in this run.
+
+## Shared layout (2026-09-30)
+
+The canvas layout lives on the server, so every member of a workspace sees the same board.
+
+**Storage**
+- `core.topology_layouts` holds one row per workspace and view (`connect`) with a `version`.
+- `core.topology_positions` holds one row per node with `x`, `y` and the node's gateway. A node is `broker`, `gw:<uuid>` or `dev:<lower-case external id>`.
+- Drafts stay in the browser until they are adopted.
+- **Cap:** a view holds at most 5000 rows, counting every member's nodes. A read returns at most that many, so no live node is ever cut off. A save that would exceed the cap is refused with `400 layout_full`.
+
+**Who sees and moves what**
+- Row-level security: `tenant_scope`, plus restrictive policies per command on the node's gateway.
+- A member restricted to some projects sees and moves only the nodes of those projects' gateways.
+- Everyone sees the broker. Only a member who sees every project may move it (it is not draggable for the others).
+- Positions are shared across project filters.
+
+**Who saves**
+- Owner, admin and operator, with the member's `connect` module at write.
+- Viewers, and members with `connect` read, only read. Their canvas is not draggable and shows “ผังอ่านอย่างเดียว”.
+
+**What a save does**
+- A save names the nodes it writes (`positions`) and the nodes it forgets (`remove`). It touches nothing else, so a save made under a project filter cannot disturb another project's part of the board.
+- It stores only nodes the server knows: gateways that are not revoked, and devices it has as a registration, stream, Zigbee2MQTT device, Tuya import or Edge LAN sighting.
+- Anything else is listed in `ignored` and shown to the member as a notice.
+- A save carries at most 2000 entries in a body of at most 240 KiB. The canvas sends 1000 per request and clamps coordinates to ±1,000,000.
+- A save that changes nothing keeps the version, writes no audit row and sends no signal.
+
+**Concurrency**
+- The client sends the version it last saw. A stale version gets `409 version_conflict` with the current layout.
+- The canvas then keeps its own moved nodes, takes the saved position of every other node, and saves again (up to three times).
+- A `400` or `413` is final: those nodes are not retried, and the error is shown.
+- A page that is closed makes one last save attempt and never retries after that.
+
+**Timing and signals**
+- Saves are debounced 800 ms after a drag ends.
+- Each save sends a `layout` signal on the realtime socket. Other open canvases refetch the layout, coalesced with the other signals to at most once every 3 s.
+- Canvases also recheck the layout every fourth poll, even with the socket up, and on every poll without it.
+
+**Keeping rows in step with the inventory**
+- Creating, moving, removing or restoring a registration, and revoking a gateway, re-resolve the affected nodes in the same transaction. Each row either follows the node's current gateway, so project scope keeps applying, or is deleted when the node is gone.
+- These flows take the layout header rows after their own device and gateway locks, and before any position row. That is the same order a save uses.
+- A save by a member who sees every project also prunes any row whose node no longer resolves, before the cap is checked.
+- Lookups are case-insensitive and use expression indexes added in 00041. Registrations keep the external id as it was typed.
+
+**Audit.** `topology.layout_saved` is written at most once per member per 10 minutes.
+
+**Moving off the browser layout**
+- The first editor who opens the page while the workspace has no saved layout uploads their old `localStorage` arrangement once. The browser then forgets its copy.
+- If another editor's upload wins the race (409), this browser takes that board whole and still forgets its copy.

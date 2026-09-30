@@ -28,14 +28,25 @@ DO $$ BEGIN
   IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='aether_mqtt_provisioner') THEN
     CREATE ROLE aether_mqtt_provisioner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
+  -- The login role of migration 00040; dumps from 00040 on carry grants to it.
+  IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='aether_auth') THEN
+    CREATE ROLE aether_auth NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+  END IF;
 END $$;
 SQL
-# psql does not interpolate :'variables' inside -c, so this goes in through stdin. The passwords
-# therefore never appear in the process arguments either.
-psql --dbname postgres --set=ON_ERROR_STOP=1 \
-     --set=app_password="$APP_DB_PASSWORD" --set=prov_password="$MQTT_PROVISION_DB_PASSWORD" <<'SQL' > /dev/null
+# The passwords come from this process's environment (restore.sh forwards them with `docker compose exec -e NAME`)
+# and are read inside psql with \getenv (PostgreSQL 15+; this image is 18), so they are never in any process's
+# arguments. The auth role's password is optional: dumps from before migration 00040 have no aether_auth grants,
+# and the next migrate sets it anyway.
+psql --dbname postgres --set=ON_ERROR_STOP=1 <<'SQL' > /dev/null
+\getenv app_password APP_DB_PASSWORD
+\getenv prov_password MQTT_PROVISION_DB_PASSWORD
 ALTER ROLE aether_app PASSWORD :'app_password';
 ALTER ROLE aether_mqtt_provisioner PASSWORD :'prov_password';
+\getenv auth_password AUTH_DB_PASSWORD
+\if :{?auth_password}
+ALTER ROLE aether_auth WITH LOGIN PASSWORD :'auth_password';
+\endif
 SQL
 
 exists="$(q postgres "SELECT count(*) FROM pg_database WHERE datname='$TARGET'")"
@@ -56,7 +67,7 @@ else
 fi
 
 psql --dbname "$TARGET" --set=ON_ERROR_STOP=1 -c 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' > /dev/null
-psql --dbname "$TARGET" --set=ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE \"$TARGET\" TO aether_app, aether_mqtt_provisioner" > /dev/null
+psql --dbname "$TARGET" --set=ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE \"$TARGET\" TO aether_app, aether_mqtt_provisioner, aether_auth" > /dev/null
 psql --dbname "$TARGET" --set=ON_ERROR_STOP=1 -c "GRANT CREATE ON DATABASE \"$TARGET\" TO aether_owner" > /dev/null
 
 # Roles exist and this connection is superuser, so ownership and grants restore as dumped.

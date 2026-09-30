@@ -349,6 +349,8 @@ def main() -> int:
     postgres_password = secret("POSTGRES_PASSWORD", hexkey)
     app_db_password = secret("APP_DB_PASSWORD", hexkey)
     prov_db_password = secret("MQTT_PROVISION_DB_PASSWORD", hexkey)
+    # The API's login role (migration 00040): the only database login that can read a password hash.
+    auth_db_password = secret("AUTH_DB_PASSWORD", hexkey)
     jwt_key = secret("JWT_SIGNING_KEY", b64key(48))
     # Sealed notification-channel secrets (LINE tokens, webhook headers) are unrecoverable without
     # this key. It is deliberately separate from JWT_SIGNING_KEY so the JWT key can be rotated.
@@ -680,6 +682,7 @@ pg1-database=aether
         "POSTGRES_PASSWORD": postgres_password,
         "APP_DB_PASSWORD": app_db_password,
         "MQTT_PROVISION_DB_PASSWORD": prov_db_password,
+        "AUTH_DB_PASSWORD": auth_db_password,
         "JWT_SIGNING_KEY": jwt_key,
         "CHANNEL_SEAL_KEY": seal_key,
         "TUYA_CLOUD_PUBLIC_KEY": tuya_cloud_public,

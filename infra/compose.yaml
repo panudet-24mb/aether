@@ -24,6 +24,8 @@ services:
     entrypoint: ["/app/migrate"]
     environment:
       MIGRATION_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/aether?sslmode=disable
+      # The login role (migration 00040) gets its password here, on every migrate.
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Run python3 infra/generate-env.py --add-missing}
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,6 +37,8 @@ services:
     image: aether-backend:local
     environment:
       DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=disable
+      # The only connection that can read a password hash (role aether_auth, migration 00040).
+      AUTH_DATABASE_URL: postgresql://aether_auth:${AUTH_DB_PASSWORD:?Run python3 infra/generate-env.py --add-missing}@postgres:5432/aether?sslmode=disable
       APP_ENV: development
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}

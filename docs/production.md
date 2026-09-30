@@ -454,6 +454,18 @@ curl -s https://aether.hospital.local/health/ready
 
 ช่วงที่ระบบสะดุดคือข้อ 6.5 ประมาณ 10–30 วินาที gateway จะ reconnect เอง (QoS 1 + persistent session ทำให้ packet ที่ค้างถูกส่งซ้ำ)
 
+### Migration `00040`: role สำหรับ login (`aether_auth`)
+
+ไม่ต้องหยุดระบบเพิ่ม แต่ **ต้องรัน `setup.py` ก่อน build** เพราะมี secret ใหม่:
+
+- `setup.py` สร้าง `AUTH_DB_PASSWORD` ใหม่ (และเก็บค่าเดิมไว้ตอนรันซ้ำ) · compose ส่งให้ `migrate` (ตั้งรหัสของ role) และให้ `api` เป็น `AUTH_DATABASE_URL` เท่านั้น
+- `00040` สร้าง role `aether_auth` แบบ NOLOGIN ถ้ายังไม่มี ย้ายสิทธิ์ `identity.login_candidate` จาก `aether_app` ไปให้ role นี้ เพิ่ม `identity.own_password_is` และลบ `identity.own_password_hash` · จากนั้น `cmd/migrate` ตั้ง LOGIN + รหัสผ่าน (log `auth role: login enabled`) และปิดการ log bind parameter ของ `aether_app`/`aether_auth` (`log_parameter_max_length = 0`, ตั้งทุกครั้งที่ migrate)
+- `/health/ready` ของ API ตรวจ login pool ด้วย ถ้า `aether_auth` login ไม่ได้ API จะไม่ ready
+- ลำดับ `up -d` ปกติถูกอยู่แล้ว: `migrate` รันจบก่อน `api` · **API ใหม่ไม่ start ถ้าไม่มี `AUTH_DATABASE_URL`** หรือถ้ายังไม่ได้ migrate ถึง `00040` (`CheckRuntimeRole` ปฏิเสธ) · API เก่ากับฐานข้อมูลที่ migrate แล้วจะ login ไม่ได้ (42501) — ช่วง 6.4 ถึง 6.5 จึงไม่ควรห่างกัน หรือใช้ `up -d` คำสั่งเดียว
+- ย้อนกลับ: `goose down` ถึง `39` คืนสิทธิ์ให้ `aether_app` และตั้ง `aether_auth` เป็น NOLOGIN (role ยังอยู่ ลบเองได้) แล้วใช้ image เก่า
+- `restore.sh` ตั้งรหัสของ `aether_auth` จาก `.env.prod` ด้วยถ้ามี · รหัสทั้งสาม role ถูกอ่านใน psql ด้วย `\getenv` จาก environment จึงไม่อยู่ใน argument ของ process ใด
+- ตรวจหลังอัปเกรด: login ผ่านหน้าเว็บ · `docker compose ... logs migrate | grep 'auth role'`
+
 ### Migration `00038`/`00039`: บันทึกการเข้าถึงข้อมูลส่วนบุคคล, ส่งออกและลบ (PDPA)
 
 ไม่ต้องหยุดระบบ: `00038` สร้างตาราง `core.access_log` (แบ่งรายเดือน) และขยาย `core.maintain_partitions` / `core.prune_history` ให้ดูแลตารางนี้ด้วย ส่วน `00039` เพิ่มคอลัมน์ `erased_at` / `notice_ack_version` ใน `identity.users` (metadata อย่างเดียว) ตาราง `core.erasure_log` และฟังก์ชันลบข้อมูล หลังอัปเกรด:
@@ -749,6 +761,7 @@ openssl x509 -enddate -noout -in /opt/aether/.secrets/prod/mqtt/ca.crt
 | `JWT_SIGNING_KEY` | ได้ | **ผู้ใช้ทุกคนหลุดออกจากระบบทันที** ต้อง login ใหม่ ไม่มีข้อมูลสูญหาย ทำตอนกลางคืน |
 | `CHANNEL_SEAL_KEY` | **ยังทำไม่ได้แบบไม่สูญข้อมูล** | ถ้าเปลี่ยนค่า ความลับของช่องทางแจ้งเตือน (LINE token, header ของ webhook) ที่ถูก seal ด้วยกุญแจเดิมจะเปิดไม่ได้ ต้องเข้าไปกรอกใหม่ทุกช่องทางในเว็บ |
 | `APP_DB_PASSWORD` | ได้ | `ALTER ROLE aether_app PASSWORD ...` แล้วแก้ `.env.prod` และ `up -d` |
+| `AUTH_DB_PASSWORD` | ได้ | ลบบรรทัดนี้ออกจาก `.env.prod` แล้วรัน `setup.py` (สร้างค่าใหม่) หรือแก้เอง จากนั้น `run --rm migrate` (ตั้งรหัสใหม่ให้ `aether_auth`) และ `up -d api` · login ใช้ไม่ได้ช่วงสั้น ๆ ระหว่างสองคำสั่ง |
 | รหัส MQTT ของ gateway | ได้ต่อตัว | กด rotate ในเว็บ แล้วเอารหัสใหม่ไปใส่ที่ MG3 ตัวนั้น ตัวเก่าใช้ไม่ได้ทันที |
 
 **`CHANNEL_SEAL_KEY` หายเท่ากับความลับช่องทางแจ้งเตือนหายทั้งหมด** — dump ของฐานข้อมูลช่วยไม่ได้ เพราะข้อมูลในนั้นถูกเข้ารหัสด้วยกุญแจนี้ เก็บสำเนา `.env.prod` ไว้นอกเครื่องเสมอ

@@ -4647,6 +4647,329 @@
     }
    }
   },
+  "/api/v1/topology/layout": {
+   "get": {
+    "summary": "Shared canvas layout of the connect view (every member; nodes outside the caller's projects are left out)",
+    "operationId": "get__api_v1_topology_layout",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "view",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+       "default": "connect"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "view",
+          "version",
+          "positions"
+         ],
+         "properties": {
+          "view": {
+           "type": "string"
+          },
+          "version": {
+           "type": "integer",
+           "minimum": 0
+          },
+          "positions": {
+           "type": "object",
+           "description": "Node id (broker, gw:<gateway uuid>, dev:<lower-case external id>) to canvas position. Only nodes of gateways in the caller's projects, plus the broker.",
+           "additionalProperties": {
+            "type": "object",
+            "required": [
+             "x",
+             "y"
+            ],
+            "properties": {
+             "x": {
+              "type": "number",
+              "minimum": -1000000,
+              "maximum": 1000000
+             },
+             "y": {
+              "type": "number",
+              "minimum": -1000000,
+              "maximum": 1000000
+             }
+            }
+           }
+          },
+          "updated_by": {
+           "type": "string",
+           "format": "uuid",
+           "nullable": true
+          },
+          "updated_at": {
+           "type": "string",
+           "format": "date-time",
+           "nullable": true
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Save layout changes (owner/admin/operator; connect module write). A save touches only the nodes it names. Optimistic concurrency: 409 version_conflict returns the current layout to merge onto. Unknown nodes, other projects' nodes and (for restricted members) the broker are skipped and listed in ignored. A save that changes nothing keeps the version. 400 layout_full when the view would hold more than 5000 rows. Emits a 'layout' realtime signal.",
+    "operationId": "post__api_v1_topology_layout",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "version"
+        ],
+        "additionalProperties": false,
+        "properties": {
+         "view": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,31}$",
+          "default": "connect"
+         },
+         "version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The version the client last saw."
+         },
+         "positions": {
+          "type": "object",
+          "maxProperties": 2000,
+          "propertyNames": {
+           "type": "string",
+           "pattern": "^(broker|gw:[0-9a-f-]{36}|dev:[a-z0-9][a-z0-9._:-]{0,63})$"
+          },
+          "additionalProperties": {
+           "type": "object",
+           "required": [
+            "x",
+            "y"
+           ],
+           "properties": {
+            "x": {
+             "type": "number",
+             "minimum": -1000000,
+             "maximum": 1000000
+            },
+            "y": {
+             "type": "number",
+             "minimum": -1000000,
+             "maximum": 1000000
+            }
+           }
+          }
+         },
+         "remove": {
+          "type": "array",
+          "maxItems": 2000,
+          "items": {
+           "type": "string",
+           "pattern": "^(broker|gw:[0-9a-f-]{36}|dev:[a-z0-9][a-z0-9._:-]{0,63})$"
+          },
+          "description": "Nodes to forget (must not also be in positions). The broker and other projects' nodes are forgotten only by a member who sees every project."
+         }
+        },
+        "description": "At most 2000 entries in positions and remove together; body at most 240 KiB."
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Saved",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "layout",
+          "ignored"
+         ],
+         "properties": {
+          "layout": {
+           "type": "object",
+           "required": [
+            "view",
+            "version",
+            "positions"
+           ],
+           "properties": {
+            "view": {
+             "type": "string"
+            },
+            "version": {
+             "type": "integer",
+             "minimum": 0
+            },
+            "positions": {
+             "type": "object",
+             "description": "Node id (broker, gw:<gateway uuid>, dev:<lower-case external id>) to canvas position. Only nodes of gateways in the caller's projects, plus the broker.",
+             "additionalProperties": {
+              "type": "object",
+              "required": [
+               "x",
+               "y"
+              ],
+              "properties": {
+               "x": {
+                "type": "number",
+                "minimum": -1000000,
+                "maximum": 1000000
+               },
+               "y": {
+                "type": "number",
+                "minimum": -1000000,
+                "maximum": 1000000
+               }
+              }
+             }
+            },
+            "updated_by": {
+             "type": "string",
+             "format": "uuid",
+             "nullable": true
+            },
+            "updated_at": {
+             "type": "string",
+             "format": "date-time",
+             "nullable": true
+            }
+           }
+          },
+          "ignored": {
+           "type": "array",
+           "items": {
+            "type": "string"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "version_conflict: the layout changed since the given version",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "error",
+          "layout"
+         ],
+         "properties": {
+          "error": {
+           "type": "string",
+           "enum": [
+            "version_conflict"
+           ]
+          },
+          "layout": {
+           "type": "object",
+           "required": [
+            "view",
+            "version",
+            "positions"
+           ],
+           "properties": {
+            "view": {
+             "type": "string"
+            },
+            "version": {
+             "type": "integer",
+             "minimum": 0
+            },
+            "positions": {
+             "type": "object",
+             "description": "Node id (broker, gw:<gateway uuid>, dev:<lower-case external id>) to canvas position. Only nodes of gateways in the caller's projects, plus the broker.",
+             "additionalProperties": {
+              "type": "object",
+              "required": [
+               "x",
+               "y"
+              ],
+              "properties": {
+               "x": {
+                "type": "number",
+                "minimum": -1000000,
+                "maximum": 1000000
+               },
+               "y": {
+                "type": "number",
+                "minimum": -1000000,
+                "maximum": 1000000
+               }
+              }
+             }
+            },
+            "updated_by": {
+             "type": "string",
+             "format": "uuid",
+             "nullable": true
+            },
+            "updated_at": {
+             "type": "string",
+             "format": "date-time",
+             "nullable": true
+            }
+           }
+          },
+          "request_id": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/auth/password": {
    "post": {
     "summary": "Replace the signed-in user's own password; verifies the current one, revokes their other sessions in every workspace and clears must_change_password. While that flag is set this is the only mutating route the session may reach.",

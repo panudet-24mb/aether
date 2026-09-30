@@ -3,8 +3,10 @@ package tests
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,6 +39,8 @@ type fixture struct {
 	admin   *sql.DB
 	runtime *sql.DB
 	cfg     config.Config
+	// authDSN is the login pool (migration 00040), see testAuthDSN.
+	authDSN string
 }
 
 func setup(t *testing.T) *fixture {
@@ -46,11 +50,14 @@ func setup(t *testing.T) *fixture {
 	if dsn == "" || adminDSN == "" {
 		t.Skip("requires isolated PostgreSQL: TEST_DATABASE_URL and TEST_ADMIN_DATABASE_URL")
 	}
+	var testDB string
 	for _, s := range []string{dsn, adminDSN} {
 		u, e := url.Parse(s)
-		if e != nil || u.Path != "/aether_test" {
-			t.Fatal("integration tests only run in aether_test")
+		// aether_test, or a sibling such as aether_test_auth for a second checkout running at the same time.
+		if e != nil || !strings.HasPrefix(u.Path, "/aether_test") || (testDB != "" && u.Path != testDB) {
+			t.Fatal("integration tests only run in one aether_test database")
 		}
+		testDB = u.Path
 	}
 	admin, e := sql.Open("pgx", adminDSN)
 	if e != nil {
@@ -63,11 +70,15 @@ func setup(t *testing.T) *fixture {
 	if e = goose.Up(admin, "../migrations"); e != nil {
 		t.Fatal(e)
 	}
+	authDSN := testAuthDSN(t, admin, adminDSN, testDB)
 	repo, e := postgres.Open(dsn)
 	if e != nil {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { repo.Close() })
+	if e = repo.AttachAuth(authDSN); e != nil {
+		t.Fatal(e)
+	}
 	runtime, e := sql.Open("pgx", dsn)
 	if e != nil {
 		t.Fatal(e)
@@ -79,8 +90,56 @@ func setup(t *testing.T) *fixture {
 	if e != nil {
 		t.Fatal(e)
 	}
-	return &fixture{repo, s, admin, runtime, cfg}
+	return &fixture{repo, s, admin, runtime, cfg, authDSN}
 }
+
+// testAuthDSN is the login pool of the tests (migration 00040). TEST_AUTH_DATABASE_URL, when set, is used as is:
+// point it at the real aether_auth (backend-local.py test does, with the .env password migrate sets). Otherwise a
+// test login role, aether_auth_test, is given exactly aether_auth's rights as direct grants (CheckAuthRole refuses
+// any role membership, and this keeps that check strict), refreshed on every setup because a migration round trip
+// recreates the login function. Its password is derived from the admin DSN, so the cluster's real aether_auth,
+// whose password belongs to the local .env, is never touched.
+func testAuthDSN(t *testing.T, admin *sql.DB, adminDSN, testDB string) string {
+	t.Helper()
+	if dsn := os.Getenv("TEST_AUTH_DATABASE_URL"); dsn != "" {
+		if u, e := url.Parse(dsn); e != nil || u.Path != testDB {
+			t.Fatal("TEST_AUTH_DATABASE_URL must name the same aether_test database")
+		}
+		return dsn
+	}
+	sum := sha256.Sum256([]byte("aether_auth_test:" + adminDSN))
+	password := hex.EncodeToString(sum[:])
+	if _, e := admin.Exec(`DO $$
+	DECLARE f regprocedure; s name;
+	BEGIN
+	  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='aether_auth_test') THEN
+	    CREATE ROLE aether_auth_test LOGIN;
+	  END IF;
+	  ALTER ROLE aether_auth_test LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION;
+	  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member WHERE r.rolname='aether_auth_test') THEN
+	    REVOKE aether_auth FROM aether_auth_test;
+	  END IF;
+	  EXECUTE format('GRANT CONNECT ON DATABASE %I TO aether_auth_test', current_database());
+	  REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA identity, core FROM aether_auth_test;
+	  REVOKE USAGE ON SCHEMA identity, core FROM aether_auth_test;
+	  FOR s IN SELECT nspname FROM pg_namespace WHERE nspname IN ('identity','core') AND has_schema_privilege('aether_auth', oid, 'USAGE') LOOP
+	    EXECUTE format('GRANT USAGE ON SCHEMA %I TO aether_auth_test', s);
+	  END LOOP;
+	  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+	    WHERE n.nspname IN ('identity','core') AND p.prosecdef AND has_function_privilege('aether_auth', p.oid, 'EXECUTE') LOOP
+	    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO aether_auth_test', f);
+	  END LOOP;
+	END $$`); e != nil {
+		t.Fatalf("test login role: %v", e)
+	}
+	if _, e := admin.Exec(`ALTER ROLE aether_auth_test PASSWORD '` + password + `'`); e != nil {
+		t.Fatalf("test login role: %v", e)
+	}
+	u, _ := url.Parse(adminDSN)
+	u.User = url.UserPassword("aether_auth_test", password)
+	return u.String()
+}
+
 func (f *fixture) account(t *testing.T) (domain.Account, app.AuthResult, domain.Principal) {
 	t.Helper()
 	email := uuid.NewString() + "@example.test"

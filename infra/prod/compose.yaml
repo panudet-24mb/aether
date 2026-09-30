@@ -243,6 +243,9 @@ services:
       # must not be able to shorten the trail it writes (core.retention_policy, migration 00038).
       # Unset or empty leaves the stored value (setup.py always writes one).
       ACCESS_LOG_RETENTION_DAYS: ${ACCESS_LOG_RETENTION_DAYS:-}
+      # The API's login role (aether_auth, migration 00040): created by the migration, given LOGIN and this password
+      # (as a SCRAM verifier) on every migrate run, which is also how it is rotated.
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?run infra/prod/setup.py}
     volumes:
       - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
     depends_on:
@@ -259,6 +262,9 @@ services:
       context: ../../backend
     environment:
       DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      # The only connection that can read a password hash (login and change-password); the API refuses to start
+      # without it. No other service gets it.
+      AUTH_DATABASE_URL: postgresql://aether_auth:${AUTH_DB_PASSWORD:?run infra/prod/setup.py}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
       APP_ENV: production
       APP_ORIGIN: ${APP_ORIGIN:?run infra/prod/setup.py}
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-onprem}

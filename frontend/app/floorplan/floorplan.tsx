@@ -151,6 +151,7 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
   }, [client, onUnauthorizedRef]);
   const pendingSignal = useRef<{ timer?: ReturnType<typeof setTimeout>; force: boolean }>({ force: false });
   const connected = useSignals(handlers, (kind) => {
+    if (kind === "layout") return; // the connect canvas layout does not change this page
     const p = pendingSignal.current;
     p.force = p.force || kind === "inventory" || kind === "event"; // a zone change is an event and lives in the device list
     clearTimeout(p.timer);

@@ -35,6 +35,8 @@ type Repository interface {
 	ArchiveProject(context.Context, domain.Principal, string) error
 	SetGatewayProject(context.Context, domain.Principal, string, *string) error
 	SetDeviceRoaming(context.Context, domain.Principal, string, bool) error
+	GetLayout(context.Context, domain.Principal, string) (domain.Layout, error)
+	SaveLayout(context.Context, domain.Principal, domain.LayoutChange) (domain.LayoutSaved, error)
 	ListSites(context.Context, domain.Principal) ([]domain.Site, error)
 	GetSite(context.Context, domain.Principal, string) (domain.Site, error)
 	CreateSite(context.Context, domain.Principal, domain.Site) (domain.Site, error)

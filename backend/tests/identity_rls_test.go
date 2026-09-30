@@ -132,16 +132,23 @@ func TestIdentityUsersRowLevelSecurity(t *testing.T) {
 	if e := tx.QueryRow(`SELECT count(id) FROM identity.users`).Scan(&count); e != nil || count != 0 {
 		t.Fatalf("identity count without a context: %d %v", count, e)
 	}
-	var owned sql.NullString
-	if e := tx.QueryRow(`SELECT identity.own_password_hash()`).Scan(&owned); e != nil || owned.Valid {
-		t.Fatalf("own_password_hash without identity: %v %v", owned, e)
+	var same bool
+	if e := tx.QueryRow(`SELECT identity.own_password_is(sha256('x'))`).Scan(&same); e != nil || same {
+		t.Fatalf("own_password_is without identity: %v %v", same, e)
 	}
 
-	// The hash column is not granted, whatever the rows: 42501 even for the caller's own row.
+	// The hash column is not granted, whatever the rows: 42501 even for the caller's own row. Since 00040 the
+	// runtime can only ask whether its own stored hash is a given one, never read it.
+	var stored string
+	if e := f.admin.QueryRow(`SELECT password_hash FROM identity.users WHERE id=$1`, ownerA.UserID).Scan(&stored); e != nil {
+		t.Fatal(e)
+	}
 	tx.Rollback()
 	tx = asRuntime(t, f, ownerA.UserID, ownerA.TenantID)
-	if e := tx.QueryRow(`SELECT identity.own_password_hash()`).Scan(&owned); e != nil || !owned.Valid || owned.String == "" {
-		t.Fatalf("own_password_hash for the caller: %v", e)
+	for candidate, want := range map[string]bool{stored: true, stored + "x": false, "": false} {
+		if e := tx.QueryRow(`SELECT identity.own_password_is(sha256(convert_to($1::text,'UTF8')))`, candidate).Scan(&same); e != nil || same != want {
+			t.Fatalf("own_password_is(%t case): %v %v", want, same, e)
+		}
 	}
 	// Each refused statement aborts the transaction, so each runs behind its own savepoint.
 	var hash string
@@ -156,6 +163,9 @@ func TestIdentityUsersRowLevelSecurity(t *testing.T) {
 		func() error { // an admin creates members only through create_member_identity
 			_, e := tx.Exec(`INSERT INTO identity.users(id,email,name,password_hash) VALUES($1,$2,'x','x')`, uuid.NewString(), memberEmail())
 			return e
+		},
+		func() error { // the email -> hash lookup belongs to the login pool (00040)
+			return tx.QueryRow(`SELECT password_hash FROM identity.login_candidate($1)`, a.User.Email).Scan(&hash)
 		},
 	} {
 		if _, e := tx.Exec(`SAVEPOINT refused`); e != nil {
@@ -221,6 +231,8 @@ func TestRuntimeRoleCheckCoversIdentity(t *testing.T) {
 		"update grant":       `GRANT UPDATE ON identity.users TO aether_app`,
 		"column update":      `GRANT UPDATE(name) ON identity.users TO aether_app`,
 		"delete grant":       `GRANT DELETE ON identity.users TO aether_app`,
+		"login lookup":       `GRANT EXECUTE ON FUNCTION identity.login_candidate(text) TO aether_app`,
+		"auth membership":    `GRANT aether_auth TO aether_app`,
 	} {
 		tx, e := f.admin.BeginTx(ctx, nil)
 		if e != nil {

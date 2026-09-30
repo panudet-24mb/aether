@@ -227,6 +227,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	memberRoutes(secured, service, cfg.Mode, cfg.PrivacyNoticeURL)
 	automationRoutes(secured, service, cfg.AutomationCommands, cfg.AlertsShadow)
 	floorplanRoutes(secured, service)
+	topologyRoutes(secured, service)
 	assetRoutes(secured, service)
 	commandRoutes(secured, service)
 	edgeRoutes(secured, service, cfg)

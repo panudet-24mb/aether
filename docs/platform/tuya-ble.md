@@ -307,8 +307,8 @@ cancels a connection in progress) and the connection slot stays taken until Blue
 for more connections than the budget. Stopping a scan waits at most 5 s. A persistent connection gives its slot up to a waiting command
 (and is taken up again 10 s later), so persistent mode cannot starve commands even with one slot.
 
-**Release.** The edge image must be rebuilt (`edge.Dockerfile` now copies `internal/tuyable`) and published as a new version before
-anyone can use `--ble`; `domain.EdgeImageTag` stays at 0.1.1 until that release is approved and pushed.
+**Release.** B2 ships in edge image 0.2.0 (`ghcr.io/panudet-24mb/aether-edge:0.2.0`, tag `edge-v0.2.0`); `domain.EdgeImageTag`
+points at it, so the installer and `--update` pull it. BLE still stays off on the server until `EDGE_BLE=true`.
 
 **Still needed on hardware (B0/B4):** that BlueZ lets uid 10001 in a `cap_drop: ALL` container scan and connect (Raspberry Pi OS,
 Ubuntu with AppArmor), whether scanning must pause during a connection, how the host reports a device held by another central

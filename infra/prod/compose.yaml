@@ -26,10 +26,34 @@ networks:
     ipam:
       config:
         - subnet: ${AETHER_SUBNET:?run infra/prod/setup.py}
+  # Outbound only, for the pitr service (ops webhook) and pitr-offsite (rclone). Nothing of the application is on it:
+  # both reach PostgreSQL's files and socket through volumes, not the network.
+  ops-egress:
+    driver: bridge
 
 volumes:
+  # The database volume, by name, so a point-in-time restore can switch the cluster to a restored volume by changing
+  # one line in the env file (restore-pitr.sh --cutover). External: compose never creates or deletes it (not even with
+  # `down -v`); setup.py creates it on a new install, with the labels compose itself would have given it, and keeps
+  # the name compose always used: aether-prod_postgres-data. A shell variable AETHER_PG_VOLUME overrides the env file
+  # (compose precedence); the operator scripts warn when the two differ.
   postgres-data:
+    external: true
+    name: ${AETHER_PG_VOLUME:?run infra/prod/setup.py}
   postgres-certs:
+  # The server socket, shared with the pitr service (pgBackRest connects through it with peer authentication). A
+  # tmpfs, like the directory it replaces: nothing in it survives a restart.
+  postgres-run:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: mode=0775,nosuid,nodev,noexec,size=1m
+  # pgBackRest's asynchronous archive-push queue (archive-async).
+  pgbackrest-spool:
+  # Health written by the pitr service (status.json) and the WAL-drop flag written by archive_command. Mounted with
+  # nocopy everywhere: Docker copies an image directory's owner and mode onto an empty volume, which must not undo
+  # prepare's 0775 (the backup service writes here through group 70).
+  ops-status:
   mqtt-data:
   caddy-data:
   caddy-config:
@@ -39,9 +63,11 @@ services:
   # directory owned by its unprivileged uid. Both are fixed here instead of by the operator, so the
   # same commands work on Linux and on a macOS test host.
   prepare:
-    # The postgres image itself, so the certificate ends up owned by whatever uid that image's
-    # "postgres" user happens to have (70 on alpine, 999 on the Debian variants).
-    image: postgres:18-alpine
+    # The postgres image itself (pinned base, infra/prod/postgres/Dockerfile), so the certificate ends up owned by
+    # whatever uid that image's "postgres" user has (70 on alpine).
+    image: ${AETHER_POSTGRES_IMAGE:-aether-postgres:prod}
+    build:
+      context: ./postgres
     user: "0:0"
     entrypoint:
       - /bin/sh
@@ -54,6 +80,11 @@ services:
         chmod 0600 /pgcerts/server.key
         chown "$${MQTT_UID}:$${MQTT_GID}" /mqttdata
         chmod 0700 /mqttdata
+        # pgBackRest runs as the postgres uid in both postgres (archive-push) and pitr (backups).
+        chown postgres:postgres /pitr /spool /ops
+        chmod 0750 /pitr /spool
+        # Group-writable: the backup service (root, with group 70 added) records each dump's outcome here.
+        chmod 0775 /ops
         echo "prepare: certificate installed for $$(id -u postgres), mosquitto data owned by $${MQTT_UID}"
     environment:
       MQTT_UID: ${MQTT_UID:?run infra/prod/setup.py}
@@ -62,6 +93,9 @@ services:
       - ${AETHER_SECRETS_DIR:?run infra/prod/setup.py}/postgres:/src/postgres:ro
       - postgres-certs:/pgcerts
       - mqtt-data:/mqttdata
+      - ${AETHER_PITR_DIR:?run infra/prod/setup.py}:/pitr
+      - pgbackrest-spool:/spool
+      - ops-status:/ops:nocopy
     read_only: true
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
@@ -71,7 +105,10 @@ services:
     networks: [aether]
 
   postgres:
-    image: postgres:18-alpine
+    # postgres:18-alpine (same base, pinned by digest) plus pgBackRest: infra/prod/postgres/Dockerfile.
+    image: ${AETHER_POSTGRES_IMAGE:-aether-postgres:prod}
+    build:
+      context: ./postgres
     environment:
       POSTGRES_DB: aether
       POSTGRES_USER: postgres
@@ -142,12 +179,33 @@ services:
       - autovacuum_vacuum_cost_limit=2000
       - -c
       - autovacuum_vacuum_cost_delay=2ms
+      # Continuous WAL archiving for point-in-time recovery (docs/production.md §7.1). archive_timeout bounds the
+      # data a restore can lose on a quiet system to 5 minutes. archive-push is asynchronous and capped
+      # (archive-push-queue-max in pgbackrest.conf): when the repository is unreachable for long, WAL is dropped and
+      # alerted on instead of filling pg_wal and stopping the database.
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/usr/local/bin/aether-pgbackrest-push %p
+      - -c
+      - archive_timeout=300
     volumes:
       - postgres-data:/var/lib/postgresql
       - postgres-certs:/certs:ro
       - ./init-db.sh:/docker-entrypoint-initdb.d/10-aether.sh:ro
+      - postgres-run:/var/run/postgresql
+      - ${AETHER_PITR_DIR:?run infra/prod/setup.py}:/var/lib/pgbackrest
+      - pgbackrest-spool:/var/spool/pgbackrest
+      - ${AETHER_SECRETS_DIR}/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
+      - ops-status:/run/aether-ops:nocopy
     # No published port. The database is reachable only from this compose network.
     shm_size: 256mb
+    # Room for a clean shutdown (checkpoint) before Docker kills it; a cutover stops and starts it.
+    stop_grace_period: 120s
+    # A real init as PID 1: pgBackRest's asynchronous archive-push daemonizes, and an orphan is re-parented to PID 1.
+    # If the postmaster were PID 1, an orphan exiting non-zero (repository unreachable) would count as a crashed
+    # backend and restart the whole server.
+    init: true
     healthcheck:
       # Run as the postgres OS user: pg_hba.conf uses peer for the local socket, so a probe from
       # root would log a FATAL authentication line every interval for the life of the server.
@@ -162,7 +220,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      - /var/run/postgresql
     cap_drop: [ALL]
     # The stock entrypoint starts as root and drops to uid 999 with su-exec.
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
@@ -520,9 +577,11 @@ services:
           memory: 256m
 
   # Nightly pg_dump --format=custom with a pg_restore --list integrity check and 14 daily + 8 weekly
-  # retention. This is NOT point-in-time recovery: see docs/production.md.
+  # retention. Logical and portable across major versions; point-in-time recovery is the pitr service.
   backup:
-    image: postgres:18-alpine
+    image: ${AETHER_POSTGRES_IMAGE:-aether-postgres:prod}
+    build:
+      context: ./postgres
     entrypoint: ["/bin/sh", "/opt/aether/backup-loop.sh"]
     environment:
       PGHOST: postgres
@@ -542,6 +601,17 @@ services:
       - ./restore-inner.sh:/opt/aether/restore-inner.sh:ro
       - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
       - ${AETHER_BACKUP_DIR:?run infra/prod/setup.py}:/backups
+      # dump-last-ok / dump-failed, read by the pitr service's checks.
+      - ops-status:/run/aether-ops:nocopy
+    # Write access to ops-status (owned by the postgres uid, mode 0775) without any capability.
+    group_add: ["70"]
+    healthcheck:
+      # Healthy while a verified dump from the last 26 hours exists (backup-loop.sh takes one at start if not).
+      test: ["CMD-SHELL", "find /backups/daily -name 'aether-*.dump' -mmin -1560 | grep -q . && test ! -f /run/aether-ops/dump-failed"]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 30m
     depends_on:
       postgres:
         condition: service_healthy
@@ -553,6 +623,115 @@ services:
     restart: unless-stopped
     logging: *logging
     networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # Point-in-time recovery: pgBackRest full/differential backups on a schedule (the WAL itself is pushed by the
+  # postgres service's archive_command), and the operations checks — archiver failures, WAL backlog, pg_wal size,
+  # backup and dump age, backup disk — reported as "PITR ALERT" log lines, to OPS_WEBHOOK_URL, and in status.json
+  # (the healthcheck). Runs as the postgres uid, reads the data directory, and reaches the server only through
+  # the shared socket. See infra/prod/pitr-loop.sh and docs/production.md §7.1.
+  pitr:
+    image: ${AETHER_POSTGRES_IMAGE:-aether-postgres:prod}
+    build:
+      context: ./postgres
+    user: "70:70"
+    entrypoint: ["/bin/sh", "/opt/aether/pitr-loop.sh"]
+    environment:
+      PITR_BACKUP_AT: ${PITR_BACKUP_AT:-03:30}
+      PITR_FULL_DAY: ${PITR_FULL_DAY:-7}
+      PITR_CHECK_SECONDS: ${PITR_CHECK_SECONDS:-300}
+      PITR_REPO_MIN_FREE_PERCENT: ${PITR_REPO_MIN_FREE_PERCENT:-15}
+      # Names the server in alert messages.
+      OPS_HOST: ${AETHER_HOST:-}
+      TZ: ${AETHER_TZ:-Asia/Bangkok}
+    volumes:
+      - ./pitr-loop.sh:/opt/aether/pitr-loop.sh:ro
+      # pgBackRest copies the data files; it never writes to the data directory.
+      - postgres-data:/var/lib/postgresql:ro
+      - postgres-run:/var/run/postgresql
+      - ${AETHER_PITR_DIR}:/var/lib/pgbackrest
+      - ${AETHER_SECRETS_DIR}/pgbackrest/pgbackrest.conf:/etc/pgbackrest/pgbackrest.conf:ro
+      - ops-status:/run/aether-ops:nocopy
+      # webhook-url (0400, postgres uid): the URL is a credential for most webhook services, so it is not in the env.
+      - ${AETHER_SECRETS_DIR}/ops:/run/secrets/ops:ro
+    healthcheck:
+      # Fresh (written in the last 15 minutes) and without an active alert.
+      test:
+        - CMD-SHELL
+        - >-
+          test $$(( $$(date +%s) - $$(stat -c %Y /run/aether-ops/status.json) )) -lt 900
+          && grep -q '"ok":true' /run/aether-ops/status.json
+      interval: 1m
+      timeout: 10s
+      retries: 2
+      # The first full backup runs before the first status is written.
+      start_period: 2h
+    depends_on:
+      postgres:
+        condition: service_healthy
+    <<: *hardened
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    logging: *logging
+    networks: [ops-egress]
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # Optional (setup.py --offsite): copies the pgBackRest repository (already encrypted) and the nightly dumps to an
+  # rclone remote every OFFSITE_EVERY seconds. Separate from archiving on purpose: an unreachable remote must never
+  # block WAL archiving. Point OFFSITE_TARGET at an rclone `crypt` remote: the dumps are not encrypted themselves.
+  # Files deleted locally by retention are moved to <target>/deleted/<date> on the remote, not deleted there.
+  pitr-offsite:
+    profiles: [offsite]
+    image: rclone/rclone:1.71.1@sha256:d5971950c2b370fb04dd3292541b5bda6d9103143fd7e345aeb435a399388afc
+    # Root without any capability: owner of the dumps (root, 0600) and, through group 70, reader of the pgBackRest
+    # repository (postgres uid, 0640).
+    user: "0:70"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "off-site copy to $${OFFSITE_TARGET} every $${OFFSITE_EVERY}s"
+        while true; do
+          day="$$(date -u +%Y-%m-%d)"
+          for part in pitr dumps; do
+            if rclone sync "/data/$$part" "$${OFFSITE_TARGET}/$$part" --backup-dir "$${OFFSITE_TARGET}/deleted/$$day/$$part" \
+                 --exclude '*.part' --stats-one-line --stats 0 -q; then
+              echo "off-site copy of $$part ok"
+              date -u +%s > "/tmp/offsite-$$part.ok"
+            else
+              echo "PITR ALERT offsite_failed: off-site copy of $$part to $${OFFSITE_TARGET} failed" >&2
+            fi
+          done
+          sleep "$${OFFSITE_EVERY}"
+        done
+    environment:
+      OFFSITE_TARGET: ${OFFSITE_TARGET:-}
+      OFFSITE_EVERY: ${OFFSITE_EVERY:-900}
+      RCLONE_CONFIG: /config/rclone/rclone.conf
+      HOME: /tmp
+    volumes:
+      - ${AETHER_PITR_DIR}:/data/pitr:ro
+      - ${AETHER_BACKUP_DIR}:/data/dumps:ro
+      - ${AETHER_SECRETS_DIR}/rclone:/config/rclone:ro
+    healthcheck:
+      test: ["CMD-SHELL", "for p in pitr dumps; do test $$(( $$(date -u +%s) - $$(cat /tmp/offsite-$$p.ok) )) -lt 3600 || exit 1; done"]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 1h
+    <<: *hardened
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    logging: *logging
+    networks: [ops-egress]
     deploy:
       resources:
         limits:

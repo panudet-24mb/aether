@@ -15,6 +15,10 @@ What it creates
   <secrets>/mqtt/runtime/   the password/ACL files that mqtt-provisioner rewrites for each gateway
   <secrets>/mqtt/collector/ CA + collector.json for the ingest worker
   <secrets>/mqtt/commander/ CA + commander.json for mqtt-commander (write-only on aether/z2m/+/+/set)
+  <secrets>/pgbackrest/     pgbackrest.conf, with the repository encryption passphrase (PGBACKREST_CIPHER_PASS)
+  <secrets>/ops/            webhook-url for backup/PITR alerts (only with --ops-webhook)
+  <pitr-dir>                the pgBackRest repository: encrypted base backups and archived WAL (point-in-time recovery)
+  docker volume             <project>_postgres-data, the database (external to compose), when it does not exist yet
   <env-file>                every setting the compose file interpolates (mode 0600)
 """
 import argparse
@@ -36,6 +40,10 @@ ROOT = HERE.parents[1]
 MOSQUITTO_IMAGE = "eclipse-mosquitto:2.0.22"
 # The backend image (backend/Dockerfile) runs every binary as this uid.
 BACKEND_UID = 10001
+# The postgres uid of the Alpine postgres image (infra/prod/postgres/Dockerfile): pgBackRest runs as it.
+POSTGRES_UID = 70
+# The data directory inside the postgres image (PGDATA of postgres:18).
+PGDATA = "/var/lib/postgresql/18/docker"
 
 
 def run(args, **kwargs):
@@ -45,7 +53,10 @@ def run(args, **kwargs):
 def write(path: pathlib.Path, data: str, mode: int = 0o600):
     if path.exists():
         path.chmod(0o600)  # generated files are read-only; re-running setup must still work
-    path.write_text(data)
+    # Created 0600 (never readable by others, whatever the umask), then given its final mode.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
     path.chmod(mode)
 
 
@@ -204,6 +215,24 @@ def main() -> int:
     p.add_argument("--env-file", default=str(ROOT / ".env.prod"))
     p.add_argument("--secrets-dir", default=str(ROOT / ".secrets" / "prod"))
     p.add_argument("--backup-dir", default=str(ROOT / "backups"))
+    p.add_argument("--project", default="aether-prod",
+                   help="compose project name; the database volume is <project>_postgres-data (default aether-prod)")
+    p.add_argument("--pitr-dir", default=None,
+                   help="pgBackRest repository for point-in-time recovery (default: the value already in the env file, "
+                        "else /var/lib/aether/pitr as root, else <repo>/pitr); outside the checkout so `git clean` cannot "
+                        "remove it; room for ~2 full backups plus 1-2 weeks of WAL and PITR_QUEUE_MAX")
+    p.add_argument("--pitr-keep-full", type=int, default=None,
+                   help="full backups to keep (weekly fulls: 2 gives a 7-14 day recovery window; default 2 or the kept value)")
+    p.add_argument("--pitr-queue-max", default=None,
+                   help="archive-push-queue-max: WAL allowed to pile up while the repository is unreachable before "
+                        "pgBackRest drops it (and alerts) instead of filling the disk; default 8GB or the kept value")
+    p.add_argument("--pitr-backup-at", default=None, help="daily pgBackRest backup time HH:MM (default 03:30 or kept)")
+    p.add_argument("--ops-webhook", default=None,
+                   help="https URL that receives backup/PITR alerts as JSON (Slack/Discord-compatible text field), stored "
+                        "in <secrets>/ops/webhook-url (0400), not the env file; '' to remove; kept when omitted")
+    p.add_argument("--offsite", default=None,
+                   help="rclone remote:path that receives the PITR repository and the dumps every 15 minutes (runs the "
+                        "pitr-offsite service; needs <secrets>/rclone/rclone.conf); 'off' to stop; kept when omitted")
     p.add_argument("--log-dir", default=str(HERE / "logs"))
     p.add_argument("--https-port", type=int, default=443)
     p.add_argument("--http-port", type=int, default=80)
@@ -239,6 +268,18 @@ def main() -> int:
     mqtt_host = a.mqtt_host or a.host
     if not re.fullmatch(r"[A-Za-z0-9._:\-]{1,253}", mqtt_host):
         return fail("--mqtt-host must be a DNS name or an IP address")
+    if a.pitr_keep_full is not None and not 1 <= a.pitr_keep_full <= 52:
+        return fail("--pitr-keep-full must be between 1 and 52")
+    if a.pitr_queue_max is not None and not re.fullmatch(r"[1-9][0-9]{0,5}(MB|GB)", a.pitr_queue_max):
+        return fail("--pitr-queue-max must look like 512MB or 8GB")
+    if a.pitr_backup_at is not None and not re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", a.pitr_backup_at):
+        return fail("--pitr-backup-at must be HH:MM")
+    if a.ops_webhook and not re.fullmatch(r"https://[^\s'\"]{1,2000}", a.ops_webhook):
+        return fail("--ops-webhook must be an https:// URL")
+    if a.offsite and a.offsite != "off" and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}:[A-Za-z0-9_./\-]{0,500}", a.offsite):
+        return fail("--offsite must be an rclone remote:path, e.g. offsite-crypt:aether")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", a.project):
+        return fail("--project must be a compose project name (lowercase letters, digits, _ and -)")
     if a.public_origin and not re.fullmatch(r"https://[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?", a.public_origin):
         return fail("--public-origin must look like https://name[:port] with no path")
     try:
@@ -261,8 +302,19 @@ def main() -> int:
     env_file = pathlib.Path(a.env_file).resolve()
     backup_dir = pathlib.Path(a.backup_dir).resolve()
     log_dir = pathlib.Path(a.log_dir).resolve()
-    for d in (sec, backup_dir, log_dir):
+    old_early = read_env(env_file)
+    # Outside the checkout by default, so `git clean -fdx` cannot delete it; a value already in the env file wins.
+    default_pitr = "/var/lib/aether/pitr" if os.geteuid() == 0 else str(ROOT / "pitr")
+    pitr_dir = pathlib.Path(a.pitr_dir or old_early.get("AETHER_PITR_DIR") or default_pitr).resolve()
+    # A new passphrase can never read an existing repository: refuse instead of silently orphaning its backups.
+    if not old_early.get("PGBACKREST_CIPHER_PASS") and pitr_dir.is_dir() and any(pitr_dir.iterdir()):
+        return fail("a pgBackRest repository already exists in " + str(pitr_dir) + " but " + str(env_file) + " has no "
+                    "PGBACKREST_CIPHER_PASS. Restore the env file from its offline copy (a new passphrase could never "
+                    "read those backups), or point --pitr-dir at an empty directory")
+    for d in (sec, backup_dir, log_dir, pitr_dir):
         d.mkdir(parents=True, exist_ok=True)
+    # The repository belongs to the postgres uid (archive-push runs in the server, backups in the pitr service).
+    own(pitr_dir, POSTGRES_UID)
     # Traversable but not listable: containers run as several different uids (999, 10001, the
     # mosquitto uid) and each must reach exactly the file it is given, nothing else.
     sec.chmod(0o711)
@@ -295,6 +347,9 @@ def main() -> int:
     # Generated once and kept; the public key is always derived from it.
     tuya_cloud_private = secret("TUYA_CLOUD_PRIVATE_KEY", b64key(32))
     tuya_cloud_public = x25519_public(tuya_cloud_private)
+    # Encrypts every file in the pgBackRest repository (aes-256-cbc). Generated once and kept: LOSING IT MAKES EVERY
+    # PITR BACKUP UNREADABLE, which is why it is in the env file that must be backed up offline.
+    pitr_cipher = secret("PGBACKREST_CIPHER_PASS", lambda: secrets.token_urlsafe(48))
 
     # ---------------------------------------------------------------- PostgreSQL TLS
     pg = sec / "postgres"
@@ -461,6 +516,71 @@ connection_messages true
     # postgres/server.key is read only by the root-run `prepare` service, which installs a copy
     # owned by uid 999 into the postgres-certs volume; it is never mounted into postgres itself.
 
+    # ---------------------------------------------------------------- pgBackRest (point-in-time recovery)
+    pitr_keep_full = str(a.pitr_keep_full) if a.pitr_keep_full is not None else old.get("PITR_KEEP_FULL", "2")
+    pitr_queue_max = a.pitr_queue_max or old.get("PITR_QUEUE_MAX", "8GB")
+    pgbr = sec / "pgbackrest"
+    pgbr.mkdir(exist_ok=True)
+    pgbr.chmod(0o711)
+    # Mounted read-only into postgres (archive-push) and pitr (backups), both running as the postgres uid.
+    write(pgbr / "pgbackrest.conf", f"""# Generated by infra/prod/setup.py from .env.prod; edits are overwritten on the next run.
+[global]
+repo1-path=/var/lib/pgbackrest
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass={pitr_cipher}
+repo1-retention-full-type=count
+repo1-retention-full={pitr_keep_full}
+repo1-bundle=y
+repo1-block=y
+compress-type=zst
+compress-level=3
+process-max=2
+start-fast=y
+archive-async=y
+spool-path=/var/spool/pgbackrest
+archive-push-queue-max={pitr_queue_max}
+archive-timeout=120
+lock-path=/tmp/pgbackrest
+log-level-console=warn
+log-level-stderr=off
+log-level-file=off
+
+[aether]
+pg1-path={PGDATA}
+pg1-socket-path=/var/run/postgresql
+pg1-user=postgres
+pg1-database=aether
+""", 0o400)
+    own(pgbr / "pgbackrest.conf", POSTGRES_UID)
+
+    offsite = old.get("OFFSITE_TARGET", "") if a.offsite is None else ("" if a.offsite == "off" else a.offsite)
+    if offsite:
+        rc = sec / "rclone"
+        rc.mkdir(exist_ok=True)
+        rc.chmod(0o700)
+        if not (rc / "rclone.conf").exists():
+            print("WARNING: --offsite needs " + str(rc / "rclone.conf") + " (create it with `rclone config`; use a crypt "
+                  "remote so the dumps are encrypted off-site). pitr-offsite will fail until it exists.", file=sys.stderr)
+    ops = sec / "ops"
+    ops.mkdir(exist_ok=True)
+    ops.chmod(0o711)
+    if a.ops_webhook is not None:
+        if a.ops_webhook:
+            write(ops / "webhook-url", a.ops_webhook, 0o400)
+            own(ops / "webhook-url", POSTGRES_UID)
+        else:
+            (ops / "webhook-url").unlink(missing_ok=True)
+    ops_webhook = (ops / "webhook-url").exists()
+
+    # The database volume is external to compose (see compose.yaml): create it on a new install, with the labels
+    # compose would have given it, and never touch an existing one.
+    pg_volume = old.get("AETHER_PG_VOLUME") or a.project + "_postgres-data"
+    if subprocess.run(["docker", "volume", "inspect", pg_volume], stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL).returncode != 0:
+        run(["docker", "volume", "create", "--label", "com.docker.compose.project=" + a.project,
+             "--label", "com.docker.compose.volume=postgres-data", pg_volume])
+        created.append("database volume " + pg_volume)
+
     # ---------------------------------------------------------------- derived settings
     port_suffix = "" if a.https_port == 443 else ":" + str(a.https_port)
     http_suffix = "" if a.http_port == 80 else ":" + str(a.http_port)
@@ -470,9 +590,16 @@ connection_messages true
 
     settings = {
         "# Aether production settings. Mode 0600. Back this file up OFFLINE, separately from the": "",
-        "# database dumps: CHANNEL_SEAL_KEY and JWT_SIGNING_KEY are not recoverable from a dump.": "",
+        "# database dumps: CHANNEL_SEAL_KEY and JWT_SIGNING_KEY are not recoverable from a dump, and without": "",
+        "# PGBACKREST_CIPHER_PASS no point-in-time backup can be read.": "",
         "AETHER_SECRETS_DIR": str(sec),
         "AETHER_BACKUP_DIR": str(backup_dir),
+        "AETHER_PITR_DIR": str(pitr_dir),
+        # The database volume. Only restore-pitr.sh changes it (cutover / rollback); kept across re-runs, as is the
+        # volume it replaced last (the rollback target).
+        "AETHER_PG_VOLUME": pg_volume,
+        "AETHER_PG_VOLUME_PREVIOUS": old.get("AETHER_PG_VOLUME_PREVIOUS", ""),
+        "AETHER_POSTGRES_IMAGE": "aether-postgres:" + a.image_tag,
         "AETHER_CADDY_LOG_DIR": str(log_dir),
         "AETHER_BACKEND_IMAGE": "aether-backend:" + a.image_tag,
         "AETHER_WEB_IMAGE": "aether-web:" + a.image_tag,
@@ -528,6 +655,14 @@ connection_messages true
         "BACKUP_AT": old.get("BACKUP_AT", "02:30"),
         "BACKUP_KEEP_DAILY": old.get("BACKUP_KEEP_DAILY", "14"),
         "BACKUP_KEEP_WEEKLY": old.get("BACKUP_KEEP_WEEKLY", "8"),
+        "PITR_BACKUP_AT": a.pitr_backup_at or old.get("PITR_BACKUP_AT", "03:30"),
+        "PITR_FULL_DAY": old.get("PITR_FULL_DAY", "7"),
+        "PITR_KEEP_FULL": pitr_keep_full,
+        "PITR_QUEUE_MAX": pitr_queue_max,
+        "OFFSITE_TARGET": offsite,
+        "OFFSITE_EVERY": old.get("OFFSITE_EVERY", "900"),
+        # Starts the optional pitr-offsite service only when an off-site target is configured.
+        "COMPOSE_PROFILES": "offsite" if offsite else "",
         "POSTGRES_PASSWORD": postgres_password,
         "APP_DB_PASSWORD": app_db_password,
         "MQTT_PROVISION_DB_PASSWORD": prov_db_password,
@@ -535,6 +670,7 @@ connection_messages true
         "CHANNEL_SEAL_KEY": seal_key,
         "TUYA_CLOUD_PUBLIC_KEY": tuya_cloud_public,
         "TUYA_CLOUD_PRIVATE_KEY": tuya_cloud_private,
+        "PGBACKREST_CIPHER_PASS": pitr_cipher,
         "MQTT_INGEST_PASSWORD": ingest_password,
         "MQTT_COMMANDER_PASSWORD": commander_password,
         "MQTT_RESERVED_GATEWAY_ID": reserved_gateway,
@@ -550,6 +686,10 @@ connection_messages true
     print("  env file      : " + str(env_file) + " (0600)")
     print("  secrets       : " + str(sec) + " (0700)")
     print("  backups       : " + str(backup_dir))
+    print("  PITR repo     : " + str(pitr_dir) + "   (" + pitr_keep_full + " full backups, queue max " + pitr_queue_max +
+          (", off-site " + offsite if offsite else ", no off-site copy") +
+          (", alerts to the ops webhook" if ops_webhook else ", alerts in the pitr log only") + ")")
+    print("  database vol  : " + pg_volume)
     print("  access log    : " + str(log_dir) + "/access.log")
     print("  site          : " + origin + "   TLS mode: " + a.tls)
     if a.public_origin:

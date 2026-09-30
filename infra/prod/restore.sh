@@ -6,8 +6,9 @@
 # resolved against /backups inside the container. The target database is created fresh; an existing
 # non-empty database is refused unless --force is given (which DROPs it).
 #
-# Restoring into the live `aether` database requires the API and the collector to be stopped first;
-# the script does that for you and starts them again afterwards.
+# Restoring into the live `aether` database requires every service that writes to it to be stopped first
+# (api, mqtt-ingest, mqtt-provisioner, mqtt-commander, tuya-cloud); the script does that for you and starts them
+# again afterwards.
 # shellcheck source=_common.sh
 . "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
@@ -20,7 +21,7 @@ while [ $# -gt 0 ]; do
 		--force) FORCE="true"; shift ;;
 		--env-file) ENV_FILE="$2"; shift 2 ;;
 		--project|-p) PROJECT="$2"; shift 2 ;;
-		-h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,11p' "$0"; exit 0 ;;
 		*) DUMP="$1"; shift ;;
 	esac
 done
@@ -37,10 +38,14 @@ case "$NAME" in
 	*) INNER="/backups/daily/$NAME" ;;
 esac
 
+# Every service that connects to the application database. mqtt-commander and tuya-cloud write too (command
+# claims, Tuya ingest): leaving them running would race the restore.
+WRITERS="api mqtt-ingest mqtt-provisioner mqtt-commander tuya-cloud"
 STOPPED=""
 if [ "$TARGET" = "aether" ]; then
-	echo "target is the live database: stopping api, mqtt-ingest and mqtt-provisioner"
-	dc stop api mqtt-ingest mqtt-provisioner
+	echo "target is the live database: stopping every service that writes to it"
+	# shellcheck disable=SC2086 # a list of service names
+	dc stop $WRITERS
 	STOPPED="yes"
 fi
 
@@ -57,6 +62,7 @@ STATUS=$?
 set -e
 
 if [ -n "$STOPPED" ]; then
-	dc start api mqtt-ingest mqtt-provisioner
+	# shellcheck disable=SC2086
+	dc start $WRITERS
 fi
 exit "$STATUS"

@@ -7,12 +7,16 @@
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `infra/prod/setup.py` | สร้าง secret, ใบรับรอง, ไฟล์ตั้งค่า mosquitto และ `.env.prod` (idempotent) |
-| `infra/prod/compose.yaml` | postgres, migrate, api, mqtt, mqtt-ingest, mqtt-provisioner, web, proxy, backup |
+| `infra/prod/compose.yaml` | postgres, migrate, api, mqtt, mqtt-ingest, mqtt-provisioner, mqtt-commander, tuya-cloud, web, proxy, backup, pitr (+ pitr-offsite ถ้าเปิด) |
+| `infra/prod/postgres/Dockerfile` | image `aether-postgres` = `postgres:18-alpine` (ตรึง digest) + pgBackRest |
 | `infra/prod/Caddyfile` | reverse proxy + TLS + security headers (ค่าทุกอย่างมาจาก `.env.prod`) |
 | `infra/prod/init-db.sh` | สร้าง role และบังคับ `hostssl` ตอน volume ใหม่ |
 | `infra/prod/create-owner.sh` | สร้างบัญชีเจ้าของคนแรก |
 | `infra/prod/backup-now.sh` / `backup.sh` / `backup-loop.sh` | สำรองข้อมูล |
-| `infra/prod/restore.sh` / `restore-inner.sh` | กู้คืน |
+| `infra/prod/restore.sh` / `restore-inner.sh` | กู้คืนจาก dump |
+| `infra/prod/pitr-loop.sh` | service `pitr`: backup ของ pgBackRest ตามเวลา + ตรวจสุขภาพการสำรองและแจ้งเตือน |
+| `infra/prod/pitr-info.sh` / `pitr-backup-now.sh` | ดูช่วงเวลาที่กู้ได้ / สั่ง backup ของ pgBackRest ทันที |
+| `infra/prod/restore-pitr.sh` / `pitr-drill.sh` | กู้คืนย้อนเวลา (PITR) ลง volume ใหม่ / ซ้อมกู้รายเดือน |
 | `infra/prod/renew-mqtt-cert.py` | ต่ออายุใบรับรอง broker จาก CA เดิม |
 
 ---
@@ -47,6 +51,13 @@
 `SAMPLE_MIN_INTERVAL_SEC=30` (ค่าเริ่มต้นของ `setup.py`) ลดพื้นที่ลงประมาณ **3 เท่า** เทียบกับการเก็บทุก uplink โดยยังเห็นแนวโน้มอุณหภูมิ/ความชื้นครบ แนะนำให้ใช้ 30 ตั้งแต่วันแรก ปรับเป็น 0 เฉพาะตอนต้องสอบสวนปัญหาเฉพาะจุด
 
 เผื่อเพิ่มอีก **2 เท่า** สำหรับ WAL, autovacuum bloat, ไฟล์ backup 14+8 ชุด และ Docker image
+
+คลัง PITR (`--pitr-dir`) ต้องการที่เพิ่ม ≈ **2 × full backup ที่บีบอัดแล้ว + WAL 1–2 สัปดาห์** (zstd บีบ WAL ได้มาก ปกติ
+เล็กกว่าขนาดฐานข้อมูล) ดูตัวเลขจริงได้จาก `infra/prod/pitr-info.sh` หลังเปิดใช้ 1 สัปดาห์ ถ้ามีดิสก์แยก ให้วางคลังไว้คนละดิสก์กับ Docker
+
+**กติกาเผื่อที่สำหรับคิว WAL:** ดิสก์ที่มี Docker volume ต้องว่างอย่างน้อย `PITR_QUEUE_MAX` (8GB) + 2 × `max_wal_size` (8GB)
++ 20% ของดิสก์ ตลอดเวลา เพราะตอนคลังเขียนไม่ได้ WAL จะกองใน `pg_wal` จนถึงเพดานนั้นก่อนถูกทิ้ง ถ้าที่ว่างน้อยกว่านั้น
+ให้ลด `--pitr-queue-max` (เช่น `2GB`) มิฉะนั้นดิสก์อาจเต็มก่อนถึงเพดานและฐานข้อมูลหยุด
 
 ### สิ่งที่ต้องมีก่อนติดตั้ง
 
@@ -111,7 +122,7 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d
 sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml ps
 ```
 
-ผลที่ถูกต้อง: `postgres`, `api`, `mqtt`, `mqtt-ingest`, `web`, `proxy` = `Up (healthy)`; `prepare` และ `migrate` = `Exited (0)`; `mqtt-provisioner`, `backup` = `Up`
+ผลที่ถูกต้อง: `postgres`, `api`, `mqtt`, `mqtt-ingest`, `web`, `proxy`, `backup` = `Up (healthy)`; `prepare` และ `migrate` = `Exited (0)`; `mqtt-provisioner` = `Up`; `pitr` = `Up (health: starting)` จนกว่า full backup แรกจะเสร็จ แล้วเป็น `healthy`
 
 `setup.py` รันซ้ำได้เสมอ — จะ **ไม่** เขียนทับ secret หรือใบรับรองที่มีอยู่ ใช้รันซ้ำเมื่อต้องการเปลี่ยนพอร์ต ชื่อโฮสต์ หรือสลับ `--shadow`
 
@@ -417,9 +428,10 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml logs api --t
 ```sh
 cd /opt/aether
 
-# 6.1 สำรองก่อนเสมอ — นี่คือทางกลับทางเดียว
+# 6.1 สำรองก่อนเสมอ และจดเวลาไว้ — ใช้กู้ย้อนเวลา (§7.1) ไปจุดก่อน migrate ได้
 sudo sh infra/prod/backup-now.sh
 sudo ls -lt backups/daily | head -3          # จดชื่อไฟล์ล่าสุดไว้
+date '+%F %T%z'                              # จดเวลาก่อนอัปเกรด เช่น 2026-09-30 14:05:00+0700
 
 # 6.2 ดึงโค้ดใหม่ (หรือคัดลอก release มาทับ)
 sudo git pull            # ถ้าเป็น git repo
@@ -444,7 +456,15 @@ curl -s https://aether.hospital.local/health/ready
 
 **ไม่มีระบบ rollback อัตโนมัติ** migration ทุกไฟล์มีส่วน `-- +goose Down` แต่ `cmd/migrate` เรียกเฉพาะ `goose.Up` เท่านั้น ไม่มีคำสั่งสำหรับถอยลง
 
-ถ้าอัปเกรดแล้วพัง ทางกลับคือ **กู้คืน dump ที่ทำไว้ก่อนอัปเกรด** แล้วกลับไปใช้โค้ดเวอร์ชันเดิม:
+ถ้าอัปเกรดแล้วพัง มีสองทาง:
+
+- **กู้ย้อนเวลา (แนะนำ)** ไปที่เวลาก่อน `migrate` ที่จดไว้ในข้อ 6.1 — ได้ข้อมูลถึงวินาทีนั้น และของเดิมยังอยู่ใน volume เก่า:
+  ```sh
+  sudo git checkout <commit เดิม>
+  sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml build
+  sudo sh infra/prod/restore-pitr.sh --target "2026-09-30 14:05:00+07" --cutover
+  ```
+- **กู้ dump ที่ทำไว้ก่อนอัปเกรด** แล้วกลับไปใช้โค้ดเวอร์ชันเดิม:
 
 ```sh
 sudo git checkout <commit เดิม>
@@ -453,7 +473,7 @@ sudo sh infra/prod/restore.sh aether-YYYYmmdd-HHMMSS.dump --database aether --fo
 sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d
 ```
 
-ข้อมูลที่เข้ามาหลังจากทำ dump จะหายไป — นี่คือเหตุผลที่ต้อง backup ทันทีก่อนอัปเกรด ไม่ใช่ "เมื่อคืน"
+ทั้งสองทาง ข้อมูลที่เข้ามาหลังจุดที่กู้จะหายไป — นี่คือเหตุผลที่ต้อง backup และจดเวลาทันทีก่อนอัปเกรด ไม่ใช่ "เมื่อคืน"
 
 ---
 
@@ -474,12 +494,12 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml logs backup 
 
 ### สิ่งที่ **ไม่** ได้ครอบคลุม — อ่านให้ครบ
 
-- **ไม่มี PITR / WAL archiving** กู้ได้แค่ย้อนไปที่จุดที่ทำ dump เท่านั้น ข้อมูลระหว่าง dump ล่าสุดกับตอนเครื่องพังจะหายถาวร ถ้ารับไม่ได้ ต้องเพิ่ม WAL archiving (pgBackRest / WAL-G) ซึ่งยังไม่ได้ทำในชุดนี้
+- dump คือจุดกู้วันละครั้ง ส่วนการกู้ **ย้อนไปวินาทีใดก็ได้** ใน 1–2 สัปดาห์ล่าสุดคือ PITR ใน §7.1 ใช้คู่กันเสมอ: dump อ่านได้ข้าม major version ของ PostgreSQL และกู้ทีละ database ได้ ส่วน PITR เสียข้อมูลไม่เกิน 5 นาที
 - **dump ไม่มี secret** ต้องสำรองแยกและเก็บ **offline**:
-  - `.env.prod` (มี `JWT_SIGNING_KEY`, `CHANNEL_SEAL_KEY`, รหัสฐานข้อมูล)
+  - `.env.prod` (มี `JWT_SIGNING_KEY`, `CHANNEL_SEAL_KEY`, รหัสฐานข้อมูล และ **`PGBACKREST_CIPHER_PASS`** — กุญแจเข้ารหัสคลัง PITR ถ้าหาย **backup ของ PITR ทุกชุดอ่านไม่ได้อีกเลย**)
   - `<secrets-dir>` ทั้งโฟลเดอร์ (MQTT CA key, ใบรับรอง broker, ไฟล์ตั้งค่า mosquitto)
   - Docker volume `caddy-data` (root CA ของ Caddy ในโหมด internal — ถ้าหายต้องไปติดตั้ง root ใหม่ที่เครื่องลูกข่ายทุกเครื่อง)
-- **ไฟล์ backup ไม่ถูกคัดลอกออกนอกเครื่องให้อัตโนมัติ** ถ้าดิสก์หรือเครื่องพัง backup ก็พังไปด้วย ต้องตั้ง rsync/NAS/เทป ไปที่อื่นเอง
+- **สำเนานอกเครื่องต้องเปิดเอง** (`setup.py --offsite`, §7.1) ถ้าไม่เปิด ดิสก์หรือเครื่องพัง = backup และคลัง PITR พังไปด้วย
 
 ```sh
 # สำรอง secret ออฟไลน์ (ทำตอนติดตั้ง และทุกครั้งที่ rotate key)
@@ -495,13 +515,115 @@ sudo docker run --rm -v aether-prod_caddy-data:/d -v "$PWD":/out alpine:3.23 \
 # ซ้อมกู้เข้า database ชั่วคราว (ปลอดภัย ไม่แตะของจริง)
 sudo sh infra/prod/restore.sh aether-20260920-023001.dump --database aether_rehearsal
 
-# กู้ทับของจริง (สคริปต์จะหยุด api / mqtt-ingest / mqtt-provisioner ให้ แล้วเปิดคืนอัตโนมัติ)
+# กู้ทับของจริง (สคริปต์จะหยุด api / mqtt-ingest / mqtt-provisioner / mqtt-commander / tuya-cloud ให้ แล้วเปิดคืนอัตโนมัติ)
 sudo sh infra/prod/restore.sh aether-20260920-023001.dump --database aether --force
 ```
 
 `restore.sh` จะ **ปฏิเสธ** ถ้า database ปลายทางมีตารางอยู่แล้วและไม่ได้ใส่ `--force` (ออกด้วย exit code 2) และจะสร้าง role `aether_owner` / `aether_app` / `aether_mqtt_provisioner` ให้ก่อนเสมอ เพราะ dump มี ownership และ grant ติดมาด้วย
 
-### รายการซ้อมกู้คืน — ทำทุก 3 เดือน
+### 7.1 กู้คืนย้อนเวลา (PITR) ด้วย pgBackRest
+
+**ทำงานอย่างไร**
+
+- `postgres` ส่ง WAL ทุกไฟล์เข้าคลัง pgBackRest ที่ `<pitr-dir>` (ค่าเริ่มต้น `/var/lib/aether/pitr` เมื่อรัน setup ด้วย root — นอก checkout เพื่อไม่ให้ `git clean -fdx` ลบทิ้ง; ถ้าตั้งไว้ใน repository เช่น `pitr/` ห้ามใช้ `git clean -fdx` เด็ดขาด) แบบ async `archive_timeout=300` บังคับปิดไฟล์ WAL ทุก 5 นาที ข้อมูลที่อาจหายเมื่อกู้จึง **ไม่เกิน 5 นาที**
+- service `pitr` ทำ **full backup ทุกวันอาทิตย์** และ **differential ทุกวัน** เวลา `PITR_BACKUP_AT` (03:30) เก็บ full ล่าสุด `PITR_KEEP_FULL` ชุด (2) จึง **กู้ได้ย้อนหลัง 7–14 วัน** ถึงวินาทีใดก็ได้ WAL และ backup ที่เก่ากว่านั้นถูกลบให้เอง
+- ทุกไฟล์ในคลัง **บีบอัด (zstd) และเข้ารหัส (aes-256-cbc)** ด้วย `PGBACKREST_CIPHER_PASS` จาก `.env.prod`
+- ถ้าคลังเขียนไม่ได้ (ดิสก์เต็ม, เมานต์หลุด) WAL จะค้างใน `pg_wal` ได้ถึง `PITR_QUEUE_MAX` (8GB) จากนั้น pgBackRest **ทิ้ง WAL และแจ้งเตือน** แทนที่จะปล่อยให้ดิสก์เต็มจนฐานข้อมูลหยุด ช่วงที่ถูกทิ้งจะกู้ย้อนเวลาไม่ได้ และเมื่อคลังกลับมาเขียนได้ `pitr` จะทำ full backup ใหม่ให้ทันที
+- `postgres` รันใต้ init (`init: true`): process ของ archive แบบ async ที่หลุดจากแม่จะไม่ถูกนับเป็น backend ที่ crash
+
+**การแจ้งเตือน** — ทุก 5 นาที `pitr` ตรวจ: archive ล้มเหลว, WAL ค้างส่งเกิน 15 นาที, `pg_wal` ใหญ่เกิน `max_wal_size` + 2GB, WAL ถูกทิ้ง, backup ล่าสุดเก่ากว่า 36 ชม., backup ล้มเหลว, ดิสก์คลังเหลือ < 15%, dump รายคืนเก่ากว่า 30 ชม. หรือล้มเหลว
+
+- เขียนบรรทัด `PITR ALERT <key>: ...` / `PITR RESOLVED <key>` ใน log ของ `pitr`
+- POST JSON (`{"severity","key","text","content"}` ใช้กับ Slack/Discord webhook ได้ตรง ๆ) ไปที่ `--ops-webhook` ถ้าตั้งไว้ ส่งซ้ำทุก 6 ชม. ระหว่างที่ปัญหายังอยู่ และส่งอีกครั้งเมื่อหาย URL (ซึ่งมักเป็นรหัสลับ) เก็บใน `<secrets>/ops/webhook-url` (0400) ไม่อยู่ใน `.env.prod` และไม่ปรากฏใน argument ของ process ใด `pitr` และ `pitr-offsite` อยู่บน network `ops-egress` ที่ออกอินเทอร์เน็ตได้อย่างเดียว ไม่อยู่ network เดียวกับแอป (เข้าถึงฐานข้อมูลผ่าน socket volume)
+- สรุปใน `/run/aether-ops/status.json` ซึ่ง healthcheck ของ `pitr` อ่าน → `docker compose ps` แสดง `unhealthy` ทันทีที่มีปัญหา
+
+```sh
+sudo sh infra/prod/pitr-info.sh            # backup ที่มี, ช่วง WAL, และ status.json
+sudo sh infra/prod/pitr-backup-now.sh      # full backup ทันที (diff / incr ก็ได้)
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml logs pitr | grep 'PITR ALERT'
+```
+
+**เปิดใช้บนเครื่องที่ติดตั้งไว้แล้ว** (หยุดชะงักราว 10–30 วินาที ตอน postgres restart เพื่อเปิด `archive_mode`)
+
+```sh
+cd /opt/aether
+sudo sh infra/prod/backup-now.sh                         # dump ก่อนเสมอ
+df -h .                                                  # ต้องมีที่ว่าง ≥ 2 × ขนาดฐานข้อมูล
+sudo git pull
+sudo python3 infra/prod/setup.py <flag ชุดเดิมทั้งหมด>    # เพิ่ม AETHER_PITR_DIR, AETHER_PG_VOLUME, PGBACKREST_CIPHER_PASS
+sudo tar czf aether-secrets-$(date +%F).tar.gz .env.prod .secrets/prod   # สำรอง passphrase ใหม่ออฟไลน์ทันที
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml build postgres
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d  # postgres restart ครั้งเดียว + service pitr ใหม่
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml logs -f pitr   # รอ "full backup ok"
+sudo sh infra/prod/pitr-drill.sh                         # ซ้อมกู้ครั้งแรกวันเดียวกัน ต้องได้ PASS
+```
+
+`AETHER_PG_VOLUME` ที่ `setup.py` เขียนคือ `aether-prod_postgres-data` ซึ่งเป็นชื่อ volume เดิมที่ compose ตั้งให้ ข้อมูลจึงไม่ย้ายไปไหน
+
+- volume ฐานข้อมูลเป็น **external** ใน compose: compose ไม่สร้างและไม่ลบ (แม้ `down -v`) — `setup.py` สร้างให้ตอนติดตั้งใหม่ (label เดียวกับที่ compose ใส่) และ volume ที่ `restore-pitr.sh` สร้างก็ได้ label ชุดเดียวกัน
+- **ตัวแปรใน shell ชนะ `.env.prod`** (ลำดับความสำคัญของ compose): ถ้าเคย `export AETHER_PG_VOLUME=...` ไว้ compose จะใช้ค่านั้น สคริปต์ใน `infra/prod` จะเตือนเมื่อค่าใน shell ไม่ตรงกับไฟล์ และ `restore-pitr.sh` จะไม่ยอมสลับ volume จนกว่าจะ `unset`
+- `setup.py` **ปฏิเสธ** ถ้า `<pitr-dir>` มีคลังอยู่แล้วแต่ `.env.prod` ไม่มี `PGBACKREST_CIPHER_PASS` (passphrase ใหม่อ่านคลังเดิมไม่ได้) — ให้กู้ `.env.prod` จากสำเนาออฟไลน์ก่อน
+
+**กู้ย้อนเวลา**
+
+```sh
+# 1) ดูว่ากู้ได้ช่วงไหน
+sudo sh infra/prod/pitr-info.sh
+
+# 2) กู้ลง volume ใหม่ ของจริงไม่ถูกแตะ (ต้องใส่ time zone ของเวลาเสมอ)
+sudo sh infra/prod/restore-pitr.sh --target "2026-09-30 14:05:00+07"
+#    → สร้าง aether-prod_postgres-data-r<เวลา UTC>, replay WAL ถึงเวลานั้นในสำเนาที่ไม่มี network,
+#      แล้วแสดง migration version, RLS และจำนวนแถวทุกตาราง เทียบกับของจริง
+#    --keep-running  เปิดสำเนาค้างไว้ให้ตรวจเอง: docker exec -it -u postgres aether-prod-pitr-verify psql -d aether
+
+# 3) สลับไปใช้ volume ที่กู้ (หยุดระบบสั้น ๆ): dump ของเดิมก่อน, สลับ AETHER_PG_VOLUME ใน .env.prod,
+#    เปิดคืนเฉพาะ service ที่รันอยู่ก่อนหน้า แล้วทำ full backup ของ timeline ใหม่ให้
+sudo sh infra/prod/restore-pitr.sh --use-volume aether-prod_postgres-data-r20260930070500
+#    หรือทำข้อ 2 + 3 ในคำสั่งเดียว: restore-pitr.sh --target "..." --cutover
+
+# 4) ถอยกลับไป volume เดิม (ยังอยู่ครบ): ใช้ชื่อที่สคริปต์พิมพ์ไว้ / AETHER_PG_VOLUME_PREVIOUS ใน .env.prod
+sudo sh infra/prod/restore-pitr.sh --use-volume aether-prod_postgres-data
+```
+
+- **ฐานข้อมูลตัวจริงเสียจนเปิดไม่ได้ก็กู้ได้** สคริปต์อ่านคลังผ่าน container ชั่วคราว ไม่ต้องพึ่ง postgres ตัวเดิม (แค่ข้ามการเทียบกับของจริง)
+- **timeline**: กู้ตามประวัติที่ฐานข้อมูลตัวจริงอยู่ตอนนี้ (ถ้าตัวจริงดับ ใช้ timeline ของ backup ล่าสุดก่อนเวลาเป้าหมาย) เคยสลับไปมาแล้วอยากกู้ตามอีกกิ่ง ใส่ `--timeline N` ตัวเลขดูได้จาก `pitr-info.sh`
+- volume ที่ตามหลัง timeline ล่าสุดของคลัง (เช่นถอยกลับไป volume เดิมหลัง cutover) จะถูก **ย้ายขึ้น timeline ใหม่ก่อนเปิด** ให้อัตโนมัติ เพราะถ้าเดินต่อบน timeline เก่า ชื่อ WAL จะเรียงต่ำกว่า timeline ใหม่ และ pgBackRest จะลบ WAL ที่ backup ยังต้องใช้ทิ้ง ใช้ได้ทั้ง volume ที่หยุดเรียบร้อยและที่ดับกะทันหัน (replay WAL ของตัวเองจนจบก่อน)
+- หลังสำเนา promote สคริปต์ลบ `recovery_target_*` ที่ pgBackRest เขียนไว้ใน `postgresql.auto.conf` ออก (`ALTER SYSTEM RESET`) เพื่อไม่ให้ค่าเก่ามีผลกับการกู้ volume นั้นครั้งถัดไป
+- ถ้า cutover ล้มกลางทาง (volume ใหม่เปิดไม่ขึ้น) สคริปต์สลับ `AETHER_PG_VOLUME` กลับและเปิดระบบบน volume เดิมให้เอง
+- ถ้าขึ้นว่า `recovery ended before configured recovery target was reached` แปลว่าคลังจบก่อนเวลาเป้าหมาย (ตัวจริงดับก่อนส่ง WAL ช่วงท้าย) ให้เลือกเวลาก่อน `last completed transaction` ที่แสดงใน log
+- ไม่ใช้แล้วลบ volume ที่กู้ได้: `sudo docker volume rm <ชื่อ>` (volume เดิมหลัง cutover ก็เช่นกัน เมื่อแน่ใจแล้ว)
+
+**ซ้อมกู้ย้อนเวลา — ทุกเดือน** (ไม่แตะของจริง ใช้เวลาไม่กี่นาที)
+
+```sh
+sudo sh infra/prod/pitr-drill.sh           # กู้ไป "10 นาทีก่อน" ลง volume ชั่วคราว แล้วลบทิ้ง
+tail -3 backups/drills.log                 # ... window_rows restored=N live=N PASS
+```
+
+drill ผ่านเมื่อสำเนา promote ได้, migration version ตรงกับของจริง, RLS ครบ และจำนวนแถวของ `core.sensor_samples` ช่วง 1 ชม. ก่อนเวลาเป้าหมายตรงกันทั้งสองฝั่ง ผลทุกครั้ง (รวม FAIL) ถูกต่อท้ายใน `<backup-dir>/drills.log` ตั้ง cron บน host ได้:
+`0 4 1 * * cd /opt/aether && sh infra/prod/pitr-drill.sh >> /var/log/aether-drill.log 2>&1`
+
+**สำเนานอกเครื่อง (off-site)**
+
+```sh
+# 1) สร้าง rclone remote แบบ crypt ครอบ S3 / SFTP / NAS (dump ไม่ได้เข้ารหัสในตัว คลัง PITR เข้ารหัสแล้ว)
+sudo mkdir -p .secrets/prod/rclone
+sudo docker run --rm -it -v "$PWD/.secrets/prod/rclone:/config/rclone" rclone/rclone:1.71.1 config
+# 2) เปิด: service pitr-offsite คัดลอก <pitr-dir> และ <backup-dir> ทุก 15 นาที
+sudo python3 infra/prod/setup.py <flag ชุดเดิม> --offsite offsite-crypt:aether
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d
+# ปิด: --offsite off
+```
+
+ไฟล์ที่ retention ลบในเครื่องจะถูกย้ายไป `<remote>/deleted/<วันที่>/` บนปลายทาง ไม่ลบทิ้ง ตั้ง lifecycle ของ bucket ให้ลบโฟลเดอร์นั้นเองตามนโยบาย การ sync แยกจากการ archive โดยตั้งใจ: ปลายทางล่มไม่ทำให้ archive ของ WAL สะดุด
+
+**รู้ไว้**
+
+- ข้อมูลที่ลบในระบบ (เช่นคำขอลบข้อมูลส่วนบุคคล) ยังอยู่ในคลัง PITR ได้ถึง 14 วัน และใน dump ได้ถึง 8 สัปดาห์
+- restart `pitr` ทำให้สถานะการแจ้งเตือนเริ่มใหม่: ปัญหาที่ยังอยู่จะถูกแจ้งซ้ำหนึ่งครั้ง ส่วนที่หายไประหว่างนั้นจะไม่มีข้อความ RESOLVED
+- อัปเกรด PostgreSQL major (เช่น 19) ต้อง `pgbackrest stanza-upgrade` แล้วทำ full backup ใหม่ ส่วน backup ของเวอร์ชันเก่าใช้กู้ด้วย image เก่าเท่านั้น
+
+### รายการซ้อมกู้คืนจาก dump — ทำทุก 3 เดือน
 
 1. `sudo sh infra/prod/backup-now.sh` แล้วจดชื่อไฟล์
 2. `sudo sh infra/prod/restore.sh <ไฟล์> --database aether_rehearsal`
@@ -571,8 +693,9 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mq
 | log ของทุก service | `docker compose --env-file .env.prod -f infra/prod/compose.yaml logs <service>` (json-file, หมุนที่ 20 MB × 5 ไฟล์ ต่อ container) |
 | access log ของเว็บ | `<log-dir>/access.log` (ค่าเริ่มต้น `infra/prod/logs/access.log`) รูปแบบ JSON หมุนที่ 20 MiB เก็บ 10 ไฟล์ / 90 วัน |
 | log ของ PostgreSQL | อยู่ใน log ของ container `postgres` (query ที่ช้ากว่า 500 ms, checkpoint, lock wait, autovacuum) |
-| ข้อมูลจริง | Docker volume `aether-prod_postgres-data` |
-| ไฟล์สำรอง | `<backup-dir>` |
+| ข้อมูลจริง | Docker volume ตาม `AETHER_PG_VOLUME` ใน `.env.prod` (ค่าเริ่มต้น `aether-prod_postgres-data`) |
+| ไฟล์สำรอง | `<backup-dir>` (dump + `drills.log`) และ `<pitr-dir>` (คลัง pgBackRest) |
+| สุขภาพการสำรอง | `infra/prod/pitr-info.sh` หรือ `/run/aether-ops/status.json` ใน container `pitr`; บรรทัด `PITR ALERT` ใน log ของ `pitr` |
 
 ```sh
 # สุขภาพรวม
@@ -590,7 +713,8 @@ sudo grep -h '"status":5' <log-dir>/access.log | tail -20
 |---|---|
 | พื้นที่ดิสก์เหลือ | < 20% |
 | `docker compose ps` | มี service ไหน ไม่ใช่ `healthy` นานกว่า 5 นาที |
-| ไฟล์ backup ล่าสุด | เก่ากว่า 36 ชั่วโมง |
+| ไฟล์ backup ล่าสุด | เก่ากว่า 36 ชั่วโมง (`pitr` แจ้งเองเมื่อ dump เก่ากว่า 30 ชม. หรือ backup ของ pgBackRest เก่ากว่า 36 ชม.) |
+| `pitr` / `backup` | `unhealthy` = มีปัญหาการสำรอง ดู `logs pitr` บรรทัด `PITR ALERT` |
 | ขนาด `core.sensor_samples` | โตเร็วกว่าที่ประมาณไว้ในข้อ 1 เกิน 30% → ลด interval หรือ retention |
 | HTTP 429 ใน access log | ถ้าเยอะจากผู้ใช้จริง ให้เพิ่ม `API_RATE_LIMIT` |
 | จำนวน gateway ที่ออนไลน์ | ลดลงโดยไม่มีเหตุผล = ปัญหาเครือข่าย หรือใบรับรองหมดอายุ |
@@ -621,7 +745,10 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u post
 | gateway ต่อ broker ไม่ได้ | ใบรับรองหมดอายุ / เวลาบน MG3 ผิด / ใส่ CA ผิดไฟล์ / รหัสผ่านผิด | `... logs mqtt --tail 50` จะบอกชัดว่า `not authorised` (รหัสผิด) หรือ TLS handshake ล้มเหลว (CA/เวลา) |
 | gateway ต่อได้แต่ไม่มีข้อมูล | topic ไม่ตรง หรือ format ไม่ใช่ JSON-LONG | เทียบ topic กับที่เว็บแสดง; `... logs mqtt-ingest` |
 | `mqtt-provisioner` restart วน | ต่อฐานข้อมูลไม่ได้ (รหัส `aether_mqtt_provisioner` ไม่ตรง) | เกิดเมื่อ volume ฐานข้อมูลเก่ากว่า `.env.prod`: `ALTER ROLE aether_mqtt_provisioner PASSWORD '<ค่าใน .env.prod>'` |
-| ดิสก์เต็ม | sample สะสม + backup | ลด `SAMPLE_RETENTION_DAYS` หรือ `BACKUP_KEEP_DAILY`; `docker system prune -f` |
+| ดิสก์เต็ม | sample สะสม + backup + คลัง PITR | ลด `SAMPLE_RETENTION_DAYS`, `BACKUP_KEEP_DAILY` หรือ `--pitr-keep-full`; ลบ volume `...-r<เวลา>` ที่กู้ไว้แล้วไม่ใช้; `docker system prune -f` |
+| `PITR ALERT archive_failing` / `wal_growing` | คลัง PITR เขียนไม่ได้ (ดิสก์เต็ม, สิทธิ์, เมานต์หลุด) | `... logs postgres --tail 50` ดู error ของ pgbackrest; แก้แล้ว WAL ที่ค้างจะถูกส่งเอง |
+| `PITR ALERT wal_dropped` | archive ล้มเหลวนานจน WAL ค้างเกิน `PITR_QUEUE_MAX` | แก้ต้นเหตุ; `pitr` ทำ full backup ใหม่เองเมื่อ archive กลับมา (หรือ `pitr-backup-now.sh`) ช่วงที่ทิ้งไปกู้ย้อนเวลาไม่ได้ |
+| `pitr` ขึ้น `unable to find a valid repository` | `.env.prod` หรือ `<secrets>/pgbackrest/pgbackrest.conf` ไม่ตรงกับคลัง (passphrase ผิด) | กู้ `.env.prod` จากสำเนาออฟไลน์ แล้วรัน `setup.py` ซ้ำ **ห้ามลบคลังเพื่อเริ่มใหม่** ก่อนแน่ใจ |
 | อัปเกรดแล้ว `migrate` fail | migration ชนกับข้อมูลเดิม | **อย่ารัน `up -d`**; อ่าน error, กู้ dump ก่อนอัปเกรด (ข้อ 6) |
 | เปลี่ยน IP เซิร์ฟเวอร์แล้วพัง | ใบรับรอง MQTT ผูกกับ `--host` | ออกใบใหม่: `renew-mqtt-cert.py --host <ค่าใหม่>` + แก้ `.env.prod` + `up -d`; ถ้า `--host` เป็นชื่อ DNS แค่แก้ DNS พอ |
 
@@ -640,7 +767,7 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u post
 ## 13. ข้อจำกัดที่ต้องรู้ก่อนขยายระบบ
 
 1. **เซิร์ฟเวอร์เดียว ไม่มี HA** เครื่องดับ = ระบบดับ ไม่มี failover ไม่มี replica
-2. **ไม่มี PITR** กู้ได้แค่จุดที่ทำ dump (ดูข้อ 7)
+2. **PITR อยู่บนเครื่องเดียวกัน** จนกว่าจะเปิด `--offsite` (ข้อ 7.1) ดิสก์พัง = คลัง PITR และ dump หายพร้อมกัน
 3. **Rate limit เป็นแบบ per-process ในหน่วยความจำ** ถ้าเพิ่ม replica ของ api ในอนาคต โควตาจะคูณตามจำนวน replica ต้องเปลี่ยนไปใช้ rate limiter ที่แชร์กัน
 4. **`core.sensor_samples` ลบข้อมูลเก่าด้วย batched DELETE ไม่ใช่ partition** ที่ปริมาณสูงมาก ๆ การลบจะกินทรัพยากรและทำให้ตาราง bloat (ตั้ง autovacuum ไว้ก้าวร้าวแล้ว แต่ไม่ใช่ยาครอบจักรวาล) ถ้าเกินหลักพัน tag ควรย้ายไป partition รายเดือนหรือ TimescaleDB
 5. **หน้าเว็บรันบน `vinext` 1.0.0-beta.5** ซึ่งเป็น beta ยังไม่ใช่ runtime ที่มี track record ยาว ๆ ให้ยึดตามเวอร์ชันที่ pin ไว้ใน `package.json` อย่าอัปเองตามใจ

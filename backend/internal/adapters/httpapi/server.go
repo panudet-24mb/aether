@@ -220,6 +220,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	assetRoutes(secured, service)
 	commandRoutes(secured, service)
 	edgeRoutes(secured, service, cfg)
+	tuyaCloudRoutes(secured, service)
 	edgePublicRoutes(api, service, cfg)
 	realtimeRoutes(api, service, cfg, hub)
 	secured.Get("/catalog", func(c fiber.Ctx) error {

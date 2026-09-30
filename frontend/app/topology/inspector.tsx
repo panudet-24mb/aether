@@ -6,9 +6,10 @@ import SignalPanel, { type LearnedSignal, type SignalClient } from "./signals";
 import DeviceControlsPanel, { type CommandClient } from "./device-controls";
 import ZigbeeCatalogSearch, { type CatalogClient } from "./zigbee-catalog";
 import EdgePanel, { TuyaDeviceStatus, type EdgeClient } from "./edge-installer";
+import TuyaCloudPanel, { CLOUD_STATE_LABEL, TuyaCloudDeviceStatus, type TuyaCloudClient } from "./tuya-cloud-panel";
 import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project, Reading } from "./api";
 import { isZigbeeReading } from "../live/measurements";
-import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, suggestProfile, switchGangs, Z2M_GATEWAY_MODEL } from "./catalog";
+import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, suggestProfile, switchGangs, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL } from "./catalog";
 import { gatewayHealthLabel } from "./nodes";
 import { CopyButton, Step } from "./panel-bits";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
@@ -46,7 +47,7 @@ export type InspectorProps = {
   /** Collapses the whole panel (distinct from onClose, which only clears the selection). */
   onHide: () => void;
   /** Authenticated API client, used by the learned-signal panel ("สอนสัญญาณ") and the device controls. */
-  client: SignalClient & CommandClient & CatalogClient & EdgeClient;
+  client: SignalClient & CommandClient & CatalogClient & EdgeClient & TuyaCloudClient;
   /** Owner/admin: may install an Aether Edge, import and forget Tuya keys. */
   canManage: boolean;
   /** Reload the page's snapshot (after an import or a forgotten key). */
@@ -163,7 +164,10 @@ function BrokerPanel({ settings, topology }: { settings: MQTTSettings | null; to
 function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: GatewayEntity; topology: Topology; credentials?: MQTTCredentials; httpToken?: GatewayCreated; busy: boolean; p: InspectorProps }) {
   // An Aether Edge is set up by its installer, not by typing MQTT settings into a device: its panel replaces the steps.
   const edge = g.gateway.model === EDGE_GATEWAY_MODEL;
-  const [tab, setTab] = useState(edge ? "config" : "devices");
+  // A Tuya Cloud gateway has nothing on site: its panel is the project link, and its state is the link's.
+  const cloud = g.gateway.model === TUYA_CLOUD_GATEWAY_MODEL;
+  const [tab, setTab] = useState(edge || cloud ? "config" : "devices");
+  const [cloudState, setCloudState] = useState<{ linked: boolean; state: string } | undefined>(undefined);
   // An Edge's state is its agent's own report (edge_agents), not the MQTT account view behind g.health: that view is
   // owner/admin only and knows nothing about the agent. Undefined until EdgePanel's first status answer.
   const [edgeState, setEdgeState] = useState<string | undefined>(undefined);
@@ -208,7 +212,9 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
           <span className="topo-kicker">GATEWAY · {model ? `${model.brand} ${model.model}` : g.gateway.model}</span>
           <h2>{g.gateway.name}</h2>
         </div>
-        {edge && edgeState !== undefined ? (
+        {cloud && cloudState !== undefined ? (
+          <span className={`topo-chip health-${cloudState.state === "online" ? "receiving" : cloudState.linked ? "stale" : "none"}`}>{cloudState.linked ? CLOUD_STATE_LABEL[cloudState.state as keyof typeof CLOUD_STATE_LABEL] ?? cloudState.state : "ยังไม่เชื่อมโปรเจกต์ Tuya"}</span>
+        ) : edge && edgeState !== undefined ? (
           <span className={`topo-chip health-${edgeState === "online" ? "receiving" : edgeState === "offline" ? "stale" : "none"}`}>{edgeState === "online" ? "ออนไลน์" : edgeState === "offline" ? "ออฟไลน์" : "รอติดตั้ง Aether Edge"}</span>
         ) : (
           <span className={`topo-chip health-${g.health}`}>{gatewayHealthLabel(g.health, g.gateway.model)}</span>
@@ -241,7 +247,19 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         </div>
       )}
 
-      {edge ? (
+      {cloud ? (
+        <TuyaCloudPanel
+          key={id}
+          gateway={g.gateway}
+          client={p.client}
+          canManage={p.canManage}
+          refreshKey={g.lastPacketAt}
+          onNotice={p.onNotice}
+          onRegister={(tuyaId, name) => p.onAdopt(tuyaId, id, undefined, name)}
+          onReload={p.onReload}
+          onStatus={(s) => setCloudState({ linked: s.linked, state: s.state })}
+        />
+      ) : edge ? (
         <EdgePanel
           gateway={g.gateway}
           gateways={topology.gateways.map((x) => x.gateway)}
@@ -454,7 +472,9 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
   const zigbee = d.external.startsWith("0x");
   // A Tuya Wi‑Fi device under an Aether Edge: commanded like a Zigbee device, keyed by its Tuya id.
   const tuyaGateway = reg ? topology.gateways.find((g) => g.gateway.id === reg.gateway_id && g.gateway.model === EDGE_GATEWAY_MODEL) : undefined;
-  const tuya = !!tuyaGateway;
+  // A Tuya device reached through a Tuya Cloud link: commanded the same way, its connection is the cloud's.
+  const cloudGateway = reg ? topology.gateways.find((g) => g.gateway.id === reg.gateway_id && g.gateway.model === TUYA_CLOUD_GATEWAY_MODEL) : undefined;
+  const tuya = !!tuyaGateway || !!cloudGateway;
   const best = d.heard[0];
   const here = currentGateway(d, topology.serverTime);
   const gatewayName = (id: string) => topology.gateways.find((g) => g.gateway.id === id)?.gateway.name ?? id.slice(0, 8);
@@ -601,6 +621,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
 
       {/* A registered Zigbee2MQTT device can be commanded: its controls come from its own definition. */}
       {reg && (zigbee || tuya) && <DeviceControlsPanel client={p.client} deviceId={reg.id} refreshKey={r?.received_at} />}
+      {reg && cloudGateway && <TuyaCloudDeviceStatus gatewayId={cloudGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} />}
       {reg && tuyaGateway && <TuyaDeviceStatus gatewayId={tuyaGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} onNotice={p.onNotice} />}
 
       {d.log.length > 0 && (

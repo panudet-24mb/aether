@@ -14,6 +14,7 @@ type TuyaDevice struct {
 	ProductID      string    `json:"product_id"`
 	Category       string    `json:"category"`
 	Sub            bool      `json:"sub"`
+	ParentTuyaID   string    `json:"parent_tuya_id"` // the hub of a sub-device, when Tuya Cloud reported it
 	LocalCapable   bool      `json:"local_capable"`
 	KeyFingerprint string    `json:"key_fingerprint"`
 	KeyStatus      string    `json:"key_status"`

@@ -5914,6 +5914,226 @@
      }
     }
    }
+  },
+  "/api/v1/gateways/{id}/tuya-cloud": {
+   "get": {
+    "summary": "Tuya Cloud link status of a tuya-cloud gateway (any member who can see the gateway; readable even with TUYA_CLOUD off). Nothing secret.",
+    "operationId": "get__api_v1_gateways_id_tuya_cloud",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "TuyaCloudLink: state, reason, region, channel, access_id_hint (4 characters), linked/rotated/last event times, monthly usage with events_budget and api_calls_budget, enabled (this deployment's TUYA_CLOUD). Never the Access Secret, the Access ID or anything sealed.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input (error=tuya_credentials, tuya_region, tuya_channel, tuya_auth_failed, tuya_not_subscribed, tuya_permission, tuya_cloud_disabled, not_a_cloud_gateway), 401 credentials, 403 authorization, missing connect module or detail=password_change_required, 404 not in scope or TUYA_CLOUD off, 409 already_linked or cloud_link_limit, 429 tuya_rate_limited, 503 tuya_cloud_unconfigured, tuya_unreachable or tuya_timeout.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya-cloud/link": {
+   "post": {
+    "summary": "Link a tuya-cloud gateway to the user's Tuya IoT project, or rotate its Access Secret (owner/admin with the connect module; 404 when TUYA_CLOUD is off). Synchronous, bounded to 8 s: the credentials are proven with one Tuya token call, then sealed to the tuya-cloud worker's public key and never returned; the worker lists the devices afterwards. A project links to one gateway in one workspace at a time.",
+    "operationId": "post__api_v1_gateways_id_tuya_cloud_link",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "region",
+         "access_id",
+         "access_secret"
+        ],
+        "additionalProperties": false,
+        "maxProperties": 4,
+        "description": "At most 1 KiB.",
+        "properties": {
+         "region": {
+          "type": "string",
+          "enum": [
+           "us",
+           "us-e",
+           "eu",
+           "eu-w",
+           "cn",
+           "in",
+           "sg"
+          ]
+         },
+         "channel": {
+          "type": "string",
+          "enum": [
+           "event",
+           "event-test"
+          ],
+          "default": "event",
+          "description": "Message Service channel: event (production) or event-test (Tuya's test channel)."
+         },
+         "access_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{8,64}$",
+          "writeOnly": true
+         },
+         "access_secret": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{8,64}$",
+          "writeOnly": true
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "TuyaCloudLink: state, reason, region, channel, access_id_hint (4 characters), linked/rotated/last event times, monthly usage with events_budget and api_calls_budget, enabled (this deployment's TUYA_CLOUD). Never the Access Secret, the Access ID or anything sealed.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input (error=tuya_credentials, tuya_region, tuya_channel, tuya_auth_failed, tuya_not_subscribed, tuya_permission, tuya_cloud_disabled, not_a_cloud_gateway), 401 credentials, 403 authorization, missing connect module or detail=password_change_required, 404 not in scope or TUYA_CLOUD off, 409 already_linked or cloud_link_limit, 429 tuya_rate_limited, 503 tuya_cloud_unconfigured, tuya_unreachable or tuya_timeout.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya-cloud/sync": {
+   "post": {
+    "summary": "Ask the tuya-cloud worker to list the project's devices again (owner/admin with the connect module; 404 when TUYA_CLOUD is off).",
+    "operationId": "post__api_v1_gateways_id_tuya_cloud_sync",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "TuyaCloudLink: state, reason, region, channel, access_id_hint (4 characters), linked/rotated/last event times, monthly usage with events_budget and api_calls_budget, enabled (this deployment's TUYA_CLOUD). Never the Access Secret, the Access ID or anything sealed.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input (error=tuya_credentials, tuya_region, tuya_channel, tuya_auth_failed, tuya_not_subscribed, tuya_permission, tuya_cloud_disabled, not_a_cloud_gateway), 401 credentials, 403 authorization, missing connect module or detail=password_change_required, 404 not in scope or TUYA_CLOUD off, 409 already_linked or cloud_link_limit, 429 tuya_rate_limited, 503 tuya_cloud_unconfigured, tuya_unreachable or tuya_timeout.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya-cloud/unlink": {
+   "post": {
+    "summary": "Unlink: wipe the sealed credentials and the Access ID digest, stop the worker's connection and free the project (owner/admin with the connect module; works with TUYA_CLOUD off so credentials can always be removed). Registered devices stay and show offline.",
+    "operationId": "post__api_v1_gateways_id_tuya_cloud_unlink",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Unlinked"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input (error=tuya_credentials, tuya_region, tuya_channel, tuya_auth_failed, tuya_not_subscribed, tuya_permission, tuya_cloud_disabled, not_a_cloud_gateway), 401 credentials, 403 authorization, missing connect module or detail=password_change_required, 404 not in scope or TUYA_CLOUD off, 409 already_linked or cloud_link_limit, 429 tuya_rate_limited, 503 tuya_cloud_unconfigured, tuya_unreachable or tuya_timeout.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {

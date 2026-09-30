@@ -37,6 +37,9 @@ type Options struct {
 	AutomationCommands bool
 	// CloudLinksPerTenant caps the Tuya Cloud projects one workspace may link (0 means DefaultCloudLinksPerTenant).
 	CloudLinksPerTenant int
+	// RefuseTuyaCloud is TUYA_CLOUD off: a registration with the Tuya Cloud profile can then be neither restored nor
+	// moved (creating one is refused in the service). Tests leave it false, as a deployment with the mode on does.
+	RefuseTuyaCloud bool
 }
 
 // Configure must be called before the repository is shared between goroutines.
@@ -632,6 +635,9 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 		action := "device.renamed"
 		previous := d.GatewayID
 		if gateway != nil && *gateway != d.GatewayID {
+			if r.opts.RefuseTuyaCloud && d.ProfileID == domain.TuyaCloudProfile {
+				return domain.Because(domain.ErrInvalid, "tuya_cloud_disabled")
+			}
 			var n int64
 			if e := tx.Raw(`SELECT count(*) FROM (SELECT id FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR SHARE) g`, *gateway).Scan(&n).Error; e != nil {
 				return e
@@ -709,6 +715,15 @@ func (r *Repository) RestoreDevice(ctx context.Context, p domain.Principal, id s
 			return e
 		} else if n >= limit {
 			return domain.ErrConflict
+		}
+		if r.opts.RefuseTuyaCloud {
+			var profiles []string
+			if e := tx.Raw(`SELECT profile_id FROM core.devices WHERE id=?`, id).Scan(&profiles).Error; e != nil {
+				return e
+			}
+			if len(profiles) == 1 && profiles[0] == domain.TuyaCloudProfile {
+				return domain.Because(domain.ErrInvalid, "tuya_cloud_disabled")
+			}
 		}
 		res := tx.Exec(`UPDATE core.devices d SET removed_at=NULL,removed_by=NULL WHERE d.id=? AND d.removed_at IS NOT NULL AND EXISTS(SELECT 1 FROM core.gateways g WHERE g.id=d.gateway_id AND g.revoked_at IS NULL)`, id)
 		if res.Error != nil {

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Bluetooth, Search, Wifi } from "lucide-react";
+import { Bluetooth, Cloud, Search, Wifi } from "lucide-react";
 import type { Discovery, Gateway } from "./api";
 import { formatMAC, suggestProfile } from "./catalog";
 import { isFresh } from "./model";
@@ -20,7 +20,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
   const matches = items.filter((d) => (!selected || d.gateway_id === selected) &&
     (!q || `${d.external_id}${d.model ?? ""}${d.profile?.label ?? ""}${d.vendor ?? ""}${d.description ?? ""}`.toLowerCase().replace(/[:\s-]/g, "").includes(q)));
   return <section className="topo-discovery" aria-label="อุปกรณ์ที่พบใหม่">
-    <p className="topo-note">{matches.length > 0 && matches.every((d) => d.source === "tuya" || d.source === "tuya_lan") ? "อุปกรณ์ Tuya ที่นำเข้าคีย์แล้วแต่ยังไม่ลงทะเบียน และอุปกรณ์ที่ Aether Edge พบใน LAN แต่ยังไม่มีคีย์" : `อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew${hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}`}</p>
+    <p className="topo-note">{matches.length > 0 && matches.every((d) => d.source === "tuya_cloud") ? "อุปกรณ์ในโปรเจกต์ Tuya ที่ซิงก์ล่าสุดและยังไม่ลงทะเบียน · ลงทะเบียนเป็น \"อุปกรณ์ Tuya (ผ่าน Tuya Cloud)\"" : matches.length > 0 && matches.every((d) => d.source === "tuya" || d.source === "tuya_lan") ? "อุปกรณ์ Tuya ที่นำเข้าคีย์แล้วแต่ยังไม่ลงทะเบียน และอุปกรณ์ที่ Aether Edge พบใน LAN แต่ยังไม่มีคีย์" : `อุปกรณ์ที่ gateway ได้ยินใน 15 นาทีล่าสุดและยังไม่ลงทะเบียน · แสดงเฉพาะอุปกรณ์ Minew${hiddenUnknown > 0 ? ` · ไม่แสดงสัญญาณอื่น ${hiddenUnknown} รายการ (มือถือ, beacon ของคนอื่น)` : ""}`}</p>
     {!gatewayId && <label className="topo-project-select">Gateway
       <select aria-label="กรอง gateway ที่ค้นพบ" value={filter} onChange={(e) => setFilter(e.target.value)}>
         <option value="">ทุก gateway</option>
@@ -35,6 +35,7 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
       return <div key={g.id} className="topo-discovery-group">
         <h3 className="topo-h3">{g.name} <span className="topo-count">{devices.length}</span></h3>
         {devices.map((d) => {
+          if (d.source === "tuya_cloud") return <TuyaCloudCard key={d.external_id} d={d} busy={busy} onAdopt={onAdopt} />;
           if (d.source === "tuya" || d.source === "tuya_lan") return <TuyaCard key={d.external_id} d={d} busy={busy} onAdopt={onAdopt} />;
           const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind, zigbee: d.source === "z2m" }) : undefined;
           const profile = d.profile ?? suggestion;
@@ -85,6 +86,27 @@ function TuyaCard({ d, busy, onAdopt }: { d: Discovery; busy: boolean; onAdopt: 
             </button>
           </>
         )}
+      </div>
+    </article>
+  );
+}
+
+/** A Tuya device a Tuya Cloud link found in its project ("tuya_cloud"): no key, battery sensors included; it
+ * registers with the Tuya Cloud profile the server attached. */
+function TuyaCloudCard({ d, busy, onAdopt }: { d: Discovery; busy: boolean; onAdopt: (external: string, gatewayId: string) => void }) {
+  return (
+    <article className="topo-discovery-card">
+      <div className="topo-discovery-photo">
+        <Cloud size={30} />
+      </div>
+      <div className="topo-discovery-info">
+        <strong>{d.description || "อุปกรณ์ Tuya"}</strong>
+        <small>{`Tuya Cloud${d.model ? ` · ${d.model}` : ""}${d.profile ? ` · ${d.profile.label}` : ""}`}</small>
+        <code>{d.external_id}</code>
+        <small>ผ่าน Tuya Cloud · ต้องมีอินเทอร์เน็ต · ห้ามใช้กับ SOS</small>
+        <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>
+          ลงทะเบียน
+        </button>
       </div>
     </article>
   );

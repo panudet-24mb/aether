@@ -57,6 +57,20 @@ func main() {
 		repo.Close()
 		os.Exit(0)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	// With Tuya Cloud mode off (the default) the worker idles instead of exiting: the service stays in every stack
+	// with restart: unless-stopped, which would restart an exited process forever. It opens nothing and dials
+	// nobody; a link left from before the mode was turned off stays down and its devices go offline.
+	switch os.Getenv("TUYA_CLOUD") {
+	case "true":
+	case "", "false":
+		slog.Info("Tuya Cloud mode is off (TUYA_CLOUD=false); idle")
+		<-ctx.Done()
+		return
+	default:
+		fatal("TUYA_CLOUD must be true or false")
+	}
 	key, e := cloudkeys.ParseKey(os.Getenv("TUYA_CLOUD_PRIVATE_KEY"))
 	if e != nil {
 		fatal("TUYA_CLOUD_PRIVATE_KEY (32 base64-encoded bytes) is required to open Tuya Cloud credentials")
@@ -66,8 +80,6 @@ func main() {
 		fatal("database unavailable or role unsafe")
 	}
 	defer repo.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	w := &tuyacloudlink.Worker{Store: repo, Keys: []*cloudkeys.Key{key}, MaxLinks: int(number("TUYA_CLOUD_MAX_LINKS", defaultMaxLinks)),
 		MaxLinksPerTenant: int(number("TUYA_CLOUD_MAX_LINKS_PER_TENANT", defaultMaxLinksPerTenant)),

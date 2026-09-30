@@ -443,3 +443,21 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .topo-secret-input { display: flex; gap: 6px; align-items: stretch; }
 .topo-secret-input input { flex: 1; min-width: 0; }
 .topo-masked { -webkit-text-security: disc; text-security: disc; }
+/* Tuya Cloud panel */
+.topo-cloud-status { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-panel-raised); }
+.topo-cloud-status p { margin: 0; }
+.topo-cloud-status .topo-chip { font-style: normal; display: inline-block; margin-top: 0; }
+.topo-usage { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-muted); }
+.topo-usage strong { color: var(--color-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.topo-usage-bar { display: block; height: 6px; border-radius: 999px; background: var(--color-border); overflow: hidden; }
+.topo-usage-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width var(--dur-medium) var(--ease-out); }
+.topo-usage.is-high .topo-usage-bar > span { background: var(--color-warning); }
+.topo-usage.is-full .topo-usage-bar > span { background: var(--color-danger); }
+.topo-cloud-warnings { margin: 0; padding: 10px 12px; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.6; color: var(--color-muted); border: 1px solid var(--color-warning-dark); border-radius: 8px; }
+.topo-cloud-warnings li { display: flex; gap: 6px; align-items: flex-start; }
+.topo-cloud-warnings svg { flex-shrink: 0; margin-top: 4px; color: var(--color-warning); }
+.topo-cloud-warnings strong { color: var(--color-ink); }
+.topo-cloud-form { display: flex; flex-direction: column; gap: 10px; }
+.topo-cloud-panel .topo-h3 .topo-icon-btn { margin-left: auto; }
+.topo-cloud-panel .topo-tuya-table td small.topo-cloud-reason { color: var(--color-warning); }
+.topo-cloud-panel .topo-tuya-table td:nth-child(2), .topo-cloud-panel .topo-tuya-table td:nth-child(3) { white-space: nowrap; }

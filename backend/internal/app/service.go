@@ -39,6 +39,8 @@ type Service struct {
 	TuyaCloudEnabled bool
 	// TuyaCloudPublicKey is the tuya-cloud worker's public key (TUYA_CLOUD_PUBLIC_KEY); the API seals to it only.
 	TuyaCloudPublicKey *[32]byte
+	// TuyaCloudEventBudget and TuyaCloudAPIBudget are the monthly allowances the status shows usage against.
+	TuyaCloudEventBudget, TuyaCloudAPIBudget int64
 	// CloudClient builds the OpenAPI client that proves a link's credentials (tests substitute a fake cloud).
 	CloudClient func(region, accessID, accessSecret string) (*tuyacloud.Client, error)
 	dummyHash   string

@@ -2,7 +2,7 @@
 import { memo } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Activity, Blinds, Bluetooth, Cloud, CloudOff, Cpu, DoorOpen, Droplets, Fan, Flame, FlaskConical, Gamepad2, Heater, Lightbulb, Lock, PersonStanding, Radio, RadioTower, Router, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Zap } from "lucide-react";
-import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel } from "./catalog";
+import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, TUYA_CLOUD_GATEWAY_MODEL } from "./catalog";
 import type { GatewayHealth } from "./model";
 
 export type BrokerData = { configured: boolean; host: string; port: number | null; scheme: string; receiving: number; total: number };
@@ -56,6 +56,7 @@ export const HEALTH_LABEL: Record<GatewayHealth, string> = {
 /** An Aether Edge has no MQTT account to wait for; before its first packet it is waiting for its installer. */
 export function gatewayHealthLabel(health: GatewayHealth, model: string): string {
   if (model === EDGE_GATEWAY_MODEL && (health === "ready" || health === "none" || health === "pending")) return "Aether Edge · รอติดตั้งหรือรอข้อมูล (ดูสถานะที่แผงตั้งค่า)";
+  if (model === TUYA_CLOUD_GATEWAY_MODEL && health !== "receiving") return "Tuya Cloud · ดูสถานะการเชื่อมที่แผงตั้งค่า";
   return HEALTH_LABEL[health];
 }
 

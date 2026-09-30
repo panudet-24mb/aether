@@ -27,10 +27,22 @@ const REASONS: Record<string, string> = {
   not_settable: "อุปกรณ์ไม่ให้ตั้งค่านี้",
   unknown_property: "อุปกรณ์ไม่มีค่านี้",
   not_toggleable: "ค่านี้สลับเปิด/ปิดไม่ได้",
-  gateway_unavailable: "gateway ถูกเพิกถอนหรือไม่ใช่ Zigbee2MQTT",
+  gateway_unavailable: "gateway ถูกเพิกถอน หรือไม่ใช่ gateway ที่สั่งงานได้",
   not_paired: "อุปกรณ์ไม่อยู่ในรายการของ Zigbee2MQTT แล้ว",
   rate_limited: "สั่งถี่เกินไป กรุณารอสักครู่",
   forbidden: "บัญชีนี้ไม่มีสิทธิ์สั่งงานอุปกรณ์",
+};
+
+/** Why a queued command failed (Command.error); the Tuya Cloud worker sets these (backend tuyacloudlink sender). */
+const FAILURES: Record<string, string> = {
+  link_unavailable: "การเชื่อม Tuya Cloud ไม่พร้อม (ขาด ยกเลิก หรือกำลังเชื่อมใหม่)",
+  cloud_link_down: "การเชื่อม Tuya Cloud ขาด",
+  quota_near: "โควตา Tuya เดือนนี้ใกล้หมด · งดคำสั่งเพื่อเก็บไว้รับสถานะ",
+  quota: "โควตา Tuya เดือนนี้หมด · สั่งงานผ่าน Tuya Cloud ไม่ได้จนถึงเดือนหน้า",
+  auth_failed: "Tuya ปฏิเสธ Access ID/Secret · owner/admin ต้องเปลี่ยน Access Secret",
+  device_offline: "อุปกรณ์ไม่ได้เชื่อมกับ Tuya Cloud",
+  cloud_unreachable: "เชื่อมต่อ Tuya Cloud ไม่ได้",
+  rejected: "Tuya ปฏิเสธคำสั่งนี้",
 };
 
 const STATUS: Record<string, string> = {
@@ -139,7 +151,7 @@ export default function DeviceControlsPanel({ client, deviceId, refreshKey }: { 
   const chip = (property: string) => {
     const p = pending[property];
     if (!p) return null;
-    return <small className={`topo-cmd-status is-${p.status}`}>{STATUS[p.status] ?? p.status}{p.error ? ` · ${p.error}` : ""}</small>;
+    return <small className={`topo-cmd-status is-${p.status}`}>{STATUS[p.status] ?? p.status}{p.error ? ` · ${FAILURES[p.error] ?? p.error}` : ""}</small>;
   };
   const gangs = controls.features.filter((f) => f.group === "switch" && f.type === "binary").sort((a, b) => endpointRank(a.endpoint) - endpointRank(b.endpoint));
   const others = controls.features.filter((f) => !gangs.includes(f));

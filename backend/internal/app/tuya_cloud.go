@@ -89,8 +89,11 @@ func (s *Service) LinkTuyaCloud(ctx context.Context, p domain.Principal, gateway
 	}
 	if e := client.Authenticate(ctx); e != nil {
 		reason, _ := importError(e)
-		if errors.Is(e, tuyacloud.ErrUnavailable) || errors.Is(e, context.DeadlineExceeded) {
+		switch {
+		case errors.Is(e, tuyacloud.ErrUnavailable) || errors.Is(e, context.DeadlineExceeded):
 			return domain.Because(domain.ErrUnavailable, reason)
+		case errors.Is(e, tuyacloud.ErrRateLimited):
+			return domain.Because(domain.ErrRateLimited, reason)
 		}
 		return domain.Because(domain.ErrInvalid, reason)
 	}
@@ -133,5 +136,10 @@ func (s *Service) TuyaCloudLinkStatus(ctx context.Context, p domain.Principal, g
 	if !security.ValidID(gateway) {
 		return domain.TuyaCloudLink{}, domain.ErrInvalid
 	}
-	return s.Repo.TuyaCloudLinkStatus(ctx, p, gateway)
+	out, e := s.Repo.TuyaCloudLinkStatus(ctx, p, gateway)
+	if e != nil {
+		return out, e
+	}
+	out.Enabled, out.EventsBudget, out.APICallsBudget = s.TuyaCloudEnabled, s.TuyaCloudEventBudget, s.TuyaCloudAPIBudget
+	return out, nil
 }

@@ -218,6 +218,10 @@ def main() -> int:
     p.add_argument("--automation-commands", choices=["true", "false"], default=None,
                    help="AUTOMATION_COMMANDS: let enabled automations command devices (action.command). Off on a "
                         "fresh install; a re-run without this flag keeps the value already in the env file")
+    p.add_argument("--tuya-cloud", choices=["true", "false"], default=None,
+                   help="TUYA_CLOUD: offer Tuya Cloud (zero-install) gateways and run the tuya-cloud worker. Off on a "
+                        "fresh install; a re-run without this flag keeps the value already in the env file "
+                        "(docs/platform/tuya-cloud.md)")
     p.add_argument("--csp", choices=["enforce", "report-only"], default="enforce")
     p.add_argument("--subnet", default="172.29.7.0/24", help="fixed compose subnet, so TRUSTED_PROXIES can name the proxy exactly")
     p.add_argument("--image-tag", default="prod")
@@ -497,9 +501,13 @@ connection_messages true
         "ALERTS_SHADOW": a.shadow,
         # Kept across re-runs unless given: switching device commands on or off must always be a deliberate act.
         "AUTOMATION_COMMANDS": a.automation_commands or old.get("AUTOMATION_COMMANDS", "false"),
-        # Tuya Cloud mode stays off until switched on deliberately (docs/platform/tuya-cloud.md).
-        "TUYA_CLOUD": old.get("TUYA_CLOUD", "false"),
+        # Tuya Cloud mode stays off until switched on deliberately (--tuya-cloud true), and a re-run keeps it.
+        "TUYA_CLOUD": a.tuya_cloud or old.get("TUYA_CLOUD", "false"),
+        "TUYA_CLOUD_MAX_LINKS": old.get("TUYA_CLOUD_MAX_LINKS", "50"),
         "TUYA_CLOUD_MAX_LINKS_PER_TENANT": old.get("TUYA_CLOUD_MAX_LINKS_PER_TENANT", "2"),
+        # Monthly allowances of one linked project (placeholders until set to the project's real plan; 0 = no guard).
+        "TUYA_CLOUD_EVENT_BUDGET": old.get("TUYA_CLOUD_EVENT_BUDGET", "68000"),
+        "TUYA_CLOUD_API_BUDGET": old.get("TUYA_CLOUD_API_BUDGET", "26000"),
         "WEBHOOK_ALLOWED_HOSTS": old.get("WEBHOOK_ALLOWED_HOSTS", ""),
         "SMTP_HOST": old.get("SMTP_HOST", ""),
         "SMTP_PORT": old.get("SMTP_PORT", ""),

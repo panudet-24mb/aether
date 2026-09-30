@@ -6,7 +6,7 @@ export type GatewayModel = {
   brand: string;
   model: string;
   label: string;
-  transport: "mqtt" | "http";
+  transport: "mqtt" | "http" | "cloud";
   description: string;
   logo?: string;
   /** Manufacturer product photo, shown for identification. */
@@ -19,7 +19,7 @@ export type DeviceProfile = {
   brand: string;
   model: string;
   label: string;
-  radio: "ble" | "zigbee" | "tuya-wifi" | "any";
+  radio: "ble" | "zigbee" | "tuya-wifi" | "tuya-cloud" | "any";
   description: string;
   image?: string;
   metrics: string[];
@@ -222,7 +222,8 @@ export function matchesInfo(p: DeviceProfile, name: string): boolean {
 /** The generic profile every Zigbee2MQTT device can register as (backend domain.Z2MGenericProfile). */
 export const Z2M_GENERIC_PROFILE = "zigbee2mqtt-device@1";
 
-export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean; /** A Tuya Wi‑Fi device under an Aether Edge: always the Tuya Wi‑Fi profile. */ tuya?: boolean }): DeviceProfile | undefined {
+export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean; /** A Tuya Wi‑Fi device under an Aether Edge: always the Tuya Wi‑Fi profile. */ tuya?: boolean; /** A Tuya device reached through a Tuya Cloud link: always the Tuya Cloud profile. */ tuyaCloud?: boolean }): DeviceProfile | undefined {
+  if (input.tuyaCloud) return DEVICE_PROFILES.find((p) => p.id === TUYA_CLOUD_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "tuya-cloud");
   if (input.tuya) return DEVICE_PROFILES.find((p) => p.id === TUYA_WIFI_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "tuya-wifi");
   if (input.zigbee) {
     const name = input.model?.toLowerCase() ?? "";
@@ -283,12 +284,21 @@ export const Z2M_GATEWAY_MODEL = "zigbee2mqtt";
 export const EDGE_GATEWAY_MODEL = "aether-edge";
 /** The profile every Tuya Wi‑Fi device registers as under an Aether Edge (backend domain.TuyaWiFiProfile). */
 export const TUYA_WIFI_PROFILE = "tuya-wifi-device@1";
+/**
+ * Tuya Cloud mode: nothing installed on site; the gateway stands for one linked Tuya IoT project (backend
+ * domain.TuyaCloudGatewayModel). The model and its profile are only in the server catalog when the deployment enabled
+ * TUYA_CLOUD, so the offline fallback lists above never offer them.
+ */
+export const TUYA_CLOUD_GATEWAY_MODEL = "tuya-cloud";
+/** The profile of any Tuya device reached through Tuya Cloud (backend domain.TuyaCloudProfile). */
+export const TUYA_CLOUD_PROFILE = "tuya-cloud-device@1";
 
-/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi only under an Aether Edge, and neither anywhere else. */
+/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi only under an Aether Edge, Tuya Cloud only under a Tuya Cloud gateway, and none of them anywhere else. */
 export function profileFitsGateway(p: DeviceProfile, gatewayModelId: string): boolean {
   if (gatewayModelId === Z2M_GATEWAY_MODEL) return p.radio === "zigbee";
   if (gatewayModelId === EDGE_GATEWAY_MODEL) return p.radio === "tuya-wifi";
-  return p.radio !== "zigbee" && p.radio !== "tuya-wifi";
+  if (gatewayModelId === TUYA_CLOUD_GATEWAY_MODEL) return p.radio === "tuya-cloud";
+  return p.radio !== "zigbee" && p.radio !== "tuya-wifi" && p.radio !== "tuya-cloud";
 }
 
 /** Switch outputs a reading carries, in gang order: [[1, true], [2, false], …] from metrics sw1..sw4. */

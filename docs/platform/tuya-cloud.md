@@ -1,9 +1,66 @@
 # Tuya Cloud mode: Tuya devices with nothing installed on site
 
 Status: phases G1 (library, `adapters/tuyacloud`), G2 (storage, core wiring and the service entry points, migration
-00034) and G3 (the `tuya-cloud` worker) are implemented and tested against fakes. The HTTP routes and UI (G4) and
-the compose service (G5) are not. Nothing here has been verified against a real Tuya cloud project yet; the gateway
-model and profile are `Verified: false`.
+00034), G3 (the `tuya-cloud` worker), G4 (HTTP routes and the gateway page) and G5 (compose services, `setup.py
+--tuya-cloud`) are implemented and tested against fakes. Nothing here has been verified against a real Tuya cloud
+project yet; the gateway model and profile are `Verified: false`, and the mode ships **off** (`TUYA_CLOUD=false`).
+Rollout: [production.md](../production.md) §4.11.
+
+## คู่มือผู้ใช้ (ภาษาไทย)
+
+**Tuya Cloud คืออะไร** — gateway แบบไม่ต้องติดตั้งอะไรในอาคาร Aether ต่อกับ "โปรเจกต์ Tuya IoT" ของคุณเอง (โปรเจกต์ที่ผูกกับบัญชีแอป
+Smart Life) แล้วรับสถานะอุปกรณ์ผ่าน Message Service ของ Tuya และสั่งงานผ่าน Tuya OpenAPI · ใช้ได้กับอุปกรณ์ Wi‑Fi (รวมเซนเซอร์แบตเตอรี่)
+และอุปกรณ์ Zigbee/BLE ที่อยู่หลัง hub Tuya
+
+**ข้อควรทราบก่อนใช้ (แสดงในหน้าเว็บตลอด)**
+
+- ขึ้นกับอินเทอร์เน็ตและ Tuya Cloud: ถ้าเน็ต เซิร์ฟเวอร์ หรือ Tuya ขัดข้อง สถานะและคำสั่งจะหยุด
+- **ห้ามใช้กับ SOS หรืองานวิกฤต** (ความปลอดภัยของคน ไฟ น้ำรั่ว) — ใช้ gateway แบบ local: Zigbee2MQTT, Aether Edge หรือ BLE
+- โปรเจกต์แบบ Trial ของ Tuya ใช้เพื่อทดลองหรือใช้ส่วนตัวเท่านั้น ห้ามใช้เชิงพาณิชย์ มีอายุ และจำกัดจำนวนข้อความ/การเรียก API ต่อเดือน
+- PDPA: สถานะอุปกรณ์ผ่านเซิร์ฟเวอร์ของ Tuya ใน Data Center ที่เลือก (อยู่นอกประเทศไทย) แจ้งผู้ใช้อาคารก่อนเปิดใช้
+- Access Secret ถูกเข้ารหัสทันทีด้วยกุญแจของตัวเชื่อม Tuya Cloud เท่านั้น API ของ Aether อ่านกลับไม่ได้ และจะไม่แสดงอีก
+
+**เตรียมโปรเจกต์ Tuya IoT** (ผู้ดูแลระบบต้องเปิด `TUYA_CLOUD=true` ก่อน ไม่อย่างนั้นจะไม่มีตัวเลือกนี้)
+
+1. สมัครและเข้า platform.tuya.com → Cloud → สร้างโปรเจกต์แบบ **Smart Home**
+2. เลือก **Data Center** ให้ตรงกับบัญชีแอป · บัญชี Smart Life ในไทยส่วนใหญ่อยู่ **Western America** ถ้าไม่พบอุปกรณ์ลอง **Singapore**
+3. ที่หน้า Service API ของโปรเจกต์ สมัคร **IoT Core**, **Authorization** และ **Message Service**
+4. Devices → **Link App Account** แล้วสแกน QR ด้วยแอป Smart Life (เมนู ฉัน)
+5. เปิดรับข้อความ: Cloud → **Message Service** → เลือกโปรเจกต์ → **Enable** ใน Data Center **เดียวกับโปรเจกต์** · ครั้งแรกอาจต้องรอ
+   **ประมาณ 30 นาที** กว่าข้อความจะเริ่มมา · **ปิดตัวรับข้อความอื่นของโปรเจกต์นี้** (เช่น integration Tuya ของ Home Assistant แบบเก่า)
+   เพราะข้อความจะถูกแบ่งไปคนละที่
+6. คัดลอก **Access ID** และ **Access Secret** จากหน้า Overview ของโปรเจกต์
+
+**เชื่อมในหน้า Topology** (owner หรือ admin ที่มีสิทธิ์โมดูล connect)
+
+1. แถบซ้าย → เพิ่ม gateway → **Tuya Cloud (ไม่ต้องติดตั้ง)** → ตั้งชื่อ
+2. แถบขวา แท็บ "ตั้งค่า": เลือก Data Center, ช่องข้อความ (`event` สำหรับใช้งานจริง, `event-test` คือช่องทดสอบของ Tuya) แล้วใส่ Access ID /
+   Access Secret → **เชื่อม** · ระบบตรวจกับ Tuya ก่อนบันทึก (ถ้าผิดจะไม่บันทึกอะไร) · ช่อง Secret ถูกล้างทันทีที่กดส่ง
+3. สถานะ: กำลังเชื่อมต่อ → ออนไลน์ · ตัวเชื่อมซิงก์รายการอุปกรณ์เองหลังเชื่อม · ตารางแสดงออนไลน์/ออฟไลน์ ชนิด (Wi‑Fi / อุปกรณ์ย่อย) และ hub
+4. กด **ลงทะเบียน** ในตารางหรือในแท็บ "ค้นพบใหม่" (อุปกรณ์จะลงทะเบียนเป็น "อุปกรณ์ Tuya (ผ่าน Tuya Cloud)")
+5. การ์ดสถานะแสดง "ข้อความเดือนนี้ x / งบ" และ "API เดือนนี้ x / งบ" · จาก 95% ของงบ Aether งดสั่งงานและงดซิงก์เพื่อไม่ให้เกิน
+
+**ปุ่มจัดการ** (owner/admin เท่านั้น · สมาชิกอื่นเห็นสถานะอย่างเดียว)
+
+- **ซิงก์รายการอุปกรณ์** — ดึงรายการจาก Tuya ใหม่ (ไม่เกินครั้งละ 10 นาทีต่อโปรเจกต์)
+- **เปลี่ยน Access Secret** — ใส่ Access ID และ Secret ปัจจุบันของโปรเจกต์เดิม ระบบตรวจกับ Tuya ก่อนแทนที่
+- **ยกเลิกการเชื่อม** (มีขั้นยืนยัน) — ลบ Access ID/Secret ที่เก็บไว้ทันที อุปกรณ์ที่ลงทะเบียนยังอยู่แต่แสดงออฟไลน์ · ทำได้แม้ผู้ดูแลปิดโหมดแล้ว
+
+**เมื่อมีปัญหา**
+
+| หน้าเว็บแสดง | ความหมาย / ทำอย่างไร |
+|---|---|
+| Access ID / Access Secret ไม่ถูกต้อง หรือเลือก Data Center ไม่ตรง | ตรวจค่าและ Data Center ของโปรเจกต์ |
+| Tuya ปฏิเสธ Access ID/Secret (`auth_failed`) | Secret ถูกเปลี่ยนหรือโปรเจกต์หมดอายุ → เปลี่ยน Access Secret |
+| ยังไม่ได้เปิด Message Service (`not_subscribed`) | ทำขั้นที่ 3 และ 5 ของการเตรียมโปรเจกต์ |
+| ใช้โควตา Tuya เดือนนี้ถึงงบแล้ว (`quota`) | หยุดชั่วคราวจนถึงเดือนหน้า หรือขยายแพ็กเกจของโปรเจกต์ |
+| อุปกรณ์ออฟไลน์ · การเชื่อม Tuya Cloud ขาด (`cloud_link_down`) | ลิงก์ขาดเกิน 2 นาที ดูสถานะที่การ์ดของ gateway |
+| โปรเจกต์นี้เชื่อมอยู่กับ gateway อื่นแล้ว (`already_linked`) | หนึ่งโปรเจกต์ต่อหนึ่ง gateway · ยกเลิกการเชื่อมที่เดิมก่อน |
+| เชื่อมครบจำนวนแล้ว (`cloud_link_limit`) | workspace หนึ่งเชื่อมได้ 2 โปรเจกต์ (ค่าเริ่มต้น) |
+| เซิร์ฟเวอร์ยังไม่ได้ตั้งกุญแจ (`tuya_cloud_unconfigured`) | ผู้ดูแลระบบรัน `setup.py` แล้วสร้าง api ใหม่ |
+
+อุปกรณ์ Tuya หนึ่งตัวลงทะเบียนได้ทางเดียวต่อ workspace: ผ่าน Aether Edge ([tuya-local.md](tuya-local.md), [aether-edge.md](aether-edge.md))
+**หรือ** ผ่าน Tuya Cloud ไม่ใช่ทั้งสองทาง
 
 **Feature flag `TUYA_CLOUD`** (API, `true`/`false`, default `false`). Off: `/catalog` lists neither the
 `tuya-cloud` gateway model nor the `tuya-cloud-device@1` profile, such a gateway cannot be created, the profile
@@ -55,7 +112,7 @@ RESTRICTIVE project scope by gateway, like the Edge tables):
 |---|---|
 | `region`, `channel` | data center (`us`, `us-e`, `eu`, `eu-w`, `in`, `cn`, `sg`) and Message Service topic |
 | `credentials_sealed` | Access ID and Secret as one JSON document, AES-256-GCM, bound to tenant + gateway (see Security); NULL once unlinked |
-| `access_id_hint` | at most 8 characters of the Access ID, for the UI |
+| `access_id_hint` | the first 4 characters of the Access ID, for the UI (the column allows at most 8) |
 | `access_id_digest` | SHA-256 of the Access ID, **globally unique**: one project feeds one gateway; NULL once unlinked |
 | `state`, `state_at`, `reason`, `last_error_code` | `''`, `linking`, `online`, `offline`, `auth_failed`, `not_subscribed`, `quota`, `disabled`, as the worker last saw it |
 | `last_event_at`, `last_health_at` | last stored message, last worker health report |
@@ -121,9 +178,24 @@ Environment of the worker: `DATABASE_URL` (the `aether_app` role), `TUYA_CLOUD_P
 start without it; no JWT or channel seal key is read), `TUYA_CLOUD_MAX_LINKS` (default 50),
 `TUYA_CLOUD_MAX_LINKS_PER_TENANT` (default 2), `TUYA_CLOUD_EVENT_BUDGET` and `TUYA_CLOUD_API_BUDGET` (monthly
 budget of the guard, placeholders 68000 / 26000 by default — set them to the project's real plan; 0 turns a guard
-off). Environment of the API: `TUYA_CLOUD`, `TUYA_CLOUD_PUBLIC_KEY`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT`.
+off). Environment of the API: `TUYA_CLOUD`, `TUYA_CLOUD_PUBLIC_KEY`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT`, and
+`TUYA_CLOUD_EVENT_BUDGET` / `TUYA_CLOUD_API_BUDGET` (only to draw the usage bars against the same numbers).
 `infra/prod/setup.py` generates the key pair once and keeps it. `tuya-cloud health` checks the database for the
-container healthcheck. The image builds the binary; the compose service is phase G5.
+container healthcheck.
+
+**`TUYA_CLOUD` in the worker:** with `false` (or unset) the worker **idles** until it is stopped: it reads no key,
+opens no database connection and dials nobody. It does not exit, because the compose service has
+`restart: unless-stopped`, which would restart an exited process forever. Any other value than `true`/`false` is
+refused. A link saved before the mode was turned off stays down, and its devices go offline (`cloud_silent`).
+
+**Compose (G5).** `infra/prod/compose.yaml` and `infra/compose.yaml` run a `tuya-cloud` service from the backend
+image (`/app/tuya-cloud`): hardened (read-only, no capabilities, no-new-privileges), 192 MiB, healthcheck
+`tuya-cloud health`, after `migrate`, on the stack's bridge network (egress to Tuya: HTTPS 443 and the Message
+Service on 8285). Its environment is the `aether_app` DSN (verify-full TLS in production), `TUYA_CLOUD`,
+`TUYA_CLOUD_PRIVATE_KEY`, `TUYA_CLOUD_MAX_LINKS`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT` and the budgets — no JWT or
+channel seal key, no broker account. The API gets `TUYA_CLOUD` and `TUYA_CLOUD_PUBLIC_KEY` (plus the cap and the
+budgets), never the private key. `setup.py --tuya-cloud true|false` switches the mode; a re-run without the flag
+keeps the value in the env file (like `--automation-commands`).
 
 - **Faults:** every goroutine of a link recovers a panic (logged with tenant, gateway and place, never the panic's
   value) and the link alone restarts after a backoff; a panic while delivering a command fails that command.
@@ -164,6 +236,43 @@ container healthcheck. The image builds the binary; the compose service is phase
 - **Health:** every 60 s per link: usage flushed, `last_health_at` set and a diagnostic
   `{"cloud_health":{state, connected, events_month, api_calls_month, dropped_month, budget}}` stored.
 
+## HTTP API (G4, `httpapi/tuya_cloud.go`)
+
+All under `/api/v1/gateways/:id/tuya-cloud`, bearer-authenticated. Every mutation is a POST (the API's CORS allows
+GET and POST only), needs owner/admin (`CanManageDevices`) and passes the `connect` access module (non-GET
+`/gateways` routes).
+
+| Route | Who | Answer |
+|---|---|---|
+| `GET /gateways/:id/tuya-cloud` | anyone who can see the gateway; also with the flag off | `TuyaCloudLink`: state, reason, region, channel, `access_id_hint` (4 characters), times, the month's usage, `events_budget`, `api_calls_budget`, `enabled` (the flag). Never the secret or the Access ID. 400 `not_a_cloud_gateway` for another model |
+| `POST …/link` `{region, channel, access_id, access_secret}` (≤ 1 KiB, unknown fields refused) | owner/admin + connect; 404 with the flag off | the new status (200). Link and rotation are the same call |
+| `POST …/sync` | owner/admin + connect; 404 with the flag off | 202 with the status |
+| `POST …/unlink` | owner/admin + connect; **works with the flag off** so credentials can always be wiped | 204 |
+
+Linking is **synchronous**, bounded to 8 s (`linkTimeout`, inside the API's 10 s request budget): proving the
+credentials is one Tuya token call, and the device list is fetched afterwards by the worker (the saved link has
+`sync_requested_at`), so no job is needed. Errors: 400 `tuya_credentials`, `tuya_region`, `tuya_channel`,
+`tuya_auth_failed`, `tuya_not_subscribed`, `tuya_permission`, `tuya_cloud_disabled`, `not_a_cloud_gateway`; 409
+`already_linked` (says nothing about the workspace holding the project) and `cloud_link_limit`; 429
+`tuya_rate_limited`; 503 `tuya_cloud_unconfigured` (no public key), `tuya_unreachable`, `tuya_timeout`. The route
+drops the credentials from its request struct as soon as the service returns.
+
+`GET /gateways/:id/tuya/devices` (owner/admin) lists a cloud gateway's synced devices too, with `sub`,
+`parent_tuya_id` (the hub), `available` and `reason`.
+
+With the flag off, a registration with the cloud profile can be neither restored nor moved to another gateway
+(`tuya_cloud_disabled`; `postgres.Options.RefuseTuyaCloud`, set by the API and the ingest process from
+`TUYA_CLOUD`); renaming still works. A move still has to fit the target gateway (`domain.ProfileAllowedOn`).
+
+**Gateway page** (`frontend/app/topology/tuya-cloud-panel.tsx`, keyed per gateway, stale answers dropped by a
+sequence number): the Tuya project steps shared with the key import plus the Message Service step; the link form
+(masked plain-text secret input kept out of password managers, cleared the moment it is sent and when the form
+closes); the status card with state, last message and the two usage bars; sync, rotate and unlink (with a
+confirmation) for owner/admin only; the always-visible warnings; the device table with online, kind, hub and
+register. Discovery shows `tuya_cloud` devices with the cloud profile. A registered cloud device's panel shows its
+connection and the reason it is offline (`cloud_link_down`, or the link's `auth_failed` / `quota`), and a failed
+command's reason in Thai.
+
 ## Security
 
 - **Asymmetric sealing.** The API seals the Access ID and Secret with `security.SealTuyaCloud`: an anonymous box
@@ -185,7 +294,7 @@ container healthcheck. The image builds the binary; the compose service is phase
   out, and `CapturePacket` refuses the model anyway), no broker account (`EnrollMQTT` refuses it) and no ACL
   (mqtt-provisioner skips it).
 - The OpenAPI client uses no environment proxy and TLS 1.2 or later, and follows no redirect.
-- Nothing returns or logs a credential: `domain.TuyaCloudLink` has no secret field (a hint of at most 8 characters
+- Nothing returns or logs a credential: `domain.TuyaCloudLink` has no secret field (a hint of 4 characters
   only), log lines name tenant and gateway, and Tuya errors carry a category and Tuya's numeric code.
 - One project per link, across all workspaces (unique digest). A second link of the same project answers
   `already_linked` without saying where it is linked. Unlink and gateway revoke wipe the sealed value and the
@@ -208,6 +317,12 @@ container healthcheck. The image builds the binary; the compose service is phase
   refused credentials write nothing, viewers refused in the service and the repository, the two-project cap),
   future report times clamped and `reported_t` pruned.
 - `internal/commander`: transports, pace overrides, `Deliver`.
+- `tests/tuya_cloud_http_test.go`: the routes — no secret and no Access ID beyond the hint in any answer, refused
+  and malformed credentials store nothing, oversized or unknown-field bodies refused, a viewer and an administrator
+  without the connect module read but cannot link, sync or unlink, the same project in another workspace is a bare
+  409 and that workspace cannot see or unlink the link, unlink wipes the credentials and frees the project, flag
+  off → link and sync 404 while status and unlink work; restore and move refused with the mode off, rename allowed,
+  a move that does not fit the gateway refused.
 - `tests/tuya_cloud_test.go` (real database and worker against the fakes): link → sync → discovery → register →
   status/events; out-of-order and replayed reports; device liveness; unknown devices; diagnostics without values;
   end-to-end command (POST /commands → issue → report → confirmed); offline / quota refusals; link down
@@ -216,9 +331,6 @@ container healthcheck. The image builds the binary; the compose service is phase
 
 ## Not yet
 
-- G4: API routes and UI to link, rotate, unlink, sync and see status: thin wrappers of `Service.LinkTuyaCloud`,
-  `UnlinkTuyaCloud`, `RequestTuyaCloudSync` and `TuyaCloudLinkStatus`.
-- G5: the compose service for the worker (with `TUYA_CLOUD_PRIVATE_KEY` only) and `TUYA_CLOUD` /
-  `TUYA_CLOUD_PUBLIC_KEY` on the API.
 - Verification against a real project: message shapes, the `em` property through the WebSocket proxy, the
-  derived regional hosts, the budget numbers and Tuya's device-offline error code.
+  derived regional hosts, the budget numbers and Tuya's device-offline error code. Until then keep
+  `TUYA_CLOUD=false` in production.

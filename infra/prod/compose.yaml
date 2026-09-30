@@ -214,6 +214,13 @@ services:
       DISCOVERY_LIMIT: ${DISCOVERY_LIMIT:-100}
       ALERTS_SHADOW: ${ALERTS_SHADOW:-true}
       AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}
+      # Tuya Cloud mode (docs/platform/tuya-cloud.md). The API only SEALS project credentials to the worker's public
+      # key; the private key is given to the tuya-cloud service alone. The budgets are shown as usage bars.
+      TUYA_CLOUD: ${TUYA_CLOUD:-false}
+      TUYA_CLOUD_PUBLIC_KEY: ${TUYA_CLOUD_PUBLIC_KEY:-}
+      TUYA_CLOUD_MAX_LINKS_PER_TENANT: ${TUYA_CLOUD_MAX_LINKS_PER_TENANT:-2}
+      TUYA_CLOUD_EVENT_BUDGET: ${TUYA_CLOUD_EVENT_BUDGET:-68000}
+      TUYA_CLOUD_API_BUDGET: ${TUYA_CLOUD_API_BUDGET:-26000}
       WEBHOOK_ALLOWED_HOSTS: ${WEBHOOK_ALLOWED_HOSTS:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-}
@@ -317,6 +324,7 @@ services:
       DISCOVERY_LIMIT: ${DISCOVERY_LIMIT:-100}
       ALERTS_SHADOW: ${ALERTS_SHADOW:-true}
       AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}
+      TUYA_CLOUD: ${TUYA_CLOUD:-false}
       MQTT_CONFIG_FILE: /run/mqtt/collector.json
     volumes:
       - ${AETHER_SECRETS_DIR}/mqtt/collector:/run/mqtt:ro
@@ -374,6 +382,44 @@ services:
       resources:
         limits:
           memory: 128m
+
+  # Runs every Tuya Cloud link (docs/platform/tuya-cloud.md): consumes each linked project's Message Service, syncs
+  # its devices and delivers cloud commands through the Tuya OpenAPI. It is the only holder of
+  # TUYA_CLOUD_PRIVATE_KEY, so the only process that can open a project's credentials; it gets an aether_app DSN and
+  # nothing else (no JWT or channel seal key, no broker account). It needs egress to Tuya (HTTPS 443 and the
+  # Message Service's Pulsar port 8285), which the aether bridge network gives it. With TUYA_CLOUD=false it idles.
+  tuya-cloud:
+    image: ${AETHER_BACKEND_IMAGE:-aether-backend:prod}
+    build:
+      context: ../../backend
+    entrypoint: ["/app/tuya-cloud"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=verify-full&sslrootcert=/run/db-ca/ca.crt
+      TUYA_CLOUD: ${TUYA_CLOUD:-false}
+      TUYA_CLOUD_PRIVATE_KEY: ${TUYA_CLOUD_PRIVATE_KEY:?run infra/prod/setup.py}
+      TUYA_CLOUD_MAX_LINKS: ${TUYA_CLOUD_MAX_LINKS:-50}
+      TUYA_CLOUD_MAX_LINKS_PER_TENANT: ${TUYA_CLOUD_MAX_LINKS_PER_TENANT:-2}
+      TUYA_CLOUD_EVENT_BUDGET: ${TUYA_CLOUD_EVENT_BUDGET:-68000}
+      TUYA_CLOUD_API_BUDGET: ${TUYA_CLOUD_API_BUDGET:-26000}
+    volumes:
+      - ${AETHER_SECRETS_DIR}/db-ca:/run/db-ca:ro
+    healthcheck:
+      test: ["CMD", "/app/tuya-cloud", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    <<: *hardened
+    restart: unless-stopped
+    logging: *logging
+    networks: [aether]
+    deploy:
+      resources:
+        limits:
+          memory: 192m
 
   # Renders broker credentials for gateways created in the web UI and SIGHUPs Mosquitto through a
   # shared PID namespace. It never gets a Docker socket and can only read password hashes.

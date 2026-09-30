@@ -13,7 +13,7 @@ export type TuyaImportClient = {
 };
 
 /** The server accepts letters and digits, 8 to 64 characters, for both (backend app.tuyaCredential). */
-const CREDENTIAL = /^[A-Za-z0-9]{8,64}$/;
+export const CREDENTIAL = /^[A-Za-z0-9]{8,64}$/;
 
 const STAGE_LABEL: Record<TuyaImportJob["stage"], string> = {
   token: "เข้าสู่ระบบ Tuya IoT",
@@ -32,8 +32,8 @@ const START_ERROR: Record<string, string> = {
   not_an_edge_gateway: "gateway นี้ไม่ใช่ Aether Edge",
 };
 
-/** Why a running import failed (job.error → Thai). */
-const JOB_ERROR: Record<string, string> = {
+/** Why a running import failed (job.error → Thai); a Tuya Cloud link is refused with the same tuya_* reasons. */
+export const JOB_ERROR: Record<string, string> = {
   tuya_auth_failed: "Access ID / Access Secret ไม่ถูกต้อง หรือเลือก Data Center ไม่ตรงกับโปรเจกต์",
   tuya_not_subscribed: "โปรเจกต์ยังไม่ได้สมัครบริการ IoT Core และ Authorization (หน้า Service API ของโปรเจกต์)",
   tuya_permission: "โปรเจกต์ยังไม่ได้ผูกบัญชีแอป Smart Life (Devices → Link App Account แล้วสแกน QR ด้วยแอป)",
@@ -47,7 +47,7 @@ const JOB_ERROR: Record<string, string> = {
   job_refused: "อ่านสถานะการนำเข้าไม่ได้ (ไม่มีสิทธิ์ หรือคำขอไม่ถูกต้อง) · กดเริ่มใหม่",
 };
 
-const regionLabel = (id: string) => TUYA_REGIONS.find((r) => r.id === id)?.label ?? id;
+export const regionLabel = (id: string) => TUYA_REGIONS.find((r) => r.id === id)?.label ?? id;
 
 /**
  * What a device of the import can do locally, in the order that decides it. One rule for every place that offers
@@ -66,7 +66,7 @@ export function tuyaVerdict(d: { sub: boolean; local_capable: boolean; has_key: 
 export const LAN_WARNING = "ยังไม่พบใน LAN · ตรวจว่าเปิดอยู่และอยู่วง LAN เดียวกับ Pi · ลงทะเบียนได้ Aether Edge จะเชื่อมต่อเมื่อพบ";
 
 /** Keeps a credential out of password managers: plain text inputs masked with CSS, nothing that looks like a login. */
-const credentialInput = {
+export const credentialInput = {
   type: "text",
   autoComplete: "off",
   autoCorrect: "off",
@@ -77,6 +77,27 @@ const credentialInput = {
   "data-bwignore": "true",
   "data-form-type": "other",
 } as const;
+
+/**
+ * Setting up a Tuya IoT project, shared by the key import (Aether Edge) and the Tuya Cloud link. The cloud link also
+ * needs the project's Message Service, which is where live status comes from.
+ */
+export function TuyaProjectSteps({ messageService = false }: { messageService?: boolean }) {
+  return (
+    <ol className="topo-tuya-steps">
+      <li>สมัครและเข้า <strong>platform.tuya.com</strong> (Tuya IoT Platform) → Cloud → สร้างโปรเจกต์แบบ <strong>Smart Home</strong></li>
+      <li>เลือก <strong>Data Center</strong> ให้ตรงกับบัญชีแอป · บัญชี Smart Life ในไทยส่วนใหญ่อยู่ <strong>Western America</strong> ถ้าไม่พบอุปกรณ์ลอง <strong>Singapore</strong></li>
+      <li>ที่หน้า Service API ของโปรเจกต์ สมัคร <strong>IoT Core</strong> และ <strong>Authorization</strong>{messageService ? <> และ <strong>Message Service</strong></> : null}</li>
+      <li>ไปที่ Devices → <strong>Link App Account</strong> แล้วสแกน QR ด้วยแอป Smart Life (เมนู ฉัน)</li>
+      {messageService && (
+        <li>
+          เปิดรับข้อความ: Cloud → <strong>Message Service</strong> → เลือกโปรเจกต์นี้ → <strong>Enable</strong> โดยใช้ Data Center <strong>เดียวกับโปรเจกต์</strong> · หลังเปิดครั้งแรกอาจต้องรอ<strong>ประมาณ 30 นาที</strong>กว่าสถานะอุปกรณ์จะเริ่มส่งมา · ปิดตัวรับข้อความอื่นของโปรเจกต์นี้ก่อน (เช่น integration Tuya ของ Home Assistant แบบเก่า) เพราะข้อความจะถูกแบ่งไปคนละที่
+        </li>
+      )}
+      <li>คัดลอก <strong>Access ID</strong> และ <strong>Access Secret</strong> จากหน้า Overview ของโปรเจกต์มาใส่ด้านล่าง</li>
+    </ol>
+  );
+}
 
 export default function TuyaImportDialog({ open, gatewayId, client, job, jobError, devices, onJob, onClose, onRegister }: {
   open: boolean;
@@ -124,13 +145,7 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
 
         {!job && (
           <>
-            <ol className="topo-tuya-steps">
-              <li>สมัครและเข้า <strong>platform.tuya.com</strong> (Tuya IoT Platform) → Cloud → สร้างโปรเจกต์แบบ <strong>Smart Home</strong></li>
-              <li>เลือก <strong>Data Center</strong> ให้ตรงกับบัญชีแอป · บัญชี Smart Life ในไทยส่วนใหญ่อยู่ <strong>Western America</strong> ถ้าไม่พบอุปกรณ์ลอง <strong>Singapore</strong></li>
-              <li>ที่หน้า Service API ของโปรเจกต์ สมัคร <strong>IoT Core</strong> และ <strong>Authorization</strong></li>
-              <li>ไปที่ Devices → <strong>Link App Account</strong> แล้วสแกน QR ด้วยแอป Smart Life (เมนู ฉัน)</li>
-              <li>คัดลอก <strong>Access ID</strong> และ <strong>Access Secret</strong> จากหน้า Overview ของโปรเจกต์มาใส่ด้านล่าง</li>
-            </ol>
+            <TuyaProjectSteps />
             <form
               className="topo-form-grid"
               autoComplete="off"

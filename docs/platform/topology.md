@@ -9,6 +9,8 @@ Implemented locally 2026-09-18. Replaces the three-step form at `เชื่อ
 - **Device nodes**: one node per external id (BLE MAC), merged from `GET /devices` (adopted), `GET /live` (decoded Minew readings with RSSI) and `GET /studio/sources` (raw BLE observations). Solid green edge = adopted registration; dashed grey edge = heard on air only, labelled with RSSI. A device heard by several gateways has one edge per gateway.
 - **Only recognised devices are placed automatically** (adopted or decoded). Raw BLE MACs (phones, beacons, up to 100 per gateway) stay in the palette list; drag or click them onto the canvas, or toggle “BLE ทั้งหมด”.
 
+Gateway panels by model: MQTT gateways show the account steps; an Aether Edge shows its agent and installer ([aether-edge.md](aether-edge.md)); a Tuya Cloud gateway shows the project link, usage and synced devices ([tuya-cloud.md](tuya-cloud.md)).
+
 ## Actions (all through existing APIs)
 
 | Gesture | API |

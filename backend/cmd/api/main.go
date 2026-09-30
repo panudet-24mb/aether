@@ -42,13 +42,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer repo.Close()
-	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow, AutomationCommands: cfg.AutomationCommands, CloudLinksPerTenant: cfg.TuyaCloudLinksPerTenant})
+	repo.Configure(postgres.Options{SampleRetentionDays: cfg.SampleRetentionDays, SampleMinIntervalSec: cfg.SampleMinIntervalSec, BLEHistoryHours: cfg.BLEHistoryHours, DiscoveryLimit: cfg.DiscoveryLimit, AlertsShadow: cfg.AlertsShadow, AutomationCommands: cfg.AutomationCommands, RefuseTuyaCloud: !cfg.TuyaCloud, CloudLinksPerTenant: cfg.TuyaCloudLinksPerTenant})
 	service, e := app.New(repo, security.NewTokens(cfg.JWTKey, cfg.Issuer), cfg.Registration)
 	if e != nil {
 		slog.Error("security initialization failed")
 		os.Exit(1)
 	}
 	service.TuyaCloudEnabled, service.TuyaCloudPublicKey = cfg.TuyaCloud, cfg.TuyaCloudPublicKey
+	service.TuyaCloudEventBudget, service.TuyaCloudAPIBudget = int64(cfg.TuyaCloudEventBudget), int64(cfg.TuyaCloudAPIBudget)
 	if cfg.TuyaCloud && cfg.TuyaCloudPublicKey == nil {
 		slog.Warn("TUYA_CLOUD is on without TUYA_CLOUD_PUBLIC_KEY: linking a cloud project answers tuya_cloud_unconfigured")
 	}

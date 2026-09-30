@@ -45,6 +45,13 @@ services:
       API_RATE_LIMIT: ${API_RATE_LIMIT:-600}
       # Automations may command devices only when this is true (docs/platform/automation.md).
       AUTOMATION_COMMANDS: ${AUTOMATION_COMMANDS:-false}
+      # Tuya Cloud mode (docs/platform/tuya-cloud.md): off unless .env sets TUYA_CLOUD=true with a dev key pair. The
+      # API gets only the public key; the private key goes to the tuya-cloud service alone.
+      TUYA_CLOUD: ${TUYA_CLOUD:-false}
+      TUYA_CLOUD_PUBLIC_KEY: ${TUYA_CLOUD_PUBLIC_KEY:-}
+      TUYA_CLOUD_MAX_LINKS_PER_TENANT: ${TUYA_CLOUD_MAX_LINKS_PER_TENANT:-2}
+      TUYA_CLOUD_EVENT_BUDGET: ${TUYA_CLOUD_EVENT_BUDGET:-68000}
+      TUYA_CLOUD_API_BUDGET: ${TUYA_CLOUD_API_BUDGET:-26000}
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
     depends_on:
@@ -54,5 +61,36 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
+  # Runs the Tuya Cloud links; the only holder of TUYA_CLOUD_PRIVATE_KEY (an aether_app DSN and nothing else). With
+  # TUYA_CLOUD=false (the default) it idles, so it needs no key.
+  tuya-cloud:
+    build: ../backend
+    image: aether-backend:local
+    entrypoint: ["/app/tuya-cloud"]
+    environment:
+      DATABASE_URL: postgresql://aether_app:${APP_DB_PASSWORD}@postgres:5432/aether?sslmode=disable
+      TUYA_CLOUD: ${TUYA_CLOUD:-false}
+      TUYA_CLOUD_PRIVATE_KEY: ${TUYA_CLOUD_PRIVATE_KEY:-}
+      TUYA_CLOUD_MAX_LINKS: ${TUYA_CLOUD_MAX_LINKS:-50}
+      TUYA_CLOUD_MAX_LINKS_PER_TENANT: ${TUYA_CLOUD_MAX_LINKS_PER_TENANT:-2}
+      TUYA_CLOUD_EVENT_BUDGET: ${TUYA_CLOUD_EVENT_BUDGET:-68000}
+      TUYA_CLOUD_API_BUDGET: ${TUYA_CLOUD_API_BUDGET:-26000}
+    healthcheck:
+      test: ["CMD", "/app/tuya-cloud", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 192m
 volumes:
   postgres-data:

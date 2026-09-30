@@ -38,6 +38,10 @@ type Config struct {
 	SealKey                 []byte   // optional CHANNEL_SEAL_KEY; falls back to a key derived from JWT_SIGNING_KEY
 	TrustedProxies          []string // CIDRs/IPs of the reverse proxy; only then is X-Forwarded-For believed
 	WebhookAllowedHosts     []string // host:port targets exempt from the private-address block (on-prem relays)
+
+	// TuyaCloudEventBudget and TuyaCloudAPIBudget are the monthly Tuya allowances the gateway page shows usage against
+	// (TUYA_CLOUD_EVENT_BUDGET / TUYA_CLOUD_API_BUDGET, the same variables the tuya-cloud worker enforces; 0 = no guard).
+	TuyaCloudEventBudget, TuyaCloudAPIBudget int
 }
 
 func Load() (Config, error) {
@@ -129,6 +133,12 @@ func Load() (Config, error) {
 		}
 	}
 	if c.TuyaCloudLinksPerTenant, e = intEnv("TUYA_CLOUD_MAX_LINKS_PER_TENANT", 2, 1, 100); e != nil {
+		return c, e
+	}
+	if c.TuyaCloudEventBudget, e = intEnv("TUYA_CLOUD_EVENT_BUDGET", 68000, 0, 1_000_000_000); e != nil {
+		return c, e
+	}
+	if c.TuyaCloudAPIBudget, e = intEnv("TUYA_CLOUD_API_BUDGET", 26000, 0, 1_000_000_000); e != nil {
 		return c, e
 	}
 	if raw := os.Getenv("CHANNEL_SEAL_KEY"); raw != "" {

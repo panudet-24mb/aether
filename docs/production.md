@@ -356,11 +356,38 @@ sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml exec -u post
     GROUP BY 1,2 HAVING count(*)>1"
 ```
 
-- `setup.py` สร้างคู่กุญแจ `TUYA_CLOUD_PUBLIC_KEY` / `TUYA_CLOUD_PRIVATE_KEY` ครั้งเดียวแล้วเก็บไว้ (รันซ้ำได้) และเขียน `TUYA_CLOUD=false`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT=2`
-  - API ได้ **เฉพาะ public key** (ใช้ซีลรหัสโปรเจกต์ Tuya) · worker `tuya-cloud` ได้ **เฉพาะ private key** — ห้ามส่ง private key ให้ container อื่น
+- `setup.py` สร้างคู่กุญแจ `TUYA_CLOUD_PUBLIC_KEY` / `TUYA_CLOUD_PRIVATE_KEY` ครั้งเดียวแล้วเก็บไว้ (รันซ้ำได้) และเขียน `TUYA_CLOUD=false`, `TUYA_CLOUD_MAX_LINKS=50`, `TUYA_CLOUD_MAX_LINKS_PER_TENANT=2`, `TUYA_CLOUD_EVENT_BUDGET=68000`, `TUYA_CLOUD_API_BUDGET=26000` (งบเป็นค่าเริ่มต้นชั่วคราว แก้ใน `.env.prod` ให้ตรงแพ็กเกจจริงของโปรเจกต์ · 0 = ไม่มีตัวกันงบ)
+  - API ได้ **เฉพาะ public key** (ใช้ซีลรหัสโปรเจกต์ Tuya) · service `tuya-cloud` ได้ **เฉพาะ private key** — ห้ามส่ง private key ให้ container อื่น
   - private key หาย = โปรเจกต์ที่ลิงก์ไว้ทั้งหมดต้องลิงก์ใหม่ สำรอง `.env.prod` แยกจาก backup ฐานข้อมูล
-- การต่อ compose service และเปิด `TUYA_CLOUD=true` อยู่ใน phase G5 · ก่อนหน้านั้นโหมดนี้ปิดอยู่และไม่แสดงในเว็บ
+- compose มี service `tuya-cloud` (image เดียวกับ backend, `/app/tuya-cloud`, read-only, 192 MiB, healthcheck `tuya-cloud health`) ได้แค่ DSN ของ `aether_app`, `TUYA_CLOUD`, private key, จำนวนลิงก์ และงบ — ไม่มี JWT/`CHANNEL_SEAL_KEY` ไม่มีบัญชี MQTT · ต้องออกอินเทอร์เน็ตไป Tuya ได้ (HTTPS 443 และ Message Service พอร์ต **8285**) ถ้ามี firewall ขาออกต้องเปิดสองพอร์ตนี้
+- **`TUYA_CLOUD=false` (ค่าเริ่มต้น) service `tuya-cloud` จะ idle** (ไม่อ่านกุญแจ ไม่ต่อฐานข้อมูล ไม่ต่อ Tuya) แทนการ exit เพราะ `restart: unless-stopped` จะรีสตาร์ต process ที่ exit ไม่รู้จบ · สถานะ healthy ได้ตามปกติ
 - `migrate down` ข้าม `00034` ไม่ได้ถ้ายังมี gateway `tuya-cloud` ที่ยังไม่ revoke (ตั้งใจให้ล้มพร้อมข้อความ) · รายละเอียดที่ [tuya-cloud.md](platform/tuya-cloud.md)
+
+**Rollout G4/G5 (โหมดยังปิด):**
+
+```sh
+cd /opt/aether                               # โฟลเดอร์ที่ติดตั้งไว้
+sudo sh infra/prod/backup-now.sh             # สำรองก่อนเสมอ (§6)
+sudo git pull
+# 1) เขียน .env.prod ใหม่ด้วย flag ชุดเดิม (ไม่ใส่ --tuya-cloud = คงค่าเดิม false) — ได้ค่า TUYA_CLOUD_MAX_LINKS และงบเพิ่ม
+sudo python3 infra/prod/setup.py <flag ชุดเดิม>
+# 2) build แล้วเปิด: api ได้ route ใหม่ และมี service tuya-cloud (idle) เพิ่ม
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml build api web
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d
+# 3) ตรวจ: ทุก service healthy · tuya-cloud log ต้องมี "Tuya Cloud mode is off (TUYA_CLOUD=false); idle"
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml ps
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml logs --tail 5 tuya-cloud
+```
+
+**เปิดโหมด Tuya Cloud (เมื่อพร้อม และหลังทดสอบกับโปรเจกต์จริงแล้ว):**
+
+```sh
+sudo python3 infra/prod/setup.py <flag ชุดเดิม> --tuya-cloud true
+sudo docker compose --env-file .env.prod -f infra/prod/compose.yaml up -d api mqtt-ingest tuya-cloud
+# log ของ tuya-cloud ต้องมี "Tuya Cloud worker ready" · หน้าเว็บเพิ่ม gateway ต้องมี "Tuya Cloud (ไม่ต้องติดตั้ง)"
+```
+
+ปิดกลับ: `--tuya-cloud false` แล้ว `up -d api mqtt-ingest tuya-cloud` · gateway และลิงก์เดิมยังอยู่ อุปกรณ์จะแสดงออฟไลน์ เชื่อม/ซิงก์ใหม่ไม่ได้ แต่ owner/admin ยังกด "ยกเลิกการเชื่อม" เพื่อลบรหัสที่เก็บไว้ได้
 
 ## 5. วันแรก: เปิดใน shadow mode แล้วค่อยปลด
 

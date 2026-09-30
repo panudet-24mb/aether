@@ -15,7 +15,7 @@ import (
 func (r *Repository) TuyaDevices(ctx context.Context, p domain.Principal, gateway string) ([]domain.TuyaDevice, error) {
 	out := []domain.TuyaDevice{}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Raw(`SELECT t.tuya_id,t.name,t.tuya_category,t.product_id,t.category,t.sub,t.local_capable,t.key_fingerprint,t.key_status,
+		return tx.Raw(`SELECT t.tuya_id,t.name,t.tuya_category,t.product_id,t.category,t.sub,t.parent_tuya_id,t.local_capable,t.key_fingerprint,t.key_status,
       t.version,t.ip,t.available,t.reason,t.imported_at,
       EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered,
       EXISTS(SELECT 1 FROM core.edge_lan_devices l WHERE l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id) AS lan_seen

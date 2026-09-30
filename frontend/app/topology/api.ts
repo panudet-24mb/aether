@@ -87,7 +87,7 @@ export type GatewayCreated = { gateway: Gateway; token: string; capture_path: st
 export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
-export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string };
+export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key) or a Tuya Cloud link (source "tuya_cloud"). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string };
 /** One model of the Zigbee2MQTT device catalog (zigbee-herdsman-converters). */
 export type ZigbeeModel = { vendor: string; model: string; description: string; zigbee_model?: string[]; white_label?: string[]; category: string; features?: string[]; sos?: boolean; dynamic?: boolean };
 export type ZigbeeCatalog = { items: ZigbeeModel[]; total: number; source: string; version: string; license: string; homepage: string; notice: string; vendors?: string[] };
@@ -133,13 +133,15 @@ export type TuyaDevice = {
   product_id: string;
   category: string;
   sub: boolean;
+  /** The hub of a sub-device, when Tuya Cloud reported it ("" otherwise). */
+  parent_tuya_id?: string;
   local_capable: boolean;
   key_fingerprint: string;
   key_status: TuyaKeyStatus;
   version: string;
   ip: string;
   available: boolean | null;
-  /** Why the agent reports it offline: unreachable, auth_failed, key_suspect, busy, not_found. */
+  /** Why it is offline: unreachable, auth_failed, key_suspect, busy, not_found (Aether Edge) or cloud_link_down (Tuya Cloud). */
   reason: string;
   registered: boolean;
   lan_seen: boolean;
@@ -162,6 +164,38 @@ export type EdgeStatus = {
   registered: number;
   keys: Record<TuyaKeyStatus, number>;
 };
+/** Link state of a Tuya Cloud gateway (backend domain.TuyaCloudLink state). */
+export type TuyaCloudState = "" | "linking" | "online" | "offline" | "auth_failed" | "not_subscribed" | "quota" | "disabled";
+/** What the gateway page shows about a Tuya Cloud link (backend domain.TuyaCloudLink): never the secret, never the Access ID beyond its first 4 characters. */
+export type TuyaCloudLink = {
+  gateway_id: string;
+  linked: boolean;
+  region: string;
+  channel: string;
+  access_id_hint: string;
+  state: TuyaCloudState;
+  state_at: string | null;
+  reason: string;
+  last_error_code: number;
+  last_event_at: string | null;
+  last_health_at: string | null;
+  usage_month: string | null;
+  events_month: number;
+  api_calls_month: number;
+  dropped_month: number;
+  sync_requested_at: string | null;
+  linked_at: string | null;
+  rotated_at: string | null;
+  devices: number;
+  registered: number;
+  /** This deployment's TUYA_CLOUD: when false, linking and syncing are off but the status and unlink stay. */
+  enabled: boolean;
+  /** Monthly allowances usage is measured against (0 = no guard configured). */
+  events_budget: number;
+  api_calls_budget: number;
+};
+/** Message Service channels: event (production) and event-test (Tuya's test channel). */
+export type TuyaCloudChannel = "event" | "event-test";
 /** A single-use install code for the Aether Edge installer, shown once. */
 export type EdgeInstallCode = { code: string; expires_at: string; install_command: string; install_url: string; bootstrap_url: string; zigbee_paired: boolean; image: string };
 
@@ -286,6 +320,12 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     tuyaImport: (gatewayId: string, jobId: string) => call<TuyaImportJob>(`/gateways/${gatewayId}/tuya/imports/${jobId}`),
     tuyaDevices: async (gatewayId: string) => (await call<{ items: TuyaDevice[] }>(`/gateways/${gatewayId}/tuya/devices`)).items,
     forgetTuyaKey: (gatewayId: string, tuyaId: string) => call<void>(`/gateways/${gatewayId}/tuya/devices/${encodeURIComponent(tuyaId)}/forget`, {}),
+    /** Tuya Cloud: link status (any member who can see the gateway). */
+    tuyaCloudStatus: (gatewayId: string) => call<TuyaCloudLink>(`/gateways/${gatewayId}/tuya-cloud`),
+    /** Links (or rotates) the project; proven with Tuya first, sealed for the worker, never returned. Answers the new status. */
+    linkTuyaCloud: (gatewayId: string, input: { region: string; channel: TuyaCloudChannel; access_id: string; access_secret: string }) => call<TuyaCloudLink>(`/gateways/${gatewayId}/tuya-cloud/link`, input),
+    syncTuyaCloud: (gatewayId: string) => call<TuyaCloudLink>(`/gateways/${gatewayId}/tuya-cloud/sync`, {}),
+    unlinkTuyaCloud: (gatewayId: string) => call<void>(`/gateways/${gatewayId}/tuya-cloud/unlink`, {}),
 
     /**
      * Loads everything the canvas needs. The API is rate-limited per IP (120/min), so slow-changing data

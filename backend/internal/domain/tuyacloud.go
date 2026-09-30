@@ -46,6 +46,11 @@ type TuyaCloudLink struct {
 	RotatedAt       *time.Time `json:"rotated_at"`
 	Devices         int        `json:"devices"`
 	Registered      int        `json:"registered"`
+	// Enabled is this deployment's TUYA_CLOUD; the budgets are the monthly allowances usage is measured against
+	// (0 = no guard configured).
+	Enabled        bool  `json:"enabled"`
+	EventsBudget   int64 `json:"events_budget"`
+	APICallsBudget int64 `json:"api_calls_budget"`
 }
 
 // TuyaCloudLinkRequest is a link (or a credential rotation) as the repository stores it: the credentials are

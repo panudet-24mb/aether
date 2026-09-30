@@ -19,7 +19,7 @@ export type DeviceProfile = {
   brand: string;
   model: string;
   label: string;
-  radio: "ble" | "zigbee" | "tuya-wifi" | "tuya-cloud" | "any";
+  radio: "ble" | "zigbee" | "tuya-wifi" | "tuya-ble" | "tuya-cloud" | "any";
   description: string;
   image?: string;
   metrics: string[];
@@ -285,6 +285,11 @@ export const EDGE_GATEWAY_MODEL = "aether-edge";
 /** The profile every Tuya Wi‑Fi device registers as under an Aether Edge (backend domain.TuyaWiFiProfile). */
 export const TUYA_WIFI_PROFILE = "tuya-wifi-device@1";
 /**
+ * The profile of a Tuya BLE device an owner/admin set to Bluetooth, under an Aether Edge (backend domain.TuyaBLEProfile).
+ * Only in the server catalog where EDGE_BLE is on; the offline fallback list never offers it.
+ */
+export const TUYA_BLE_PROFILE = "tuya-ble-device@1";
+/**
  * Tuya Cloud mode: nothing installed on site; the gateway stands for one linked Tuya IoT project (backend
  * domain.TuyaCloudGatewayModel). The model and its profile are only in the server catalog when the deployment enabled
  * TUYA_CLOUD, so the offline fallback lists above never offer them.
@@ -293,12 +298,12 @@ export const TUYA_CLOUD_GATEWAY_MODEL = "tuya-cloud";
 /** The profile of any Tuya device reached through Tuya Cloud (backend domain.TuyaCloudProfile). */
 export const TUYA_CLOUD_PROFILE = "tuya-cloud-device@1";
 
-/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi only under an Aether Edge, Tuya Cloud only under a Tuya Cloud gateway, and none of them anywhere else. */
+/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi and Tuya BLE only under an Aether Edge, Tuya Cloud only under a Tuya Cloud gateway, and none of them anywhere else. */
 export function profileFitsGateway(p: DeviceProfile, gatewayModelId: string): boolean {
   if (gatewayModelId === Z2M_GATEWAY_MODEL) return p.radio === "zigbee";
-  if (gatewayModelId === EDGE_GATEWAY_MODEL) return p.radio === "tuya-wifi";
+  if (gatewayModelId === EDGE_GATEWAY_MODEL) return p.radio === "tuya-wifi" || p.radio === "tuya-ble";
   if (gatewayModelId === TUYA_CLOUD_GATEWAY_MODEL) return p.radio === "tuya-cloud";
-  return p.radio !== "zigbee" && p.radio !== "tuya-wifi" && p.radio !== "tuya-cloud";
+  return p.radio !== "zigbee" && p.radio !== "tuya-wifi" && p.radio !== "tuya-ble" && p.radio !== "tuya-cloud";
 }
 
 /** Switch outputs a reading carries, in gang order: [[1, true], [2, false], …] from metrics sw1..sw4. */

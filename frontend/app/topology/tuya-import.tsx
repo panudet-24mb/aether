@@ -4,7 +4,7 @@
 // The running job itself belongs to the Edge panel (EdgePanel), so closing this dialog never loses it.
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ApiError, TUYA_REGIONS, type TuyaDevice, type TuyaImportJob, type TuyaImportedDevice } from "./api";
+import { ApiError, TUYA_REGIONS, type TuyaDevice, type TuyaImportJob, type TuyaImportedDevice, type TuyaTransport } from "./api";
 
 export type TuyaImportClient = {
   startTuyaImport: (gatewayId: string, input: { region: string; access_id: string; access_secret: string }) => Promise<TuyaImportJob>;
@@ -18,6 +18,7 @@ export const CREDENTIAL = /^[A-Za-z0-9]{8,64}$/;
 const STAGE_LABEL: Record<TuyaImportJob["stage"], string> = {
   token: "เข้าสู่ระบบ Tuya IoT",
   devices: "ดึงรายการอุปกรณ์และคีย์",
+  factory: "อ่านข้อมูล Bluetooth จากโรงงาน",
   models: "อ่านจุดข้อมูล (DP) ของแต่ละรุ่น",
   saving: "เข้ารหัสคีย์และบันทึก",
   done: "เสร็จแล้ว",
@@ -52,18 +53,61 @@ export const regionLabel = (id: string) => TUYA_REGIONS.find((r) => r.id === id)
 /**
  * What a device of the import can do locally, in the order that decides it. One rule for every place that offers
  * "ลงทะเบียน" (discovery, the Edge panel, this table): a device with a usable key that can work locally may be
- * registered; not being seen on the LAN yet is only a warning, since the Edge connects as soon as it hears it.
+ * registered; not being seen yet is only a warning, since the Edge connects as soon as it hears it.
+ *
+ * Tuya BLE (docs/platform/tuya-ble.md): a device an owner/admin set to Bluetooth is local, battery sensors included.
+ * One the Edge only heard over Bluetooth is a candidate (`ble: "candidate"`): it must be set to Bluetooth first,
+ * never automatically.
  */
-export function tuyaVerdict(d: { sub: boolean; local_capable: boolean; has_key: boolean; lan_seen?: boolean }): { label: string; ok: boolean; warn?: string } {
-  if (d.sub) return { label: "ผ่าน hub Tuya · ไม่รองรับ", ok: false };
-  if (!d.local_capable) return { label: "อุปกรณ์แบตเตอรี่ · ใช้แบบ local ไม่ได้", ok: false };
+export function tuyaVerdict(d: {
+  sub: boolean;
+  local_capable: boolean;
+  has_key: boolean;
+  lan_seen?: boolean;
+  transport?: TuyaTransport;
+  ble_seen?: boolean;
+  ble_capable?: boolean;
+  readonly?: boolean;
+  rssi?: number | null;
+}): { label: string; ok: boolean; warn?: string; ble?: "candidate" | "set" } {
+  if (d.sub) return { label: "ผ่าน hub Tuya · ใช้แบบ local ไม่ได้ (ใช้โหมด Tuya Cloud แทน)", ok: false };
   if (!d.has_key) return { label: "ไม่ได้รับคีย์จาก Tuya", ok: false };
-  if (d.lan_seen === false) return { label: "ใช้แบบ local ได้", ok: true, warn: LAN_WARNING };
-  return { label: "ใช้แบบ local ได้", ok: true };
+  if (d.transport === "ble") {
+    const label = d.readonly ? "Bluetooth · อ่านค่าอย่างเดียว (กลอน)" : "ใช้ทาง Bluetooth ได้";
+    return d.ble_seen === false ? { label, ok: true, warn: BLE_WARNING, ble: "set" } : { label, ok: true, ble: "set" };
+  }
+  if (d.local_capable) {
+    if (d.lan_seen === false) return { label: "ใช้แบบ local ได้ (Wi‑Fi)", ok: true, warn: LAN_WARNING };
+    return { label: "ใช้แบบ local ได้ (Wi‑Fi)", ok: true };
+  }
+  if (d.ble_seen) return { label: `พบทาง BLE${d.rssi != null ? ` · ${d.rssi} dBm` : ""} · ตั้งเป็น Bluetooth ก่อนลงทะเบียน`, ok: false, ble: "candidate" };
+  if (d.ble_capable) return { label: "อาจเป็นอุปกรณ์ Bluetooth · BLE ไม่อยู่ในระยะ", ok: false, warn: BLE_WARNING, ble: "candidate" };
+  return { label: "อุปกรณ์แบตเตอรี่ไม่มีข้อมูล Bluetooth · ถ้าเป็น Bluetooth Mesh ใช้โหมด Tuya Cloud", ok: false };
 }
 
 /** Shown next to a registrable device the Edge has not heard on the LAN yet. */
 export const LAN_WARNING = "ยังไม่พบใน LAN · ตรวจว่าเปิดอยู่และอยู่วง LAN เดียวกับ Pi · ลงทะเบียนได้ Aether Edge จะเชื่อมต่อเมื่อพบ";
+
+/** Shown next to a Bluetooth device the Edge has not heard advertising yet. */
+export const BLE_WARNING = "ยังไม่ได้ยินสัญญาณ Bluetooth · วาง Pi ให้ห่างไม่เกิน ~10 เมตร และติดตั้ง Aether Edge แบบ --ble · อุปกรณ์แบตเตอรี่อาจส่งสัญญาณเป็นช่วง ๆ";
+
+/** How a device is reached, for the "ทาง" column: the transport an owner/admin set, or what the Edge has seen. */
+export function transportLabel(d: TuyaDevice | undefined): string {
+  if (!d) return "—";
+  if (d.transport === "ble") return `Bluetooth${d.ble_seen ? `${d.rssi != null ? ` · ${d.rssi} dBm` : " · ได้ยินแล้ว"}` : " · ยังไม่ได้ยิน"}`;
+  if (d.lan_seen) return `Wi‑Fi · พบที่ ${d.ip || "?"}${d.version ? ` · v${d.version}` : ""}`;
+  if (d.detected === "ble_candidate") return `ได้ยินทาง BLE${d.rssi != null ? ` · ${d.rssi} dBm` : ""}`;
+  return "ยังไม่พบ";
+}
+
+/** The pairing state of a Bluetooth device, when there is something to say. */
+export function blePairing(d: TuyaDevice): string {
+  if (d.transport !== "ble" && d.detected !== "ble_candidate") return "";
+  if (d.key_status === "rejected" || d.key_status === "suspect") return "คีย์ไม่ตรง · นำเข้าจาก Tuya อีกครั้ง";
+  if (d.bound === false) return "อุปกรณ์ไม่ได้ผูกกับแอปแล้ว · เพิ่มในแอป Smart Life แล้วนำเข้าอีกครั้ง";
+  if (d.transport === "ble" && d.last_read_at) return `อ่านค่าล่าสุด ${new Date(d.last_read_at).toLocaleString("th-TH")}`;
+  return "";
+}
 
 /** Keeps a credential out of password managers: plain text inputs masked with CSS, nothing that looks like a login. */
 export const credentialInput = {
@@ -140,7 +184,7 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
       <DialogContent className="topo-dialog topo-tuya-dialog">
         <DialogHeader>
           <DialogTitle>นำเข้าคีย์จาก Tuya</DialogTitle>
-          <DialogDescription>ดึง local key ของอุปกรณ์ Tuya Wi‑Fi ครั้งเดียวจาก Tuya IoT Platform · หลังจากนี้ Aether Edge คุยกับอุปกรณ์ในวง LAN เองโดยไม่ใช้ Tuya cloud</DialogDescription>
+          <DialogDescription>ดึง local key ของอุปกรณ์ Tuya ครั้งเดียวจาก Tuya IoT Platform · หลังจากนี้ Aether Edge คุยกับอุปกรณ์เองทาง Wi‑Fi ในวง LAN หรือทาง Bluetooth โดยไม่ใช้ Tuya cloud</DialogDescription>
         </DialogHeader>
 
         {!job && (
@@ -226,9 +270,13 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
             )}
             {job.status === "done" && (
               <p className="topo-note">
-                พบ {job.found} · นำเข้า {job.imported} · มีคีย์ {job.with_key} · ใช้แบบ local ได้ {job.local_capable}
+                พบ {job.found} · นำเข้า {job.imported} · มีคีย์ {job.with_key} · ใช้แบบ local ได้ทาง Wi‑Fi {job.local_capable}
+                {job.ble_candidates ? ` · อาจเป็น Bluetooth ${job.ble_candidates}` : ""}
                 {job.skipped > 0 ? ` · ข้าม ${job.skipped}` : ""}
               </p>
+            )}
+            {job.status === "done" && job.factory_infos === "unavailable" && (
+              <p className="topo-note">โปรเจกต์นี้อ่านข้อมูลโรงงาน (ที่อยู่ Bluetooth) ไม่ได้ · อุปกรณ์ Bluetooth ยังจับคู่ได้จาก uuid ที่ Aether Edge ได้ยิน</p>
             )}
             {job.hint === "no_devices_try_other_region" && (
               <div className="topo-callout">
@@ -251,14 +299,25 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
                     <tr>
                       <th>อุปกรณ์</th>
                       <th>คีย์</th>
-                      <th>ใน LAN</th>
+                      <th>ทาง</th>
                       <th>สถานะ</th>
                       <th />
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((d) => {
-                      const verdict = tuyaVerdict({ sub: d.sub, local_capable: d.local_capable, has_key: d.has_key, lan_seen: d.lan?.lan_seen });
+                      const verdict = tuyaVerdict({
+                        sub: d.sub,
+                        local_capable: d.local_capable,
+                        has_key: d.has_key,
+                        lan_seen: d.lan?.lan_seen,
+                        transport: d.lan?.transport,
+                        ble_seen: d.lan?.ble_seen,
+                        ble_capable: d.lan?.ble_capable ?? d.ble_candidate,
+                        readonly: d.lan?.readonly,
+                        rssi: d.lan?.rssi,
+                      });
+                      const pairing = d.lan ? blePairing(d.lan) : "";
                       return (
                         <tr key={d.tuya_id}>
                           <td>
@@ -268,10 +327,11 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
                             </small>
                           </td>
                           <td>{d.has_key ? <code title="ลายนิ้วมือของคีย์ ไม่ใช่ตัวคีย์">{d.key_fingerprint}</code> : "—"}</td>
-                          <td>{d.lan?.lan_seen ? `พบที่ ${d.lan.ip || "?"}${d.lan.version ? ` · v${d.lan.version}` : ""}` : "ไม่พบใน LAN"}</td>
+                          <td>{transportLabel(d.lan)}</td>
                           <td>
                             <span className={`topo-verdict ${verdict.ok ? "is-ok" : "is-no"}`}>{verdict.label}</span>
                             {verdict.warn && <small className="topo-warn">{verdict.warn}</small>}
+                            {pairing && <small>{pairing}</small>}
                           </td>
                           <td>
                             {d.lan?.registered ? (
@@ -299,7 +359,9 @@ export default function TuyaImportDialog({ open, gatewayId, client, job, jobErro
                 {running ? "ปิด (นำเข้าต่อเบื้องหลัง)" : "ปิด"}
               </button>
             </div>
-            <small className="topo-note">อุปกรณ์ที่ &quot;ไม่พบใน LAN&quot; อาจยังไม่ได้เปิด Aether Edge หรืออยู่คนละวง LAN/VLAN กับ Pi · ถ้าลบแล้วเพิ่มอุปกรณ์ใหม่ในแอป คีย์จะเปลี่ยน ต้องนำเข้าอีกครั้ง</small>
+            <small className="topo-note">
+              อุปกรณ์ Wi‑Fi ที่ &quot;ยังไม่พบ&quot; อาจยังไม่ได้เปิด Aether Edge หรืออยู่คนละวง LAN/VLAN กับ Pi · อุปกรณ์ Bluetooth (รวมเซนเซอร์แบตเตอรี่) ใช้แบบ local ได้ เมื่อ owner/admin ตั้งเป็น &quot;Bluetooth&quot; ในรายการอุปกรณ์ที่นำเข้า · ถ้าลบแล้วเพิ่มอุปกรณ์ใหม่ในแอป คีย์จะเปลี่ยน ต้องนำเข้าอีกครั้ง
+            </small>
           </section>
         )}
       </DialogContent>

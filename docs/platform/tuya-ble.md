@@ -5,7 +5,9 @@ Status: design, plus the parts that need no hardware.
 - **Built:** phase B1, the protocol library `internal/tuyable` and its simulator `internal/tuyable/tuyablesim`; phase B2, the Edge
   transport (`internal/edge/ble`), migration 00043, the config gating and the sightings ingest (see "B2 as built" below). B2 is off
   everywhere until the server sets `EDGE_BLE=true` **and** an agent built with it is installed with `--ble`.
-- **Not started:** phases B3–B5: import of address, uuid and `sec_key`, classification, the BLE settings route and UI, the ESPHome proxy.
+- **Built:** phase B3, the import of address, uuid and `sec_key`, the classification, the BLE settings route and the UI (see "B3 as
+  built" below).
+- **Not started:** phase B5, the ESPHome proxy.
 - **Not verified:** nothing here has been checked against a real Tuya BLE device. Everything is checked against vectors taken from the reference implementation and against the simulator.
 
 This builds on the Wi‑Fi path:
@@ -315,6 +317,53 @@ Ubuntu with AppArmor), whether scanning must pause during a connection, how the 
 (`busy` is recognised only when the radio says so), BlueZ's connect time without a deadline of ours, and everything in the B4
 checklist.
 
+## B3 as built
+
+**Import.** After the device listing the import reads the factory records (`GET /v1.0/iot-03/devices/factory-infos`, 20 ids a call,
+never for hub sub-devices) and stores, per device, the Bluetooth address (normalised to `aa:bb:cc:dd:ee:ff` from however Tuya writes
+it), the uuid (from the listing, else the factory record) and the `sec_key` (the listing's `sec_key` or `secKey`), sealed like the
+local key and kept only alongside one. Factory records are optional: a project that may not read them still imports
+(`factory_infos: "unavailable"` in the job) and its BLE devices are matched by uuid. A re-import replaces both keys (a `sec_key` never
+outlives its local key; one listed without a local key is dropped) but keeps an address it already knew when the new import had none.
+An address of one repeated byte (`00:00:00:00:00:00`, `ff:…`) is a placeholder and counts as unknown. The job counts
+`ble_candidates`: devices with a key, not reachable over Wi‑Fi, not behind a hub, with a real factory address (a uuid alone counts only
+once the Edge hears it). The import never sets how a device is reached.
+
+**What the Edge detected.** `GET /gateways/:id/tuya/devices` adds, per device, `detected`: `wifi` when the Edge sees it broadcasting
+on the LAN, `ble_candidate` when a Bluetooth sighting matches its address (either byte order) or its uuid, `unknown` otherwise; with
+the matching sighting's signal, protocol and bound flag, `ble_capable` (a candidate: not behind a hub, and heard or with a factory
+address), `has_sec_key`, the
+BLE mode and poll interval, the last read and `readonly` for locks. Nothing is acted on from this: it is a hint for the operator.
+
+**The operator decides.** `POST /gateways/:id/tuya/devices/:tuya_id/ble` with `{transport: "ble" | "wifi" | "auto", mode, poll_seconds}`
+(owner/admin, `EDGE_BLE` on, audited as `tuya.transport_set_<transport>:<tuya id>` or `tuya.ble_settings_changed:<tuya id>` on the
+gateway; `audit_logs` has no detail column, so the device is named after the action, like `tuya.key_forgotten:<tuya id>`) is the only
+way a device becomes BLE.
+Bluetooth needs an address or uuid and a device not behind a hub (`ble_address_unknown`); the poll interval is 5 minutes to a day;
+the transport of a registered device does not change (`409 registered`: remove the registration first). Registration follows it:
+the BLE profile only for a device set to BLE (`ble_not_confirmed`), the Wi‑Fi profile never for one (`set_to_ble`), also when a
+registration moves to another gateway or is restored. Create, move and restore check under the gateway row `FOR SHARE`, the row the
+transport change holds `FOR UPDATE`, so a registration and a change of the same device never interleave. A sighting records the
+advertised protocol only while none is known; later sightings do not change it.
+
+**Discovery.** A device set to BLE is listed with source `tuya_ble` and the BLE profile; one only heard over Bluetooth stays source
+`tuya` with `ble_seen: true` and no profile. With `EDGE_BLE` off, `tuya_ble` devices are left out and counted (`hidden_ble`, with
+`edge_ble: false`), and the page says why.
+
+**UI.**
+- The import table's "ทาง" column shows Wi‑Fi (where the Edge saw it), Bluetooth (signal) or nothing yet, with a pairing line (key
+  refused, no longer bound to the app, last read).
+- Each imported device that may be Bluetooth gets "ใช้ทาง Bluetooth": a small form to confirm, with the mode and read interval. A
+  device set to Bluetooth gets "ตั้งค่า Bluetooth" and, while unregistered, "กลับไปใช้ Wi‑Fi". Locks say they are read-only.
+- The installer offers `--ble` with the host requirements (BlueZ running, not blocked by rfkill, the narrowed D-Bus policy the
+  installer writes). An agent older than 0.2.0 is told to update and reinstall with `--ble`; the steps show the radio's state.
+- A registered BLE device's inspector shows its signal, mode, interval, last read and offline reason in Bluetooth terms.
+
+**Tests.** `backend/tests/edge_ble_import_test.go` (import with a fake cloud: stored address, uuid and sealed `sec_key` in both
+spellings; nothing in the clear; classification by reversed address and by uuid; owner/admin only; bad settings; registration rules;
+discovery; `EDGE_BLE` off; another workspace; re-import without factory records keeps the address and the choice; forgetting the key
+drops the `sec_key`), `internal/adapters/tuyacloud/factory_test.go` (batching, `secKey`), `internal/adapters/edge/mac_test.go`.
+
 ## Phases
 
 | Phase | Content | Hardware |
@@ -322,7 +371,7 @@ checklist.
 | B0 | Pin the references and generate vectors (done). Run a scan spike in a `cap_drop: ALL` container on Raspberry Pi OS and on Ubuntu (AppArmor), and record the D-Bus policy needed. Check `uuid`, `sec_key` and `factory-infos` against a real Tuya project. | Linux host with Bluetooth |
 | B1 | `internal/tuyable` and `tuyablesim` (done). | None |
 | B2 | `internal/edge/ble`: `Radio` interface, BlueZ radio, scheduler, sessions. Agent config and health. Migration 00043, route, config gating (done; image not yet published). | BlueZ smoke test only |
-| B3 | `FactoryInfos` and `sec_key` in the import, classification, BLE settings route, UI, OpenAPI. | None (fake cloud) |
+| B3 | `FactoryInfos` and `sec_key` in the import, classification, BLE settings route, UI, OpenAPI (done). | None (fake cloud) |
 | B4 | Real-device validation (below). | Devices |
 | B5 | Optional ESPHome proxy radio behind the same `Radio` interface. | ESP32 |
 

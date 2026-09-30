@@ -311,6 +311,13 @@ type Device struct {
 	// them (tinytuya reads gateway_id from the per-user listing); not every endpoint returns them.
 	GatewayID string `json:"gateway_id"`
 	NodeID    string `json:"node_id"`
+	// UUID identifies a Tuya BLE device over the air (its advertisement carries it encrypted); SecKey is the extra
+	// key newer BLE devices (FD50) mix into the session key. Both come from the listing when Tuya returns them
+	// (docs/platform/tuya-ble.md); SecKey is a secret like LocalKey and is sealed at once. Some listings spell it
+	// secKey: SecKeyCamel catches that spelling and Devices folds it into SecKey.
+	UUID        string `json:"uuid"`
+	SecKey      string `json:"sec_key"`
+	SecKeyCamel string `json:"secKey"`
 }
 
 // Devices lists the linked account's devices, at most MaxDevices. The associated-users endpoint is Tuya's current
@@ -342,7 +349,13 @@ func fallback(e error) bool {
 
 func capped(list []Device) []Device {
 	if len(list) > MaxDevices {
-		return list[:MaxDevices]
+		list = list[:MaxDevices]
+	}
+	for i := range list {
+		if list[i].SecKey == "" {
+			list[i].SecKey = list[i].SecKeyCamel
+		}
+		list[i].SecKeyCamel = ""
 	}
 	return list
 }
@@ -386,6 +399,47 @@ func (c *Client) paged(ctx context.Context, path string, base url.Values, cursor
 		cursor = next
 	}
 	return capped(out), nil
+}
+
+// FactoryInfo is a device's factory record (GET /v1.0/iot-03/devices/factory-infos): the Bluetooth address a BLE
+// device advertises from, its uuid and its serial number. Tuya writes the address without separators and, for
+// some products, with its bytes reversed; tuya.NormalizeMAC and the matching take care of both.
+type FactoryInfo struct {
+	ID   string `json:"id"`
+	UUID string `json:"uuid"`
+	MAC  string `json:"mac"`
+	SN   string `json:"sn"`
+}
+
+// FactoryBatch is how many device ids one factory-infos call takes (Tuya's documented limit).
+const FactoryBatch = 20
+
+// FactoryInfos reads the factory records of the given devices, FactoryBatch ids per call. Ids that are not device
+// ids are skipped rather than sent; a failed batch fails the whole call (the import treats it as optional).
+func (c *Client) FactoryInfos(ctx context.Context, ids []string) ([]FactoryInfo, error) {
+	valid := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if deviceIDPattern.MatchString(id) {
+			valid = append(valid, id)
+		}
+	}
+	out := []FactoryInfo{}
+	for start := 0; start < len(valid) && start < MaxDevices; start += FactoryBatch {
+		end := min(start+FactoryBatch, len(valid))
+		raw, e := c.get(ctx, "/v1.0/iot-03/devices/factory-infos", url.Values{"device_ids": {strings.Join(valid[start:end], ",")}})
+		if e != nil {
+			return nil, e
+		}
+		var list []FactoryInfo
+		if json.Unmarshal(raw, &list) != nil {
+			return nil, apiError(ErrResponse, 0)
+		}
+		if len(list) > end-start {
+			list = list[:end-start]
+		}
+		out = append(out, list...)
+	}
+	return out, nil
 }
 
 // Model returns a device's data-point model document: the v2.0 thing model, or, when the project may not read

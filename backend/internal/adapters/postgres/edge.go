@@ -199,7 +199,9 @@ func saveBLESightings(tx *gorm.DB, tenant, gateway string, payload []byte, now t
 			protocol = 0
 		}
 		// Some devices' factory records list the address byte-reversed: either order matches.
-		if e := tx.Exec(`UPDATE core.tuya_devices SET rssi=?,ble_protocol=CASE WHEN ?<>0 THEN ? ELSE ble_protocol END
+		// The advertised protocol is recorded once, when none is known: a later sighting (anyone in radio range can
+		// send one) never changes it for a device already set to BLE.
+		if e := tx.Exec(`UPDATE core.tuya_devices SET rssi=?,ble_protocol=CASE WHEN ble_protocol=0 AND ?<>0 THEN ? ELSE ble_protocol END
     WHERE gateway_id=? AND transport='ble' AND removed_at IS NULL AND (ble_mac IN (?,?) OR (?<>'' AND ble_uuid=?))`,
 			s.RSSI, protocol, protocol, gateway, s.MAC, reversedMAC(s.MAC), s.UUID, s.UUID).Error; e != nil {
 			return e
@@ -213,13 +215,7 @@ func saveBLESightings(tx *gorm.DB, tenant, gateway string, payload []byte, now t
 }
 
 // reversedMAC is a Bluetooth address with its bytes in the other order.
-func reversedMAC(m string) string {
-	parts := strings.Split(m, ":")
-	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
-		parts[i], parts[j] = parts[j], parts[i]
-	}
-	return strings.Join(parts, ":")
-}
+func reversedMAC(m string) string { return edge.ReversedMAC(m) }
 
 // bumpEdgeConfig moves an Aether Edge's configuration revision, so the agent fetches what it must connect to
 // again. It does nothing for a gateway of any other model.
@@ -377,7 +373,8 @@ func (r *Repository) SaveTuyaDevices(ctx context.Context, p domain.Principal, ga
 		now := time.Now().UTC()
 		for _, d := range devices {
 			id := strings.ToLower(strings.TrimSpace(d.TuyaID))
-			if !edge.ValidDevice(id) || tuya.Validate(d.Spec) != nil || len(d.LocalKeySealed) > 512 || !fingerprintPattern.MatchString(d.KeyFingerprint) {
+			if !edge.ValidDevice(id) || tuya.Validate(d.Spec) != nil || len(d.LocalKeySealed) > 512 || !fingerprintPattern.MatchString(d.KeyFingerprint) ||
+				len(d.SecKeySealed) > 512 || (d.BLEMAC != "" && !edge.ValidMAC(d.BLEMAC)) || !bleUUIDPattern.MatchString(d.BLEUUID) {
 				return domain.ErrInvalid
 			}
 			tr := tuya.Translate(d.Category, d.Spec)
@@ -387,21 +384,29 @@ func (r *Repository) SaveTuyaDevices(ctx context.Context, p domain.Principal, ga
 			if len(spec) > 65536 || len(tr.Exposes) > 65536 || len(dpMap) > 65536 {
 				return domain.ErrInvalid
 			}
-			var key any
+			var key, secKey any
 			status, fingerprint := "missing", ""
 			if d.LocalKeySealed != "" {
 				key, status, fingerprint = d.LocalKeySealed, "ok", d.KeyFingerprint
+				if d.SecKeySealed != "" {
+					secKey = d.SecKeySealed // a sec_key is only of use together with the local key it came with
+				}
 			}
+			// A re-import replaces the keys (a re-paired device has new ones; a sec_key never outlives its local key)
+			// but keeps a BLE address or uuid it already knew when this import's factory records had none. How the
+			// device is reached (transport and its BLE settings) is the operator's choice and is never touched here.
 			if e := tx.Exec(`INSERT INTO core.tuya_devices(tenant_id,gateway_id,tuya_id,name,tuya_category,product_id,sub,spec,exposes,dp_map,gangs,category,local_capable,
-      local_key_sealed,key_fingerprint,key_status,ip,version,imported_at,updated_at,removed_at)
-    SELECT ?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?,?,?,?,?,coalesce(l.ip,''),coalesce(l.version,''),?,?,NULL
+      local_key_sealed,key_fingerprint,key_status,ip,version,ble_mac,ble_uuid,sec_key_sealed,imported_at,updated_at,removed_at)
+    SELECT ?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?,?,?,?,?,coalesce(l.ip,''),coalesce(l.version,''),?,?,?,?,?,NULL
     FROM (SELECT 1) one LEFT JOIN core.edge_lan_devices l ON l.gateway_id=? AND l.device_id=?
     ON CONFLICT(tenant_id,gateway_id,tuya_id) DO UPDATE SET name=EXCLUDED.name,tuya_category=EXCLUDED.tuya_category,product_id=EXCLUDED.product_id,sub=EXCLUDED.sub,
       spec=EXCLUDED.spec,exposes=EXCLUDED.exposes,dp_map=EXCLUDED.dp_map,gangs=EXCLUDED.gangs,category=EXCLUDED.category,local_capable=EXCLUDED.local_capable,
-      local_key_sealed=EXCLUDED.local_key_sealed,sec_key_sealed=NULL,key_fingerprint=EXCLUDED.key_fingerprint,key_status=EXCLUDED.key_status,imported_at=EXCLUDED.imported_at,
-      updated_at=EXCLUDED.updated_at,removed_at=NULL`,
+      local_key_sealed=EXCLUDED.local_key_sealed,sec_key_sealed=EXCLUDED.sec_key_sealed,key_fingerprint=EXCLUDED.key_fingerprint,key_status=EXCLUDED.key_status,
+      ble_mac=CASE WHEN EXCLUDED.ble_mac<>'' THEN EXCLUDED.ble_mac ELSE core.tuya_devices.ble_mac END,
+      ble_uuid=CASE WHEN EXCLUDED.ble_uuid<>'' THEN EXCLUDED.ble_uuid ELSE core.tuya_devices.ble_uuid END,
+      imported_at=EXCLUDED.imported_at,updated_at=EXCLUDED.updated_at,removed_at=NULL`,
 				p.TenantID, gateway, id, clipText(d.Name, 128), clipText(d.Category, 32), clipText(d.ProductID, 64), d.Sub, string(spec), string(tr.Exposes), string(dpMap), string(gangs),
-				tr.Category, tr.LocalCapable && !d.Sub, key, fingerprint, status, now, now, gateway, id).Error; e != nil {
+				tr.Category, tr.LocalCapable && !d.Sub, key, fingerprint, status, d.BLEMAC, d.BLEUUID, secKey, now, now, gateway, id).Error; e != nil {
 				return e
 			}
 			saved++
@@ -419,6 +424,9 @@ func (r *Repository) SaveTuyaDevices(ctx context.Context, p domain.Principal, ga
 
 // fingerprintPattern is a key fingerprint as stored: a short lower-case hex prefix of the key's hash.
 var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{0,16}$`)
+
+// bleUUIDPattern is a Tuya BLE uuid as core.tuya_devices.ble_uuid allows it (empty when unknown).
+var bleUUIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{0,64}$`)
 
 // clipText is edge.Clip: bounded, NUL-free, never split inside a UTF-8 character.
 func clipText(s string, n int) string { return edge.Clip(s, n) }

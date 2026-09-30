@@ -17,11 +17,15 @@ type Issue struct {
 	Properties map[string]json.RawMessage
 }
 
-// CloudDevice is one device the fake project lists, with its v1.1 specification document (the "result").
+// CloudDevice is one device the fake project lists, with its v1.1 specification document (the "result"). LocalKey,
+// UUID and SecKey are listed like Tuya lists a device's (SecKeyCamel spells it secKey, as some listings do); MAC is
+// its factory record's address (factory-infos), as Tuya writes it. Sub marks a device behind a Tuya hub.
 type CloudDevice struct {
 	ID, Name, Category, ProductID string
 	Spec                          json.RawMessage
 	Properties                    []tuyacloud.Property
+	LocalKey, UUID, SecKey, MAC   string
+	SecKeyCamel, Sub              bool
 }
 
 // API is a fake Tuya OpenAPI for one project.
@@ -87,7 +91,7 @@ func (a *API) Issues() []Issue {
 	return append([]Issue(nil), a.issues...)
 }
 
-// Calls counts requests per route ("token", "devices", "specifications", "model", "properties", "issue").
+// Calls counts requests per route ("token", "devices", "factory", "specifications", "model", "properties", "issue").
 func (a *API) Calls(route string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -130,9 +134,40 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 		a.calls["devices"]++
 		list := []map[string]any{}
 		for _, d := range a.devices {
-			list = append(list, map[string]any{"id": d.ID, "name": d.Name, "category": d.Category, "product_id": d.ProductID, "online": true})
+			item := map[string]any{"id": d.ID, "name": d.Name, "category": d.Category, "product_id": d.ProductID, "online": true}
+			if d.UUID != "" {
+				item["uuid"] = d.UUID
+			}
+			if d.LocalKey != "" {
+				item["local_key"] = d.LocalKey
+			}
+			if d.SecKey != "" && d.SecKeyCamel {
+				item["secKey"] = d.SecKey
+			} else if d.SecKey != "" {
+				item["sec_key"] = d.SecKey
+			}
+			if d.Sub {
+				item["sub"] = true
+			}
+			list = append(list, item)
 		}
 		reply(w, map[string]any{"devices": list, "has_more": false})
+	case path == "/v1.0/iot-03/devices/factory-infos":
+		a.calls["factory"]++
+		ids := strings.Split(r.URL.Query().Get("device_ids"), ",")
+		if len(ids) > tuyacloud.FactoryBatch {
+			refuse(w, 1109, "param is illegal")
+			return
+		}
+		list := []map[string]any{}
+		for _, id := range ids {
+			for _, d := range a.devices {
+				if d.ID == id && d.MAC != "" {
+					list = append(list, map[string]any{"id": d.ID, "uuid": d.UUID, "mac": d.MAC, "sn": "fake-sn"})
+				}
+			}
+		}
+		reply(w, list)
 	case len(parts) == 5 && parts[0] == "v2.0" && parts[4] == "model":
 		a.calls["model"]++
 		refuse(w, 1106, "permission deny") // the project may read only v1.1 specifications

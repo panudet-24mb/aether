@@ -125,6 +125,7 @@ type Repository interface {
 	TuyaDevices(context.Context, domain.Principal, string) ([]domain.TuyaDevice, error)
 	EdgeStatus(context.Context, domain.Principal, string) (domain.EdgeStatus, error)
 	ForgetTuyaKey(context.Context, domain.Principal, string, string) error
+	SetTuyaBLE(context.Context, domain.Principal, string, string, domain.TuyaBLESettings) (domain.TuyaDevice, error)
 	CreateEdgeInstallCode(context.Context, domain.Principal, string, string, string, time.Time) error
 	BootstrapEdge(context.Context, string, string, string, string) (string, string, string, error)
 	RotateGatewayToken(context.Context, domain.Principal, string, string) error

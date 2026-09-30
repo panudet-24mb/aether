@@ -39,10 +39,11 @@ func minewDevice(d domain.DiscoveredDevice) bool {
 	return d.Source == "z2m" || tuyaSource(d.Source) || d.Model != "" || (d.Kind != "" && d.Kind != "beacon")
 }
 
-// tuyaSource reports a device listed by an Aether Edge: imported ("tuya") or only seen on its LAN ("tuya_lan").
-// Both are deliberate (an import, a device on the site's own network), never a passing phone.
+// tuyaSource reports a device listed by an Aether Edge: imported ("tuya", or "tuya_ble" once set to Bluetooth) or
+// only seen on its LAN ("tuya_lan"), or found by a Tuya Cloud link ("tuya_cloud"). All are deliberate (an import, a
+// device on the site's own network), never a passing phone.
 func tuyaSource(source string) bool {
-	return source == "tuya" || source == "tuya_lan" || source == "tuya_cloud"
+	return source == "tuya" || source == "tuya_ble" || source == "tuya_lan" || source == "tuya_cloud"
 }
 
 func discoveryRoutes(r fiber.Router, s *app.Service) {
@@ -64,7 +65,7 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 		since := time.Now().Add(-time.Duration(minutes) * time.Minute)
 		out := []domain.DiscoveredDevice{}
 		hidden := map[string]int{}
-		total := 0
+		total, bleHidden := 0, 0
 		for _, g := range gateways {
 			devices, e := s.Repo.DiscoverDevices(c.Context(), p, g.ID, since)
 			if e != nil {
@@ -75,6 +76,10 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 				if d.Source == "tuya_cloud" && !s.TuyaCloudEnabled {
 					continue // Tuya Cloud mode is off here (TUYA_CLOUD)
 				}
+				if d.Source == "tuya_ble" && !s.EdgeBLEEnabled {
+					bleHidden++ // Tuya BLE is off here (EDGE_BLE): nothing to register it as; the page says so
+					continue
+				}
 				if tuyaSource(d.Source) {
 					// An imported Tuya device registers as the Tuya Wi-Fi profile when it can be reached locally; one
 					// only seen on the LAN has no key yet, and a battery sensor never answers locally: no profile.
@@ -84,6 +89,13 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 					// Through Tuya Cloud every listed device can be registered, battery sensors included.
 					if d.Source == "tuya_cloud" {
 						d.Profile = domain.DeviceProfileByID(domain.TuyaCloudProfile)
+					}
+					// One an owner or admin set to Bluetooth registers as the Tuya BLE profile, battery sensors included.
+					if d.Source == "tuya_ble" {
+						d.Profile = domain.DeviceProfileByID(domain.TuyaBLEProfile)
+					}
+					if d.Source != "tuya" && d.Source != "tuya_ble" {
+						d.BLESeen = nil
 					}
 					if kept < discoveryPerGateway {
 						kept++
@@ -119,6 +131,7 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 				out = append(out, d)
 			}
 		}
-		return c.JSON(fiber.Map{"items": out, "window_minutes": minutes, "window_hours": float64(minutes) / 60, "limit_per_gateway": discoveryPerGateway, "hidden_unknown": total, "hidden_by_gateway": hidden, "all": all})
+		return c.JSON(fiber.Map{"items": out, "window_minutes": minutes, "window_hours": float64(minutes) / 60, "limit_per_gateway": discoveryPerGateway, "hidden_unknown": total, "hidden_by_gateway": hidden, "all": all,
+			"edge_ble": s.EdgeBLEEnabled, "hidden_ble": bleHidden})
 	})
 }

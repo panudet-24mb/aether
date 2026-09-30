@@ -2,14 +2,15 @@
 // Aether Edge on the gateway page: the agent's live status, the one-line installer for the site host (with an
 // optional Zigbee2MQTT on the same host), the imported Tuya devices, and the key status of one Tuya device.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, KeyRound, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
+import { Bluetooth, Download, KeyRound, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
 import { ApiError, type EdgeInstallCode, type EdgeStatus, type Gateway, type TuyaDevice, type TuyaImportJob, type TuyaKeyStatus } from "./api";
+import TuyaBLESettings, { BLE_MODE_LABEL, type TuyaBLEClient } from "./ble-settings";
 import { Z2M_GATEWAY_MODEL } from "./catalog";
 import { CopyButton, Step } from "./panel-bits";
-import TuyaImportDialog, { tuyaVerdict, type TuyaImportClient } from "./tuya-import";
+import TuyaImportDialog, { blePairing, transportLabel, tuyaVerdict, type TuyaImportClient } from "./tuya-import";
 import { useLatest } from "./use-latest";
 
-export type EdgeClient = TuyaImportClient & {
+export type EdgeClient = TuyaImportClient & TuyaBLEClient & {
   edgeStatus: (gatewayId: string) => Promise<EdgeStatus>;
   edgeInstallCode: (gatewayId: string, zigbeeGatewayId?: string) => Promise<EdgeInstallCode>;
   forgetTuyaKey: (gatewayId: string, tuyaId: string) => Promise<void>;
@@ -33,6 +34,45 @@ export const REASON_LABEL: Record<string, string> = {
   not_found: "Aether Edge ไม่พบอุปกรณ์นี้ใน LAN",
 };
 
+/** The same reasons for a device reached over Bluetooth. */
+export const BLE_REASON_LABEL: Record<string, string> = {
+  busy: "มีเครื่องอื่นเชื่อม Bluetooth กับอุปกรณ์นี้อยู่ (แอปในมือถือ หรือ hub Tuya) · ปิด Bluetooth ของมือถือ หรือถอดออกจาก hub ก่อน",
+  unreachable: "เชื่อม Bluetooth ไม่ได้ · ขยับ Pi ให้ใกล้อุปกรณ์ขึ้น หรือเปลี่ยนแบตเตอรี่",
+  auth_failed: "อุปกรณ์ปฏิเสธคีย์ · มักเกิดจากลบแล้วเพิ่มอุปกรณ์ใหม่ในแอป นำเข้าจาก Tuya อีกครั้ง",
+  not_found: "Aether Edge ยังไม่ได้ยินสัญญาณ Bluetooth ของอุปกรณ์นี้",
+};
+
+/** The agent's Bluetooth radio (EdgeStatus.ble_state). */
+const RADIO_LABEL: Record<string, string> = {
+  "": "Aether Edge รุ่นนี้ยังไม่รองรับ Bluetooth",
+  off: "ติดตั้งไว้โดยไม่เปิด Bluetooth",
+  ok: "Bluetooth พร้อม",
+  no_adapter: "ไม่พบอะแดปเตอร์ Bluetooth บนเครื่อง",
+  no_permission: "Aether Edge ใช้ Bluetooth ของเครื่องไม่ได้ (ต้องติดตั้งแบบ --ble)",
+  error: "Bluetooth ของเครื่องมีปัญหา · ดู log ของ Aether Edge",
+};
+
+/** Agents older than this cannot reach Tuya BLE devices. */
+export const BLE_MIN_VERSION = "0.2.0";
+
+/** Whether version a is older than b (dotted numbers; anything unparsable counts as older). */
+export function olderVersion(a: string, b: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map((x) => Number.parseInt(x, 10));
+  const x = parse(a);
+  const y = parse(b);
+  if (x.some(Number.isNaN)) return true;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
+/** The install command with --ble added, whether or not it already passes options to the script. */
+export function withBLE(command: string): string {
+  return command.includes(" -s -- ") ? `${command} --ble` : `${command} -s -- --ble`;
+}
+
 function ago(iso: string | null | undefined, now: number): string {
   if (!iso) return "—";
   const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
@@ -42,8 +82,10 @@ function ago(iso: string | null | undefined, now: number): string {
 }
 
 /** Live status + installer + Tuya import for one Aether Edge gateway. */
-export default function EdgePanel({ gateway, gateways, client, canManage, refreshKey, onNotice, onRegister, onReload, onStatus }: {
+export default function EdgePanel({ gateway, gateways, client, canManage, bleEnabled = false, refreshKey, onNotice, onRegister, onReload, onStatus }: {
   gateway: Gateway;
+  /** The server has Tuya BLE on (EDGE_BLE): offer --ble and Bluetooth settings. */
+  bleEnabled?: boolean;
   /** Every gateway of the workspace, to pick a Zigbee2MQTT gateway to install on the same host. */
   gateways: Gateway[];
   client: EdgeClient;
@@ -63,6 +105,7 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
   const [statusError, setStatusError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [zigbee, setZigbee] = useState(false);
+  const [ble, setBLE] = useState(false);
   const zigbeeGateways = gateways.filter((g) => g.model === Z2M_GATEWAY_MODEL);
   const [zigbeeGateway, setZigbeeGateway] = useState("");
   const [slzbIP, setSlzbIP] = useState("");
@@ -169,11 +212,15 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
   const chosenZigbee = zigbeeGateways.find((g) => g.id === zigbeeGateway) ?? zigbeeGateways[0];
   const zigbeeReady = !zigbee || (!!chosenZigbee && IPV4.test(slzbIP.trim()) && (uiIP.trim() === "" || (IPV4.test(uiIP.trim()) && uiIP.trim() !== "0.0.0.0")));
   // The server's command carries no code and a <SLZB_IP> placeholder; the page fills in what was typed.
-  const command = code ? code.install_command.replace("<SLZB_IP>", slzbIP.trim()) + (code.zigbee_paired && uiIP.trim() ? ` --zigbee-ui ${uiIP.trim()}` : "") : "";
+  const zigbeeCommand = code ? code.install_command.replace("<SLZB_IP>", slzbIP.trim()) + (code.zigbee_paired && uiIP.trim() ? ` --zigbee-ui ${uiIP.trim()}` : "") : "";
+  const command = code && ble && bleEnabled ? withBLE(zigbeeCommand) : zigbeeCommand;
   const installURL = code?.install_url ?? `${typeof window === "undefined" ? "" : window.location.origin}/edge/install.sh`;
   const updateCommand = `curl -fsSL ${installURL} | sudo sh -s -- --update`;
   const online = status?.state === "online";
   const keys = status?.keys ?? { ok: 0, rejected: 0, suspect: 0, missing: 0 };
+  const bleDevices = devices.filter((d) => d.transport === "ble");
+  const bleOutdated = !!status?.version && olderVersion(status.version, BLE_MIN_VERSION);
+  const radioOK = status?.ble_state === "ok";
 
   return (
     <section className="topo-edge-panel" aria-label="Aether Edge">
@@ -187,6 +234,20 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
         />
         <Step done={(status?.lan_devices ?? 0) > 0} active={online && (status?.lan_devices ?? 0) === 0} label="3 · พบอุปกรณ์ Tuya ใน LAN" detail={status ? `${status.lan_devices} อุปกรณ์ · เชื่อมต่ออยู่ ${status.devices_connected}` : undefined} />
         <Step done={keys.ok > 0} active={(status?.lan_devices ?? 0) > 0 && keys.ok === 0} label="4 · นำเข้าคีย์จาก Tuya" detail={status ? `ใช้ได้ ${keys.ok} · ไม่ตรง ${keys.rejected + keys.suspect} · ยังไม่มี ${keys.missing} · ลงทะเบียนแล้ว ${status.registered}` : undefined} />
+        {bleEnabled && (
+          <Step
+            done={radioOK}
+            active={online && !radioOK && (bleDevices.length > 0 || ble)}
+            label="Bluetooth (ไม่บังคับ)"
+            detail={
+              !status?.state
+                ? "ติดตั้งแบบ --ble เพื่อใช้อุปกรณ์ Tuya Bluetooth"
+                : bleOutdated
+                  ? `Aether Edge v${status.version} ยังไม่รองรับ Bluetooth · อัปเดตเป็น v${BLE_MIN_VERSION} ขึ้นไป แล้วติดตั้งใหม่แบบ --ble`
+                  : `${RADIO_LABEL[status.ble_state] ?? status.ble_state}${radioOK ? ` · ได้ยิน ${status.ble_seen} · เชื่อมอยู่ ${status.ble_connected}` : ""}`
+            }
+          />
+        )}
       </ol>
       {statusError && <p className="topo-warn">{statusError}</p>}
 
@@ -216,6 +277,18 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
               <label className="topo-check">
                 <input type="checkbox" checked={zigbee} onChange={(e) => setZigbee(e.target.checked)} /> ติดตั้ง Zigbee2MQTT ด้วย (ต่อกับ Zigbee coordinator เช่น SLZB-06MU)
               </label>
+              {bleEnabled && (
+                <>
+                  <label className="topo-check">
+                    <input type="checkbox" checked={ble} onChange={(e) => setBLE(e.target.checked)} /> <Bluetooth size={13} /> เปิด Bluetooth สำหรับอุปกรณ์ Tuya Bluetooth (--ble)
+                  </label>
+                  {ble && (
+                    <small className="topo-note">
+                      เครื่องต้องมี Bluetooth และ BlueZ ทำงานอยู่ (<code>sudo apt install bluez && sudo systemctl enable --now bluetooth</code>) และไม่ถูกปิดด้วย rfkill (<code>sudo rfkill unblock bluetooth</code>) · ตัวติดตั้งตรวจให้ก่อนใช้รหัส และเขียนสิทธิ์ D-Bus ให้ Aether Edge เรียก Bluetooth ได้เฉพาะคำสั่งที่ใช้ (สแกน เชื่อมต่อ อ่าน/เขียน) · Aether Edge ยังรันแบบไม่มีสิทธิ์พิเศษ · เครื่องที่ติดตั้งไปแล้วให้สร้างคำสั่งใหม่แล้วรันซ้ำพร้อม --ble
+                    </small>
+                  )}
+                </>
+              )}
               {zigbee &&
                 (zigbeeGateways.length === 0 ? (
                   <p className="topo-note">ยังไม่มี gateway แบบ Zigbee2MQTT · เพิ่ม gateway &quot;Zigbee2MQTT&quot; จากแถบซ้ายก่อน แล้วกลับมาสร้างคำสั่งติดตั้ง</p>
@@ -300,16 +373,29 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
           ) : (
             <ul className="topo-list topo-tuya-list">
               {devices.map((d) => {
-                const verdict = tuyaVerdict({ sub: d.sub, local_capable: d.local_capable, has_key: d.key_status !== "missing", lan_seen: d.lan_seen });
+                const verdict = tuyaVerdict({
+                  sub: d.sub,
+                  local_capable: d.local_capable,
+                  has_key: d.key_status !== "missing",
+                  lan_seen: d.lan_seen,
+                  transport: d.transport,
+                  ble_seen: d.ble_seen,
+                  ble_capable: d.ble_capable,
+                  readonly: d.readonly,
+                  rssi: d.rssi,
+                });
+                const reasons = d.transport === "ble" ? BLE_REASON_LABEL : REASON_LABEL;
+                const pairing = blePairing(d);
                 return (
                   <li key={d.tuya_id}>
                     <div className="topo-list-item">
                       <span>
                         <strong>{d.name || d.tuya_id}</strong>
                         <small>
-                          {d.tuya_category || "—"} · {d.lan_seen ? `พบที่ ${d.ip || "?"}${d.version ? ` · v${d.version}` : ""}` : "ไม่พบใน LAN"}
+                          {d.tuya_category || "—"} · {transportLabel(d)}
                           {!d.registered && d.key_status === "ok" && verdict.warn ? ` · ${verdict.warn}` : ""}
-                          {d.available === false && d.reason ? ` · ${REASON_LABEL[d.reason] ?? d.reason}` : ""}
+                          {d.available === false && d.reason ? ` · ${reasons[d.reason] ?? d.reason}` : ""}
+                          {pairing ? ` · ${pairing}` : ""}
                         </small>
                       </span>
                       <em className={`topo-key is-${d.key_status}`}>{d.key_status === "ok" ? verdict.label : KEY_LABEL[d.key_status]}</em>
@@ -326,6 +412,19 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
                         </button>
                       )}
                     </div>
+                    {bleEnabled && !d.sub && d.key_status !== "missing" && (verdict.ble || d.transport === "ble") && (
+                      <TuyaBLESettings
+                        key={`${d.tuya_id}-${d.transport}`}
+                        gatewayId={id}
+                        device={d}
+                        client={client}
+                        onNotice={onNotice}
+                        onChanged={(next) => {
+                          setDevices((list) => list.map((x) => (x.tuya_id === next.tuya_id ? next : x)));
+                          onReload();
+                        }}
+                      />
+                    )}
                   </li>
                 );
               })}
@@ -387,6 +486,7 @@ export default function EdgePanel({ gateway, gateways, client, canManage, refres
 /** Key and connection state of one registered Tuya device, for its inspector (owner/admin). */
 export function TuyaDeviceStatus({ gatewayId, tuyaId, client, canManage, refreshKey, onNotice }: {
   gatewayId: string;
+  /** The device's Tuya id; its panel keeps no state across devices (keyed by the caller). */
   tuyaId: string;
   client: EdgeClient;
   canManage: boolean;
@@ -410,10 +510,11 @@ export function TuyaDeviceStatus({ gatewayId, tuyaId, client, canManage, refresh
     load();
   }, [load, refreshKey]);
   if (!canManage || !device) return null;
+  const ble = device.transport === "ble";
   return (
     <section className="topo-tuya-status" aria-label="สถานะ Tuya">
       <h3 className="topo-h3">
-        <KeyRound size={14} /> Tuya Wi‑Fi (local)
+        {ble ? <Bluetooth size={14} /> : <KeyRound size={14} />} {ble ? "Tuya Bluetooth (local)" : "Tuya Wi‑Fi (local)"}
       </h3>
       <p>
         <em className={`topo-key is-${device.key_status}`}>{KEY_LABEL[device.key_status]}</em>
@@ -424,10 +525,23 @@ export function TuyaDeviceStatus({ gatewayId, tuyaId, client, canManage, refresh
           </small>
         )}
       </p>
-      <p className="topo-note">
-        {device.lan_seen ? `พบใน LAN ที่ ${device.ip || "?"}${device.version ? ` · โปรโตคอล v${device.version}` : ""}` : "Aether Edge ยังไม่พบอุปกรณ์นี้ใน LAN"}
-        {device.available === false && device.reason ? ` · ${REASON_LABEL[device.reason] ?? device.reason}` : ""}
-      </p>
+      {ble ? (
+        <>
+          <p className="topo-note">
+            {device.ble_seen ? `ได้ยินทาง Bluetooth${device.rssi != null ? ` · ${device.rssi} dBm` : ""}${device.ble_protocol ? ` · โปรโตคอล v${device.ble_protocol}` : ""}` : "Aether Edge ยังไม่ได้ยินสัญญาณ Bluetooth ของอุปกรณ์นี้"}
+            {` · ${BLE_MODE_LABEL[device.ble_mode] ?? device.ble_mode} · อ่านทุก ${Math.round(device.ble_poll_seconds / 60)} นาที`}
+            {device.last_read_at ? ` · อ่านล่าสุด ${new Date(device.last_read_at).toLocaleString("th-TH")}` : ""}
+            {device.available === false && device.reason ? ` · ${BLE_REASON_LABEL[device.reason] ?? device.reason}` : ""}
+            {device.readonly ? " · กลอนประตู: อ่านค่าอย่างเดียว ไม่รับคำสั่ง" : ""}
+          </p>
+          <TuyaBLESettings key={device.tuya_id} gatewayId={gatewayId} device={device} client={client} onNotice={onNotice} onChanged={setDevice} />
+        </>
+      ) : (
+        <p className="topo-note">
+          {device.lan_seen ? `พบใน LAN ที่ ${device.ip || "?"}${device.version ? ` · โปรโตคอล v${device.version}` : ""}` : "Aether Edge ยังไม่พบอุปกรณ์นี้ใน LAN"}
+          {device.available === false && device.reason ? ` · ${REASON_LABEL[device.reason] ?? device.reason}` : ""}
+        </p>
+      )}
       {device.key_status !== "missing" &&
         (confirm ? (
           <div className="topo-callout" role="alertdialog" aria-label="ยืนยันลืมคีย์">

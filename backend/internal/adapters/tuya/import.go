@@ -14,6 +14,11 @@ type Import struct {
 	Spec                              []DP
 	LocalKeySealed                    string
 	KeyFingerprint                    string
+	// For Tuya BLE (docs/platform/tuya-ble.md): the address from the device's factory record (Aether's form, or
+	// empty), its uuid, and its sec_key sealed like the local key (empty when Tuya returned none). The import stores
+	// them; it never decides how the device is reached.
+	BLEMAC, BLEUUID string
+	SecKeySealed    string
 }
 
 // Fingerprint identifies a local key without revealing it: the first 16 hex digits of its SHA-256, which is what

@@ -590,6 +590,15 @@ func (r *Repository) CreateDevice(ctx context.Context, p domain.Principal, d dom
 		if e := profileFitsGateway(tx, d.ProfileID, d.GatewayID); e != nil {
 			return e
 		}
+		// The gateway row FOR SHARE before the transport check: SetTuyaBLE changes a device's transport under the same
+		// row FOR UPDATE, so a registration and a transport change of the same device are serialised and the check
+		// below sees the committed transport.
+		if e := tx.Exec(`SELECT 1 FROM core.gateways WHERE id=? FOR SHARE`, d.GatewayID).Error; e != nil {
+			return e
+		}
+		if e := tuyaTransportFits(tx, d.ProfileID, d.GatewayID, d.ExternalID); e != nil {
+			return e
+		}
 		res := tx.Exec(`INSERT INTO core.devices(id,tenant_id,gateway_id,name,external_id,profile_id) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM core.gateways WHERE id=? AND revoked_at IS NULL)`, d.ID, p.TenantID, d.GatewayID, d.Name, d.ExternalID, d.ProfileID, d.GatewayID)
 		if res.Error != nil {
 			return res.Error
@@ -625,6 +634,28 @@ func profileFitsGateway(tx *gorm.DB, profile, gateway string) error {
 	}
 	return nil
 }
+
+// tuyaTransportFits keeps a Tuya registration's profile and its imported device's transport in step: the BLE
+// profile only for a device an owner or admin set to BLE (never from a sighting alone, docs/platform/tuya-ble.md),
+// the Wi-Fi profile never for one. A device that was not imported under the gateway is left to the other checks.
+func tuyaTransportFits(tx *gorm.DB, profile, gateway, external string) error {
+	if profile != domain.TuyaBLEProfile && profile != domain.TuyaWiFiProfile {
+		return nil
+	}
+	var transports []string
+	if e := tx.Raw(`SELECT transport FROM core.tuya_devices WHERE gateway_id=? AND tuya_id=lower(?) AND removed_at IS NULL`, gateway, external).Scan(&transports).Error; e != nil {
+		return e
+	}
+	ble := len(transports) == 1 && transports[0] == "ble"
+	switch {
+	case profile == domain.TuyaBLEProfile && !ble:
+		return domain.Because(domain.ErrInvalid, "ble_not_confirmed")
+	case profile == domain.TuyaWiFiProfile && ble:
+		return domain.Because(domain.ErrInvalid, "set_to_ble")
+	}
+	return nil
+}
+
 func (r *Repository) ListDevices(ctx context.Context, p domain.Principal) ([]domain.Device, error) {
 	out := []domain.Device{}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
@@ -814,6 +845,9 @@ func (r *Repository) UpdateDevice(ctx context.Context, p domain.Principal, id st
 			if e := profileFitsGateway(tx, d.ProfileID, *gateway); e != nil {
 				return e
 			}
+			if e := tuyaTransportFits(tx, d.ProfileID, *gateway, d.ExternalID); e != nil {
+				return e
+			}
 			d.GatewayID = *gateway
 			action = "device.moved"
 		}
@@ -900,6 +934,20 @@ func (r *Repository) RestoreDevice(ctx context.Context, p domain.Principal, id s
 			}
 			if len(profiles) == 1 && profiles[0] == domain.TuyaCloudProfile {
 				return domain.Because(domain.ErrInvalid, "tuya_cloud_disabled")
+			}
+		}
+		// A restored Tuya registration must still fit its imported device's transport (it may have changed while the
+		// registration was removed), checked under the gateway row FOR SHARE like create and move.
+		var regs []struct{ GatewayID, ExternalID, ProfileID string }
+		if e := tx.Raw(`SELECT gateway_id::text AS gateway_id,external_id,profile_id FROM core.devices WHERE id=?`, id).Scan(&regs).Error; e != nil {
+			return e
+		}
+		if len(regs) == 1 {
+			if e := tx.Exec(`SELECT 1 FROM core.gateways WHERE id=? FOR SHARE`, regs[0].GatewayID).Error; e != nil {
+				return e
+			}
+			if e := tuyaTransportFits(tx, regs[0].ProfileID, regs[0].GatewayID, regs[0].ExternalID); e != nil {
+				return e
 			}
 		}
 		res := tx.Exec(`UPDATE core.devices d SET removed_at=NULL,removed_by=NULL WHERE d.id=? AND d.removed_at IS NOT NULL AND EXISTS(SELECT 1 FROM core.gateways g WHERE g.id=d.gateway_id AND g.revoked_at IS NULL)`, id)

@@ -28,6 +28,7 @@ type TuyaCloud interface {
 	Authenticate(context.Context) error
 	Devices(context.Context) ([]tuyacloud.Device, error)
 	Model(context.Context, string) (json.RawMessage, string, error)
+	FactoryInfos(context.Context, []string) ([]tuyacloud.FactoryInfo, error)
 }
 
 // DefaultTuyaCloud builds the real client.
@@ -46,25 +47,32 @@ const (
 // TuyaImportJob is one import as the page polls it. It never holds the Tuya credentials or a local key: those
 // live only inside the goroutine that runs the import.
 type TuyaImportJob struct {
-	ID             string               `json:"id"`
-	GatewayID      string               `json:"gateway_id"`
-	Region         string               `json:"region"`
-	Status         string               `json:"status"` // running | done | failed
-	Stage          string               `json:"stage"`  // token | devices | models | saving | done
-	Error          string               `json:"error,omitempty"`
-	TuyaCode       int                  `json:"tuya_code,omitempty"`
-	Hint           string               `json:"hint,omitempty"`
-	SuggestRegions []string             `json:"suggest_regions,omitempty"`
-	Found          int                  `json:"found"`
-	Imported       int                  `json:"imported"`
-	WithKey        int                  `json:"with_key"`
-	LocalCapable   int                  `json:"local_capable"`
-	Skipped        int                  `json:"skipped"`
-	Devices        []TuyaImportedDevice `json:"devices"`
-	StartedAt      time.Time            `json:"started_at"`
-	FinishedAt     *time.Time           `json:"finished_at,omitempty"`
-	ExpiresAt      time.Time            `json:"expires_at"`
-	tenant         string
+	ID             string   `json:"id"`
+	GatewayID      string   `json:"gateway_id"`
+	Region         string   `json:"region"`
+	Status         string   `json:"status"` // running | done | failed
+	Stage          string   `json:"stage"`  // token | devices | models | saving | done
+	Error          string   `json:"error,omitempty"`
+	TuyaCode       int      `json:"tuya_code,omitempty"`
+	Hint           string   `json:"hint,omitempty"`
+	SuggestRegions []string `json:"suggest_regions,omitempty"`
+	Found          int      `json:"found"`
+	Imported       int      `json:"imported"`
+	WithKey        int      `json:"with_key"`
+	LocalCapable   int      `json:"local_capable"`
+	// BLECandidates counts devices that may be Tuya BLE devices: not reachable over Wi-Fi locally, not behind a hub,
+	// with a real Bluetooth address from Tuya's factory records (a uuid alone counts only once the Edge hears it). Whether one really is shows only when an Edge hears it advertise,
+	// and an owner or admin confirms it (docs/platform/tuya-ble.md). FactoryInfos is whether Tuya's factory records
+	// (the addresses) could be read: "ok", or "unavailable" when the project may not call that API (the import
+	// still succeeds; devices are then matched by uuid only).
+	BLECandidates int                  `json:"ble_candidates"`
+	FactoryInfos  string               `json:"factory_infos,omitempty"`
+	Skipped       int                  `json:"skipped"`
+	Devices       []TuyaImportedDevice `json:"devices"`
+	StartedAt     time.Time            `json:"started_at"`
+	FinishedAt    *time.Time           `json:"finished_at,omitempty"`
+	ExpiresAt     time.Time            `json:"expires_at"`
+	tenant        string
 }
 
 // TuyaImportedDevice is one device of an import result: its fingerprint, never its key.
@@ -78,6 +86,11 @@ type TuyaImportedDevice struct {
 	HasKey         bool   `json:"has_key"`
 	KeyFingerprint string `json:"key_fingerprint,omitempty"`
 	Spec           string `json:"spec"` // model | specifications | missing
+	// BLEMAC is the Bluetooth address from the factory record (not secret), HasSecKey whether Tuya returned a
+	// sec_key (sealed at once, never shown), BLECandidate as counted in TuyaImportJob.BLECandidates.
+	BLEMAC       string `json:"ble_mac,omitempty"`
+	HasSecKey    bool   `json:"has_sec_key"`
+	BLECandidate bool   `json:"ble_candidate"`
 }
 
 // tuyaJobs keeps import jobs in memory for TuyaImportTTL. An API restart loses them: the user starts again.
@@ -140,6 +153,17 @@ func (j *tuyaJobs) get(tenant, gateway, id string, now time.Time) (TuyaImportJob
 }
 
 var tuyaCredential = regexp.MustCompile(`^[A-Za-z0-9]{8,64}$`)
+
+var bleUUIDPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
+
+// bleUUID is a Tuya BLE uuid as stored, or "" when Tuya's value is not one (letters and digits, at most 64).
+func bleUUID(s string) string {
+	s = strings.TrimSpace(s)
+	if !bleUUIDPattern.MatchString(s) {
+		return ""
+	}
+	return s
+}
 
 // StartTuyaImport begins a one-time key import for an Aether Edge gateway and returns at once; the page polls the
 // job. The credentials are passed to the job's goroutine and to nothing else: not the job record, not the
@@ -254,6 +278,31 @@ func (s *Service) runTuyaImport(id string, p domain.Principal, gateway, region s
 		})
 		return
 	}
+	// The factory records carry the Bluetooth address a BLE device advertises from. They are optional: a project that
+	// may not call the API still imports, and its BLE devices are matched by uuid.
+	factory := map[string]tuyacloud.FactoryInfo{}
+	factoryState := "ok"
+	ids := make([]string, 0, len(devices))
+	for _, d := range devices {
+		if !d.Sub {
+			ids = append(ids, d.ID)
+		}
+	}
+	if len(ids) > 0 {
+		stage("factory")
+		infos, e := client.FactoryInfos(ctx, ids)
+		switch {
+		case e == nil:
+			for _, f := range infos {
+				factory[strings.ToLower(strings.TrimSpace(f.ID))] = f
+			}
+		case ctx.Err() != nil:
+			fail(importError(ctx.Err()))
+			return
+		default:
+			factoryState = "unavailable"
+		}
+	}
 	stage("models")
 	type spec struct {
 		dps      []tuya.DP
@@ -314,6 +363,26 @@ func (s *Service) runTuyaImport(id string, p domain.Principal, gateway, region s
 			out.HasKey, out.KeyFingerprint = true, imp.KeyFingerprint
 		}
 		out.LocalCapable = tuya.Translate(category, sp.dps).LocalCapable && !d.Sub
+		if !d.Sub {
+			f := factory[tuyaID]
+			imp.BLEMAC = edge.NormalMAC(f.MAC)
+			imp.BLEUUID = bleUUID(d.UUID)
+			if imp.BLEUUID == "" {
+				imp.BLEUUID = bleUUID(f.UUID)
+			}
+			// A sec_key is only kept alongside a local key (it is useless without one) and sealed at once.
+			if imp.LocalKeySealed != "" && tuya.ValidLocalKey(d.SecKey) {
+				sealed, e := security.Seal(s.TuyaKeys, d.SecKey)
+				if e != nil {
+					fail("internal_error", 0)
+					return
+				}
+				imp.SecKeySealed, out.HasSecKey = sealed, true
+			}
+			out.BLEMAC = imp.BLEMAC
+			// A candidate needs a key and a real factory address: a uuid alone says nothing until the Edge hears it.
+			out.BLECandidate = !out.LocalCapable && out.HasKey && imp.BLEMAC != ""
+		}
 		imports = append(imports, imp)
 		result = append(result, out)
 	}
@@ -327,13 +396,16 @@ func (s *Service) runTuyaImport(id string, p domain.Principal, gateway, region s
 	now := time.Now().UTC()
 	s.tuyaJobs.update(id, func(j *TuyaImportJob) {
 		j.Status, j.Stage, j.FinishedAt = "done", "done", &now
-		j.Found, j.Imported, j.Skipped, j.Devices = len(devices), saved, skipped, result
+		j.Found, j.Imported, j.Skipped, j.Devices, j.FactoryInfos = len(devices), saved, skipped, result, factoryState
 		for _, d := range result {
 			if d.HasKey {
 				j.WithKey++
 			}
 			if d.LocalCapable {
 				j.LocalCapable++
+			}
+			if d.BLECandidate {
+				j.BLECandidates++
 			}
 		}
 	})
@@ -368,6 +440,39 @@ func (s *Service) ForgetTuyaKey(ctx context.Context, p domain.Principal, gateway
 		return domain.ErrInvalid
 	}
 	return s.Repo.ForgetTuyaKey(ctx, p, gateway, tuyaID)
+}
+
+// SetTuyaBLE applies an owner's or admin's choice of how an imported device is reached: Bluetooth only ever this
+// way, never from a sighting alone (docs/platform/tuya-ble.md). It needs EDGE_BLE; the poll interval is 5 minutes
+// to a day (battery devices pay for every connection).
+func (s *Service) SetTuyaBLE(ctx context.Context, p domain.Principal, gateway, tuyaID string, in domain.TuyaBLESettings) (domain.TuyaDevice, error) {
+	if !p.CanManageDevices() {
+		return domain.TuyaDevice{}, domain.ErrForbidden
+	}
+	tuyaID = strings.ToLower(strings.TrimSpace(tuyaID))
+	if !security.ValidID(gateway) || !edge.ValidDevice(tuyaID) {
+		return domain.TuyaDevice{}, domain.ErrInvalid
+	}
+	if !s.EdgeBLEEnabled {
+		return domain.TuyaDevice{}, domain.Because(domain.ErrInvalid, "edge_ble_off")
+	}
+	switch in.Transport {
+	case "", "ble", "wifi", "auto":
+	default:
+		return domain.TuyaDevice{}, domain.Because(domain.ErrInvalid, "transport")
+	}
+	switch in.Mode {
+	case "", "auto", "on_demand", "persistent":
+	default:
+		return domain.TuyaDevice{}, domain.Because(domain.ErrInvalid, "ble_mode")
+	}
+	if in.PollSeconds != 0 && (in.PollSeconds < 300 || in.PollSeconds > 86400) {
+		return domain.TuyaDevice{}, domain.Because(domain.ErrInvalid, "ble_poll_seconds")
+	}
+	if in.Transport == "" && in.Mode == "" && in.PollSeconds == 0 {
+		return domain.TuyaDevice{}, domain.ErrInvalid
+	}
+	return s.Repo.SetTuyaBLE(ctx, p, gateway, tuyaID, in)
 }
 
 // installCodeEncoding writes a code as 26 lower-case base32 letters and digits: easy to paste, 128 bits.

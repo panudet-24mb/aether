@@ -25,6 +25,34 @@ type TuyaDevice struct {
 	Registered     bool      `json:"registered"`
 	LANSeen        bool      `json:"lan_seen"`
 	ImportedAt     time.Time `json:"imported_at"`
+
+	// Tuya BLE (docs/platform/tuya-ble.md). Transport is how the device is reached, as an owner or admin set it
+	// (wifi | ble | unknown; the import never sets ble). Detected is what the Edge has seen of it: "wifi" when it
+	// broadcasts on the LAN, "ble_candidate" when a Bluetooth sighting matches its address (either byte order) or
+	// its uuid, "unknown" otherwise: a hint for the operator, never acted on by itself.
+	Transport   string     `json:"transport"`
+	Detected    string     `json:"detected"`
+	BLEMAC      string     `json:"ble_mac"`
+	HasSecKey   bool       `json:"has_sec_key"`
+	BLECapable  bool       `json:"ble_capable"` // a BLE candidate: not behind a hub, and heard over the air or with a factory address
+	BLESeen     bool       `json:"ble_seen"`
+	BLESeenAt   *time.Time `json:"ble_seen_at"`
+	RSSI        *int       `json:"rssi"`
+	BLEProtocol int        `json:"ble_protocol"`
+	Bound       *bool      `json:"bound"` // the advertisement's "bound to an account" flag, when heard
+	BLEMode     string     `json:"ble_mode"`
+	BLEPoll     int        `json:"ble_poll_seconds"`
+	LastReadAt  *time.Time `json:"last_read_at"`
+	ReadOnly    bool       `json:"readonly"` // a lock: read-only over BLE, never commanded
+}
+
+// TuyaBLESettings is an owner's or admin's choice of how an imported Tuya device is reached. Transport "ble" is only
+// ever set this way, never from a sighting alone; "auto" clears the choice (stored as "unknown", reached over Wi-Fi
+// when it can be). Mode and PollSeconds apply to BLE; empty or zero keeps the current value.
+type TuyaBLESettings struct {
+	Transport   string `json:"transport"`
+	Mode        string `json:"mode"`
+	PollSeconds int    `json:"poll_seconds"`
 }
 
 // EdgeStatus is what the gateway page shows about an Aether Edge: the agent's last reported state and health, and

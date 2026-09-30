@@ -1022,6 +1022,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           }}
           canManage={role === "owner" || role === "admin"}
           isOwner={role === "owner"}
+          edgeBLE={snapshot?.edgeBLE}
           onReload={() => void reload()}
           onOpenStudio={onAdd}
           onRemoveDraft={(id) => {
@@ -1148,7 +1149,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       <Dialog open={discoveryOpen} onOpenChange={setDiscoveryOpen}>
         <DialogContent className="topo-dialog topo-discovery-dialog">
           <DialogHeader><DialogTitle>อุปกรณ์ที่พบใหม่</DialogTitle><DialogDescription>เลือกอุปกรณ์จาก gateway ที่พบ แล้วลงทะเบียนเพื่อเริ่มใช้งาน</DialogDescription></DialogHeader>
-          <DiscoveryList items={discoveryItems} gateways={topology.gateways.map((g) => g.gateway)} serverTime={serverNow} busy={busy} hiddenUnknown={topology.gateways.reduce((n, g) => n + (snapshot?.discoveryHidden?.[g.gateway.id] ?? 0), 0)} onAdopt={(external, gatewayId) => { setDiscoveryOpen(false); setDialogError(""); setAdopt({ external, gatewayId }); }} />
+          <DiscoveryList items={discoveryItems} gateways={topology.gateways.map((g) => g.gateway)} serverTime={serverNow} busy={busy} hiddenUnknown={topology.gateways.reduce((n, g) => n + (snapshot?.discoveryHidden?.[g.gateway.id] ?? 0), 0)} hiddenBLE={snapshot?.discoveryBLEHidden ?? 0} onAdopt={(external, gatewayId) => { setDiscoveryOpen(false); setDialogError(""); setAdopt({ external, gatewayId }); }} />
           {topology.gateways.some((g) => g.gateway.model === Z2M_GATEWAY_MODEL) && <ZigbeeCatalogSearch client={client} />}
         </DialogContent>
       </Dialog>
@@ -1159,7 +1160,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           topology={topology}
           busy={busy}
           error={dialogError}
-          initialName={adopt.name || snapshot?.discovery?.find((x) => x.external_id === adopt.external && (x.source === "tuya" || x.source === "tuya_cloud"))?.description || (adoptDevice?.name ?? "")}
+          initialName={adopt.name || snapshot?.discovery?.find((x) => x.external_id === adopt.external && (x.source === "tuya" || x.source === "tuya_ble" || x.source === "tuya_cloud"))?.description || (adoptDevice?.name ?? "")}
           initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL), tuya: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === EDGE_GATEWAY_MODEL), tuyaCloud: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === TUYA_CLOUD_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
           onCancel={() => setAdopt(null)}
           onSubmit={(input) =>

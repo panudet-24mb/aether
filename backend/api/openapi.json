@@ -5882,7 +5882,7 @@
   },
   "/api/v1/gateways/{id}/tuya/imports/{job}": {
    "get": {
-    "summary": "An import job's progress and result: devices with key fingerprints, never keys (owner/admin). Jobs live 10 minutes.",
+    "summary": "An import job's progress and result: devices with key fingerprints and, for Tuya BLE, their factory address, whether a sec_key came (sealed, never shown) and whether they may be BLE devices (ble_candidates); never keys (owner/admin). Jobs live 10 minutes.",
     "operationId": "get__api_v1_gateways_id_tuya_imports_job",
     "security": [
      {
@@ -5935,7 +5935,7 @@
   },
   "/api/v1/gateways/{id}/edge/status": {
    "get": {
-    "summary": "Aether Edge agent state and health (online/offline, version, devices connected, LAN seen) with import and key counts; nothing secret (any member who can see the gateway).",
+    "summary": "Aether Edge agent state and health (online/offline, version and latest version, devices connected, LAN seen, Bluetooth radio state, devices heard and connected, announced capabilities) with import and key counts; nothing secret (any member who can see the gateway).",
     "operationId": "get__api_v1_gateways_id_edge_status",
     "security": [
      {
@@ -5965,7 +5965,7 @@
   },
   "/api/v1/gateways/{id}/tuya/devices": {
    "get": {
-    "summary": "Imported Tuya devices of an Aether Edge gateway: key status and fingerprint, LAN and registration state; never the key (owner/admin).",
+    "summary": "Imported Tuya devices of an Aether Edge gateway: key status and fingerprint, LAN and registration state, and for Tuya BLE the transport an owner/admin set, what the Edge detected (wifi | ble_candidate | unknown, from its LAN list and Bluetooth sightings matched by address in either byte order or uuid), signal, protocol, bound flag, last read, poll settings and whether it is a read-only lock; never a key (owner/admin).",
     "operationId": "get__api_v1_gateways_id_tuya_devices",
     "security": [
      {
@@ -6000,6 +6000,93 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/gateways/{id}/tuya/devices/{tuya_id}/ble": {
+   "post": {
+    "summary": "How an imported Tuya device is reached (owner/admin, EDGE_BLE on): transport ble | wifi | auto, BLE mode auto | on_demand | persistent, poll_seconds 300-86400. Bluetooth is only ever set this way, never from a sighting; a registered device's transport cannot change. Audited.",
+    "operationId": "post__api_v1_gateways_id_tuya_devices_tuya_id_ble",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "tuya_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "pattern": "^[a-z0-9]{16,32}$"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The device as GET .../tuya/devices lists it",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+         "transport": {
+          "type": "string",
+          "enum": [
+           "ble",
+           "wifi",
+           "auto"
+          ]
+         },
+         "mode": {
+          "type": "string",
+          "enum": [
+           "auto",
+           "on_demand",
+           "persistent"
+          ]
+         },
+         "poll_seconds": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 86400
+         }
         }
        }
       }

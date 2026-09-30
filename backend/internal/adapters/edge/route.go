@@ -264,6 +264,34 @@ var (
 // ValidMAC reports a Bluetooth address as Aether stores it: lower-case hex pairs joined by colons.
 func ValidMAC(s string) bool { return macPattern.MatchString(s) }
 
+// NormalMAC returns a Bluetooth address in Aether's form (aa:bb:cc:dd:ee:ff), or "" when it is not one. Upper case,
+// dashes, colons or no separators at all (as Tuya's factory records write it) are accepted. An address of one
+// repeated byte (00:00:00:00:00:00, ff:ff:…) is a placeholder, not a device's: it counts as unknown.
+func NormalMAC(s string) string {
+	s = strings.NewReplacer("-", "", ":", "").Replace(strings.ToLower(strings.TrimSpace(s)))
+	if len(s) != 12 || s == strings.Repeat(s[:2], 6) {
+		return ""
+	}
+	out := make([]string, 6)
+	for i := range out {
+		out[i] = s[2*i : 2*i+2]
+	}
+	if m := strings.Join(out, ":"); ValidMAC(m) {
+		return m
+	}
+	return ""
+}
+
+// ReversedMAC is a Bluetooth address with its bytes in the other order: some Tuya products' factory records list
+// the address the device advertises from byte-reversed, so a match accepts either order.
+func ReversedMAC(m string) string {
+	parts := strings.Split(m, ":")
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
+	return strings.Join(parts, ":")
+}
+
 // ParseBLESightings reads the agent's Bluetooth sightings list. Malformed entries are skipped (an address that is
 // not one, a uuid or product id with other than letters and digits, an impossible protocol); a signal strength out
 // of range is dropped, not the entry. At most MaxBLE are returned, each address once.

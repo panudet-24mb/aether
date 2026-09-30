@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"aether/backend/internal/adapters/tuya"
 	"aether/backend/internal/domain"
 	"context"
 	"database/sql"
@@ -11,17 +12,162 @@ import (
 	"gorm.io/gorm"
 )
 
-// TuyaDevices lists a gateway's imported Tuya devices for the import page. The sealed key is never selected.
+// TuyaDevices lists a gateway's imported Tuya devices for the import page. The sealed keys are never selected
+// (only whether a sec_key exists).
 func (r *Repository) TuyaDevices(ctx context.Context, p domain.Principal, gateway string) ([]domain.TuyaDevice, error) {
 	out := []domain.TuyaDevice{}
 	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Raw(`SELECT t.tuya_id,t.name,t.tuya_category,t.product_id,t.category,t.sub,t.parent_tuya_id,t.local_capable,t.key_fingerprint,t.key_status,
-      t.version,t.ip,t.available,t.reason,t.imported_at,
-      EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered,
-      EXISTS(SELECT 1 FROM core.edge_lan_devices l WHERE l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id) AS lan_seen
-    FROM core.tuya_devices t WHERE t.gateway_id=? AND t.removed_at IS NULL ORDER BY t.name,t.tuya_id LIMIT 500`, gateway).Scan(&out).Error
+		var e error
+		out, e = tuyaDeviceRows(tx, gateway, "")
+		return e
 	})
 	return out, e
+}
+
+// tuyaDeviceRows reads a gateway's imported devices, or the one with tuyaID. The Bluetooth sighting is the latest
+// one matching the device's address (in either byte order: some factory records list it reversed) or its uuid;
+// what the Edge has seen of the device (detected) prefers its LAN broadcast.
+func tuyaDeviceRows(tx *gorm.DB, gateway, tuyaID string) ([]domain.TuyaDevice, error) {
+	rows := []struct {
+		domain.TuyaDevice
+		HasMAC     bool
+		BLEMatchAt *time.Time
+		MatchRSSI  *int
+		MatchProto *int
+		MatchBound *bool
+	}{}
+	q := `SELECT t.tuya_id,t.name,t.tuya_category,t.product_id,t.category,t.sub,t.parent_tuya_id,t.local_capable,t.key_fingerprint,t.key_status,
+      t.version,t.ip,t.available,t.reason,t.imported_at,t.transport,t.ble_mac AS blemac,t.sec_key_sealed IS NOT NULL AS has_sec_key,t.ble_protocol,
+      t.ble_mode,t.ble_poll_seconds AS ble_poll,t.last_read_at,t.rssi,
+      t.ble_mac<>'' AS has_mac,
+      EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered,
+      EXISTS(SELECT 1 FROM core.edge_lan_devices l WHERE l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id) AS lan_seen,
+      b.last_seen AS ble_match_at,b.rssi AS match_rssi,b.protocol AS match_proto,b.bound AS match_bound
+    FROM core.tuya_devices t
+    LEFT JOIN LATERAL (SELECT s.last_seen,s.rssi,s.protocol::int AS protocol,s.bound FROM core.edge_ble_seen s
+      WHERE s.gateway_id=t.gateway_id AND NOT t.sub
+        AND ((t.ble_mac<>'' AND s.mac IN (t.ble_mac,array_to_string(ARRAY(SELECT x FROM unnest(string_to_array(t.ble_mac,':')) WITH ORDINALITY u(x,i) ORDER BY i DESC),':')))
+          OR (t.ble_uuid<>'' AND s.uuid=t.ble_uuid))
+      ORDER BY s.last_seen DESC LIMIT 1) b ON true
+    WHERE t.gateway_id=? AND t.removed_at IS NULL`
+	args := []any{gateway}
+	if tuyaID != "" {
+		q += ` AND t.tuya_id=?`
+		args = append(args, tuyaID)
+	}
+	if e := tx.Raw(q+` ORDER BY t.name,t.tuya_id LIMIT 500`, args...).Scan(&rows).Error; e != nil {
+		return nil, e
+	}
+	out := make([]domain.TuyaDevice, 0, len(rows))
+	for _, row := range rows {
+		d := row.TuyaDevice
+		d.BLESeen, d.BLESeenAt = row.BLEMatchAt != nil, row.BLEMatchAt
+		// A candidate for Bluetooth: not behind a hub, and either heard over the air or with a factory address (the
+		// import keeps no all-zero or repeated-byte address). A uuid alone does not make one until it is heard.
+		d.BLECapable = !d.Sub && (d.BLESeen || row.HasMAC)
+		switch {
+		case d.LANSeen:
+			d.Detected = "wifi"
+		case d.BLESeen:
+			d.Detected = "ble_candidate"
+		default:
+			d.Detected = "unknown"
+		}
+		if d.BLESeen {
+			d.Bound = row.MatchBound
+			if row.MatchRSSI != nil {
+				d.RSSI = row.MatchRSSI
+			}
+			if d.BLEProtocol == 0 && row.MatchProto != nil && (*row.MatchProto == 2 || *row.MatchProto == 3 || *row.MatchProto == 4) {
+				d.BLEProtocol = *row.MatchProto
+			}
+		}
+		d.ReadOnly = tuya.LockCategory(d.TuyaCategory)
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// SetTuyaBLE applies an owner's or admin's choice of how an imported device is reached (domain.TuyaBLESettings,
+// already validated). Choosing BLE needs an address or uuid to find the device by and a device not behind a hub;
+// changing the transport of a registered device is refused (its registration's profile says how it is reached:
+// remove it, change, register again). The agent's configuration revision moves, and the change is audited.
+func (r *Repository) SetTuyaBLE(ctx context.Context, p domain.Principal, gateway, tuyaID string, in domain.TuyaBLESettings) (domain.TuyaDevice, error) {
+	var out domain.TuyaDevice
+	e := r.tx(ctx, p.UserID, p.TenantID, func(tx *gorm.DB) error {
+		var rows []struct {
+			Transport, BLEMAC, BLEUUID, Mode string
+			Sub, Registered                  bool
+			Poll                             int
+		}
+		// The gateway row first (the order ingest takes), then the device.
+		var models []string
+		if e := tx.Raw(`SELECT model FROM core.gateways WHERE id=? AND revoked_at IS NULL FOR UPDATE`, gateway).Scan(&models).Error; e != nil {
+			return e
+		}
+		if len(models) != 1 || models[0] != domain.EdgeGatewayModel {
+			return domain.ErrNotFound
+		}
+		if e := tx.Raw(`SELECT t.transport,t.ble_mac AS blemac,t.ble_uuid,t.ble_mode AS mode,t.ble_poll_seconds AS poll,t.sub,
+      EXISTS(SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL) AS registered
+    FROM core.tuya_devices t WHERE t.gateway_id=? AND t.tuya_id=? AND t.removed_at IS NULL FOR UPDATE OF t`, gateway, tuyaID).Scan(&rows).Error; e != nil {
+			return e
+		}
+		if len(rows) != 1 {
+			return domain.ErrNotFound
+		}
+		cur := rows[0]
+		transport := cur.Transport
+		switch in.Transport {
+		case "ble":
+			transport = "ble"
+		case "wifi":
+			transport = "wifi"
+		case "auto":
+			transport = "unknown"
+		}
+		if transport == "ble" && (cur.Sub || (cur.BLEMAC == "" && cur.BLEUUID == "")) {
+			return domain.Because(domain.ErrInvalid, "ble_address_unknown")
+		}
+		if transport != cur.Transport && cur.Registered && (transport == "ble" || cur.Transport == "ble") {
+			return domain.Because(domain.ErrConflict, "registered")
+		}
+		mode, poll := cur.Mode, cur.Poll
+		if in.Mode != "" {
+			mode = in.Mode
+		}
+		if in.PollSeconds != 0 {
+			poll = in.PollSeconds
+		}
+		if e := tx.Exec(`UPDATE core.tuya_devices SET transport=?,ble_mode=?,ble_poll_seconds=?,updated_at=now() WHERE gateway_id=? AND tuya_id=?`,
+			transport, mode, poll, gateway, tuyaID).Error; e != nil {
+			return e
+		}
+		if e := bumpEdgeConfig(tx, gateway); e != nil {
+			return e
+		}
+		if e := signal(tx, p.TenantID, "inventory", gateway); e != nil {
+			return e
+		}
+		// audit_logs has no detail column and its target is the gateway's uuid: the device is named after the
+		// action, as member.add_refused:<reason> is.
+		action := "tuya.ble_settings_changed"
+		if transport != cur.Transport {
+			action = "tuya.transport_set_" + transport
+		}
+		if e := audit(tx, p, action+":"+tuyaID, gateway); e != nil {
+			return e
+		}
+		list, e := tuyaDeviceRows(tx, gateway, tuyaID)
+		if e != nil {
+			return e
+		}
+		if len(list) == 1 {
+			out = list[0]
+		}
+		return nil
+	})
+	return out, classify(e)
 }
 
 // "Registered" means registered anywhere in the workspace, as discovery counts it: a Tuya id adopted under another
@@ -100,7 +246,7 @@ func (r *Repository) ForgetTuyaKey(ctx context.Context, p domain.Principal, gate
 		if e := signal(tx, p.TenantID, "inventory", gateway); e != nil {
 			return e
 		}
-		return audit(tx, p, "tuya.key_forgotten", gateway)
+		return audit(tx, p, "tuya.key_forgotten:"+strings.ToLower(tuyaID), gateway)
 	}))
 }
 

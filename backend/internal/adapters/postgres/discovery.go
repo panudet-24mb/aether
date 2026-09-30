@@ -32,21 +32,28 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
     AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=z.tenant_id AND lower(d.external_id)=z.ieee AND d.removed_at IS NULL)
   ORDER BY z.friendly_name,z.ieee LIMIT 500`, gateway).Scan(&out).Error
 		}
-		// An Aether Edge lists the Tuya devices imported with their keys that are not registered yet (source "tuya"),
-		// then the devices it sees broadcasting on its LAN without an imported key (source "tuya_lan": import them
-		// first). A Tuya device heard on the LAN is keyed by its Tuya id, like the import.
+		// An Aether Edge lists the Tuya devices imported with their keys that are not registered yet (source "tuya", or
+		// "tuya_ble" for one an owner or admin set to Bluetooth), then the devices it sees broadcasting on its LAN
+		// without an imported key (source "tuya_lan": import them first). A Tuya device heard on the LAN is keyed by its
+		// Tuya id, like the import. ble_seen says whether a Bluetooth sighting matches an imported device's address
+		// (either byte order) or uuid.
 		if len(model) == 1 && model[0] == domain.EdgeGatewayModel {
 			return tx.Raw(`SELECT * FROM (
-  SELECT t.gateway_id,t.tuya_id AS external_id,coalesce(s.last_seen,l.last_seen,t.updated_at) AS last_seen,'tuya' AS source,coalesce(s.name,'') AS stream_name,
+  SELECT t.gateway_id,t.tuya_id AS external_id,coalesce(s.last_seen,l.last_seen,t.updated_at) AS last_seen,
+    CASE WHEN t.transport='ble' THEN 'tuya_ble' ELSE 'tuya' END AS source,coalesce(s.name,'') AS stream_name,
     t.tuya_category AS model,'Tuya' AS vendor,t.name AS description,t.category AS kind,t.key_status,t.local_capable,
-    coalesce(nullif(l.ip,''),t.ip) AS ip,coalesce(nullif(l.version,''),t.version) AS protocol_version
+    coalesce(nullif(l.ip,''),t.ip) AS ip,coalesce(nullif(l.version,''),t.version) AS protocol_version,t.transport,
+    CASE WHEN t.sub THEN false ELSE EXISTS(SELECT 1 FROM core.edge_ble_seen b WHERE b.gateway_id=t.gateway_id
+      AND ((t.ble_mac<>'' AND b.mac IN (t.ble_mac,array_to_string(ARRAY(SELECT x FROM unnest(string_to_array(t.ble_mac,':')) WITH ORDINALITY u(x,i) ORDER BY i DESC),':')))
+        OR (t.ble_uuid<>'' AND b.uuid=t.ble_uuid))) END AS ble_seen,
+    t.rssi
   FROM core.tuya_devices t JOIN core.gateways g ON g.tenant_id=t.tenant_id AND g.id=t.gateway_id AND g.revoked_at IS NULL
   LEFT JOIN core.sensor_streams s ON s.gateway_id=t.gateway_id AND s.external_id=t.tuya_id
   LEFT JOIN core.edge_lan_devices l ON l.gateway_id=t.gateway_id AND l.device_id=t.tuya_id
   WHERE t.gateway_id=? AND t.removed_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=t.tenant_id AND lower(d.external_id)=t.tuya_id AND d.removed_at IS NULL)
   UNION ALL
-  SELECT l.gateway_id,l.device_id,l.last_seen,'tuya_lan','','','Tuya','','','missing',NULL::boolean,l.ip,l.version
+  SELECT l.gateway_id,l.device_id,l.last_seen,'tuya_lan','','','Tuya','','','missing',NULL::boolean,l.ip,l.version,'',NULL::boolean,NULL::smallint
   FROM core.edge_lan_devices l JOIN core.gateways g ON g.tenant_id=l.tenant_id AND g.id=l.gateway_id AND g.revoked_at IS NULL
   WHERE l.gateway_id=?
     AND NOT EXISTS (SELECT 1 FROM core.tuya_devices t WHERE t.gateway_id=l.gateway_id AND t.tuya_id=l.device_id AND t.removed_at IS NULL)

@@ -55,6 +55,8 @@ export type InspectorProps = {
   isOwner: boolean;
   /** Reload the page's snapshot (after an import or a forgotten key). */
   onReload: () => void;
+  /** The server has Tuya BLE on (EDGE_BLE). */
+  edgeBLE?: boolean;
 };
 
 function Field({ label, value, onNotice, mono = true }: { label: string; value: string; onNotice: (m: string) => void; mono?: boolean }) {
@@ -264,10 +266,12 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         />
       ) : edge ? (
         <EdgePanel
+          key={id}
           gateway={g.gateway}
           gateways={topology.gateways.map((x) => x.gateway)}
           client={p.client}
           canManage={p.canManage}
+          bleEnabled={!!p.edgeBLE}
           refreshKey={g.lastPacketAt}
           onNotice={p.onNotice}
           onRegister={(tuyaId, name) => p.onAdopt(tuyaId, id, undefined, name)}
@@ -625,7 +629,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
       {/* A registered Zigbee2MQTT device can be commanded: its controls come from its own definition. */}
       {reg && (zigbee || tuya) && <DeviceControlsPanel client={p.client} deviceId={reg.id} refreshKey={r?.received_at} />}
       {reg && cloudGateway && <TuyaCloudDeviceStatus gatewayId={cloudGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} />}
-      {reg && tuyaGateway && <TuyaDeviceStatus gatewayId={tuyaGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} onNotice={p.onNotice} />}
+      {reg && tuyaGateway && <TuyaDeviceStatus key={`${tuyaGateway.gateway.id}-${d.external}`} gatewayId={tuyaGateway.gateway.id} tuyaId={d.external} client={p.client} canManage={p.canManage} refreshKey={r?.received_at} onNotice={p.onNotice} />}
 
       {d.log.length > 0 && (
         <>

@@ -95,7 +95,7 @@ export type LayoutSaved = { layout: Layout; ignored: string[] };
 export type LayoutChange = { version: number; positions: Record<string, { x: number; y: number }>; remove?: string[] };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
-export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key) or a Tuya Cloud link (source "tuya_cloud"). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string };
+export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key) or a Tuya Cloud link (source "tuya_cloud"). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string; /** Imported Tuya device: how an owner/admin set it to be reached (source "tuya_ble" once set to Bluetooth), and whether the Edge hears it over Bluetooth. */ transport?: TuyaTransport; ble_seen?: boolean };
 /** One model of the Zigbee2MQTT device catalog (zigbee-herdsman-converters). */
 export type ZigbeeModel = { vendor: string; model: string; description: string; zigbee_model?: string[]; white_label?: string[]; category: string; features?: string[]; sos?: boolean; dynamic?: boolean };
 export type ZigbeeCatalog = { items: ZigbeeModel[]; total: number; source: string; version: string; license: string; homepage: string; notice: string; vendors?: string[] };
@@ -110,14 +110,28 @@ export const TUYA_REGIONS: { id: string; label: string }[] = [
   { id: "cn", label: "China" },
 ];
 /** One device of a Tuya import result: its key fingerprint, never the key. */
-export type TuyaImportedDevice = { tuya_id: string; name: string; tuya_category: string; product_id: string; sub: boolean; local_capable: boolean; has_key: boolean; key_fingerprint?: string; spec: string };
+export type TuyaImportedDevice = {
+  tuya_id: string;
+  name: string;
+  tuya_category: string;
+  product_id: string;
+  sub: boolean;
+  local_capable: boolean;
+  has_key: boolean;
+  key_fingerprint?: string;
+  spec: string;
+  /** Tuya BLE: the address from the factory record, whether a sec_key came (sealed, never shown), and whether it may be a BLE device. */
+  ble_mac?: string;
+  has_sec_key?: boolean;
+  ble_candidate?: boolean;
+};
 /** An import job as the page polls it (backend app.TuyaImportJob). */
 export type TuyaImportJob = {
   id: string;
   gateway_id: string;
   region: string;
   status: "running" | "done" | "failed";
-  stage: "token" | "devices" | "models" | "saving" | "done";
+  stage: "token" | "devices" | "factory" | "models" | "saving" | "done";
   error?: string;
   tuya_code?: number;
   hint?: string;
@@ -126,6 +140,10 @@ export type TuyaImportJob = {
   imported: number;
   with_key: number;
   local_capable: number;
+  /** Devices that may be Tuya BLE (not local over Wi‑Fi, not behind a hub, with an address or uuid). */
+  ble_candidates?: number;
+  /** "ok", or "unavailable" when the project may not read factory records (BLE devices then match by uuid). */
+  factory_infos?: "ok" | "unavailable";
   skipped: number;
   devices: TuyaImportedDevice[];
   started_at: string;
@@ -133,6 +151,10 @@ export type TuyaImportJob = {
   expires_at: string;
 };
 export type TuyaKeyStatus = "ok" | "rejected" | "suspect" | "missing";
+/** How an imported Tuya device is reached: set by an owner/admin, never from a sighting alone ("unknown": not chosen, Wi‑Fi when it can be). */
+export type TuyaTransport = "wifi" | "ble" | "unknown";
+/** How the Edge reaches a BLE device: when it advertises (auto), only for commands and polls, or holding the connection. */
+export type TuyaBLEMode = "auto" | "on_demand" | "persistent";
 /** An imported Tuya device of an Aether Edge (backend domain.TuyaDevice): never its key. */
 export type TuyaDevice = {
   tuya_id: string;
@@ -154,6 +176,25 @@ export type TuyaDevice = {
   registered: boolean;
   lan_seen: boolean;
   imported_at: string;
+  /** Tuya BLE (backend domain.TuyaDevice). */
+  transport: TuyaTransport;
+  /** What the Edge has seen of it: broadcasting on the LAN, a Bluetooth sighting matching its address or uuid, or nothing yet. */
+  detected: "wifi" | "ble_candidate" | "unknown";
+  ble_mac: string;
+  has_sec_key: boolean;
+  /** Could be reached over BLE: not behind a hub, with an address or uuid. */
+  ble_capable: boolean;
+  ble_seen: boolean;
+  ble_seen_at: string | null;
+  rssi: number | null;
+  ble_protocol: number;
+  /** The advertisement's "bound to an account" flag, when heard. */
+  bound: boolean | null;
+  ble_mode: TuyaBLEMode;
+  ble_poll_seconds: number;
+  last_read_at: string | null;
+  /** A lock: read-only over BLE, never commanded. */
+  readonly: boolean;
 };
 /** What the gateway page shows about an Aether Edge (backend domain.EdgeStatus): nothing secret. */
 export type EdgeStatus = {
@@ -171,6 +212,13 @@ export type EdgeStatus = {
   imported: number;
   registered: number;
   keys: Record<TuyaKeyStatus, number>;
+  /** The agent's Bluetooth radio ("" before an agent that knows BLE reported, "off" without BLE_ENABLED). */
+  ble_state: "" | "off" | "ok" | "no_adapter" | "no_permission" | "error";
+  ble_seen: number;
+  ble_connected: number;
+  /** Tuya BLE devices in the sightings kept for this gateway. */
+  ble_devices: number;
+  capabilities: string[];
 };
 /** Link state of a Tuya Cloud gateway (backend domain.TuyaCloudLink state). */
 export type TuyaCloudState = "" | "linking" | "online" | "offline" | "auth_failed" | "not_subscribed" | "quota" | "disabled";
@@ -211,6 +259,9 @@ export type Snapshot = {
   discovery?: Discovery[];
   /** Per gateway: advertisements that are not a supported model (phones, foreign beacons), left out of `discovery`. */
   discoveryHidden?: Record<string, number>;
+  /** Whether this server has Tuya BLE on (EDGE_BLE), and how many devices set to BLE were left out of `discovery` because it is off. */
+  edgeBLE?: boolean;
+  discoveryBLEHidden?: number;
   projects: Project[];
   /** Withdrawn registrations (owner/admin only); kept so they can be restored. */
   removedDevices: Device[];
@@ -364,6 +415,9 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     tuyaImport: (gatewayId: string, jobId: string) => call<TuyaImportJob>(`/gateways/${gatewayId}/tuya/imports/${jobId}`),
     tuyaDevices: async (gatewayId: string) => (await call<{ items: TuyaDevice[] }>(`/gateways/${gatewayId}/tuya/devices`)).items,
     forgetTuyaKey: (gatewayId: string, tuyaId: string) => call<void>(`/gateways/${gatewayId}/tuya/devices/${encodeURIComponent(tuyaId)}/forget`, {}),
+    /** How an imported device is reached (owner/admin, EDGE_BLE): Bluetooth is only ever set here, never from a sighting. Answers the device. */
+    setTuyaBLE: (gatewayId: string, tuyaId: string, input: { transport?: "ble" | "wifi" | "auto"; mode?: TuyaBLEMode; poll_seconds?: number }) =>
+      call<TuyaDevice>(`/gateways/${gatewayId}/tuya/devices/${encodeURIComponent(tuyaId)}/ble`, input),
     /** Tuya Cloud: link status (any member who can see the gateway). */
     tuyaCloudStatus: (gatewayId: string) => call<TuyaCloudLink>(`/gateways/${gatewayId}/tuya-cloud`),
     /** Links (or rotates) the project; proven with Tuya first, sealed for the worker, never returned. Answers the new status. */
@@ -384,7 +438,7 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
         slow = { at: Date.now(), gateways: g, sources: so, devices: d, settings: se, catalog: c, removed: rm, projects: pj };
       }
       const { gateways, sources, devices, settings, catalog, removed, projects } = slow!;
-      const [status, live, events, discovery] = await Promise.all([settle(this.mqttStatus()), settle(this.live()), settle(this.raw<{ items: DeviceEventRow[] }>("/events?limit=200")), settle(this.raw<{ items: Discovery[]; hidden_by_gateway?: Record<string, number> }>("/discovery"))]);
+      const [status, live, events, discovery] = await Promise.all([settle(this.mqttStatus()), settle(this.live()), settle(this.raw<{ items: DeviceEventRow[] }>("/events?limit=200")), settle(this.raw<{ items: Discovery[]; hidden_by_gateway?: Record<string, number>; edge_ble?: boolean; hidden_ble?: number }>("/discovery"))]);
       if (catalog.status === "fulfilled") applyCatalog(catalog.value);
       // Gateways and MQTT status are required; everything else degrades gracefully.
       if (gateways.status === "rejected") throw gateways.reason;
@@ -408,6 +462,8 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       return {
         discovery: discovery.status === "fulfilled" ? discovery.value.items : [],
         discoveryHidden: discovery.status === "fulfilled" ? discovery.value.hidden_by_gateway ?? {} : {},
+        edgeBLE: discovery.status === "fulfilled" ? discovery.value.edge_ble === true : undefined,
+        discoveryBLEHidden: discovery.status === "fulfilled" ? discovery.value.hidden_ble ?? 0 : 0,
         projects: projects.status === "fulfilled" ? projects.value : [],
         removedDevices: removed.status === "fulfilled" ? removed.value : [],
         events: events.status === "fulfilled" ? events.value.items : [],

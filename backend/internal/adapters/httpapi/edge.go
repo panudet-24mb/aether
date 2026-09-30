@@ -64,6 +64,19 @@ func edgeRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 		}
 		return c.JSON(fiber.Map{"items": out})
 	})
+	// How an imported device is reached (Tuya BLE, docs/platform/tuya-ble.md): only an owner or admin sets a device to
+	// Bluetooth, never a sighting by itself.
+	r.Post("/gateways/:id/tuya/devices/:tuya_id/ble", func(c fiber.Ctx) error {
+		var in domain.TuyaBLESettings
+		if e := body(c, &in, 256); e != nil {
+			return e
+		}
+		out, e := s.SetTuyaBLE(c.Context(), principal(c), c.Params("id"), c.Params("tuya_id"), in)
+		if e != nil {
+			return e
+		}
+		return c.JSON(out)
+	})
 	r.Post("/gateways/:id/tuya/devices/:tuya_id/forget", func(c fiber.Ctx) error {
 		if e := s.ForgetTuyaKey(c.Context(), principal(c), c.Params("id"), c.Params("tuya_id")); e != nil {
 			return e

@@ -135,3 +135,97 @@
 .twin-card .dc-compact { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border); }
 .twin-switch-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .twin-switchboard button small { flex-shrink: 0; }
+
+/* Immersive view (engine/immersive.ts): the same stage, a control-room finish. Every colour is a token. */
+.twin-view.is-immersive .twin-canvas::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0; background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 55%, color-mix(in oklab, var(--color-paper) 70%, black) 100%); opacity: 0.85; }
+.twin-view.is-immersive .twin-labels { z-index: 1; }
+.twin-view.is-immersive .twin-label { background: color-mix(in oklab, var(--color-paper) 84%, transparent); border-color: color-mix(in oklab, var(--color-accent) 26%, transparent); box-shadow: 0 4px 14px var(--color-shadow); }
+.twin-view.is-immersive .twin-label.is-zone { color: color-mix(in oklab, var(--color-accent) 55%, var(--color-ink)); }
+.twin-view.is-immersive .twin-label.is-sos { background: color-mix(in oklab, var(--color-danger-dark) 92%, transparent); border-color: var(--color-danger); color: var(--color-ink); }
+
+/* In-scene badges: real buttons, positioned by the engine each frame (at most 24). */
+.twin-badges { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.twin-badge { --tone: var(--color-accent); position: absolute; left: 0; top: 0; display: flex; flex-wrap: wrap; align-items: stretch; max-width: 250px; pointer-events: auto; will-change: transform; border-radius: 9px; background: color-mix(in oklab, var(--color-panel) 90%, transparent); border: 1px solid color-mix(in oklab, var(--tone) 34%, var(--color-border)); box-shadow: 0 6px 18px var(--color-shadow), 0 0 0 1px color-mix(in oklab, var(--tone) 8%, transparent), 0 0 14px color-mix(in oklab, var(--tone) 14%, transparent); color: var(--color-ink); font-size: 11.5px; line-height: 1.35; transition: opacity var(--dur-short) var(--ease-out); }
+.twin-badge::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1px; height: var(--lead, 8px); background: linear-gradient(var(--tone), color-mix(in oklab, var(--tone) 20%, transparent)); opacity: 0.75; pointer-events: none; }
+.twin-badge.is-idle { --tone: var(--color-muted); }
+.twin-badge.is-warn { --tone: var(--color-warning); }
+.twin-badge.is-alert { --tone: var(--color-danger); background: color-mix(in oklab, var(--color-danger-dark) 92%, transparent); border-color: var(--color-danger); }
+.twin-badge.is-off { --tone: var(--color-dim); opacity: 0.86; }
+.twin-badge.is-off .twin-badge-value { color: var(--color-muted); }
+.twin-badge.is-selected { border-color: var(--tone); box-shadow: 0 6px 18px var(--color-shadow), 0 0 0 2px color-mix(in oklab, var(--tone) 45%, transparent); }
+.twin-badge.is-far { opacity: 0.8; }
+.twin-badge-main { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 0; padding: 4px 9px 4px 8px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; line-height: inherit; cursor: pointer; border-radius: 8px; }
+.twin-badge-main:hover { background: color-mix(in oklab, var(--tone) 10%, transparent); }
+.twin-badge-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
+.twin-badge.is-off .twin-badge-dot { box-shadow: none; }
+.twin-badge-name { max-width: 116px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twin-badge-value { font-variant-numeric: tabular-nums; white-space: nowrap; color: color-mix(in oklab, var(--tone) 70%, var(--color-ink)); font-weight: 600; }
+.twin-badge-power { display: inline-grid; place-items: center; width: 30px; min-height: 0; padding: 0; border: 0; border-left: 1px solid color-mix(in oklab, var(--tone) 24%, var(--color-border)); border-radius: 0 8px 8px 0; background: transparent; color: var(--color-muted); cursor: pointer; }
+.twin-badge-power:hover:not(:disabled) { color: var(--color-ink); background: color-mix(in oklab, var(--color-accent) 12%, transparent); }
+.twin-badge-power.is-on { color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 16%, transparent); }
+.twin-badge-power.is-on svg { filter: drop-shadow(0 0 4px var(--color-accent)); }
+.twin-badge-power.is-pending svg { animation: twin-spin 1s linear infinite; }
+.twin-badge-power:disabled { cursor: default; opacity: 0.55; }
+.twin-badge-power.is-pending:disabled { opacity: 1; color: var(--color-accent); }
+.twin-badge-main:focus-visible, .twin-badge-power:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.twin-badge-msg { flex-basis: 100%; padding: 0 9px 5px; font-size: 11px; color: var(--color-muted); white-space: normal; }
+.twin-badge-msg.is-error { color: var(--color-danger); }
+.twin-badge-msg[hidden], .twin-badge-value[hidden] { display: none; }
+@keyframes twin-spin { to { transform: rotate(360deg); } }
+@media (pointer: coarse) {
+  .twin-badge-main { min-height: 36px; }
+  .twin-badge-power { width: 38px; }
+}
+
+.twin-model-note { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 2; margin: 0; padding: 5px 12px; border-radius: 999px; font-size: 12px; color: var(--color-warning); background: color-mix(in oklab, var(--color-warning-dark) 90%, transparent); border: 1px solid color-mix(in oklab, var(--color-warning) 40%, transparent); white-space: nowrap; max-width: calc(100% - 520px); overflow: hidden; text-overflow: ellipsis; }
+
+/* The building model panel (twin-model.tsx). */
+.twin-panel { position: absolute; top: 12px; left: 12px; z-index: 3; width: min(340px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; padding: 12px; border-radius: var(--radius-md); background: color-mix(in oklab, var(--color-panel) 96%, transparent); border: 1px solid var(--color-border); box-shadow: 0 12px 32px var(--color-shadow); display: grid; gap: 9px; font-size: 12.5px; align-content: start; }
+.twin-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.twin-panel-head strong { font-size: 13.5px; font-weight: 600; }
+.twin-icon-btn { display: inline-grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 1px solid var(--color-border); border-radius: 7px; background: transparent; color: var(--color-muted); cursor: pointer; }
+.twin-icon-btn:hover { color: var(--color-ink); }
+.twin-panel .topo-btn { height: 30px; min-height: 0; padding: 0 9px; gap: 5px; font-size: 12.5px; line-height: 1.45; white-space: nowrap; }
+.twin-panel-note { margin: 0; color: var(--color-muted); font-size: 12px; }
+.twin-panel-warn { margin: 0; padding: 6px 8px; border-radius: 7px; color: var(--color-warning); background: color-mix(in oklab, var(--color-warning-dark) 80%, transparent); font-size: 12px; }
+.twin-panel-error { margin: 0; padding: 6px 8px; border-radius: 7px; color: var(--color-danger); background: color-mix(in oklab, var(--color-danger-dark) 80%, transparent); font-size: 12px; }
+.twin-panel-ok { margin: 0; color: var(--color-accent); font-size: 12px; }
+.twin-model-summary { display: grid; gap: 2px; padding: 8px; border-radius: 8px; background: var(--color-paper); border: 1px solid var(--color-border); }
+.twin-model-name { font-weight: 600; overflow-wrap: anywhere; }
+.twin-model-summary small { color: var(--color-muted); font-size: 11.5px; }
+.twin-model-status.is-ready { color: var(--color-accent); }
+.twin-model-status.is-error { color: var(--color-danger); }
+.twin-model-import { display: grid; gap: 6px; justify-items: start; }
+.twin-model-import > small { color: var(--color-muted); font-size: 11.5px; }
+.twin-model-help { color: var(--color-muted); font-size: 11.5px; }
+.twin-model-help summary { cursor: pointer; color: var(--color-ink); }
+.twin-model-help p { margin: 4px 0 0; }
+.twin-model-progress { display: grid; gap: 5px; width: 100%; justify-items: start; }
+.twin-model-bar { width: 100%; height: 6px; border-radius: 3px; background: var(--color-border); overflow: hidden; }
+.twin-model-bar i { display: block; height: 100%; background: var(--color-accent); border-radius: 3px; transition: width var(--dur-medium) var(--ease-out); }
+.twin-model-bar i.is-indeterminate { width: 35%; animation: twin-indeterminate 1.2s var(--ease-in-out) infinite; }
+@keyframes twin-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.twin-model-align { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.twin-model-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.twin-field { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.twin-field > span, .twin-xyz legend { color: var(--color-muted); font-size: 12px; }
+.twin-field output { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+.twin-field .twin-seg { grid-column: 2 / 4; justify-self: start; }
+.twin-panel input[type="number"] { width: 100%; height: 28px; min-height: 0; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.twin-panel input[type="range"] { width: 100%; accent-color: var(--color-accent); }
+.twin-panel input:focus-visible, .twin-panel select:focus-visible, .twin-panel button:focus-visible, .twin-panel summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.twin-xyz { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.twin-xyz legend { padding: 0; margin-bottom: 4px; }
+.twin-xyz label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px; }
+.twin-xyz label span { color: var(--color-muted); font-size: 11px; }
+.twin-xyz input[type="range"] { grid-column: 1 / -1; }
+.twin-check { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.twin-check input { accent-color: var(--color-accent); width: 15px; height: 15px; }
+.twin-confirm { display: grid; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--color-danger); background: color-mix(in oklab, var(--color-danger-dark) 70%, transparent); }
+@media (max-width: 720px) {
+  .twin-model-note { max-width: calc(100% - 24px); bottom: 120px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .twin-badge-power.is-pending svg, .twin-model-bar i.is-indeterminate { animation: none; }
+  .twin-badge { transition: none; }
+}

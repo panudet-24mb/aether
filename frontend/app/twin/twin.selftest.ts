@@ -1,14 +1,16 @@
 /**
- * Self-test for the digital twin's pure parts (heat map, token slots, colour ramps). There is no JS test runner in
+ * Self-test for the digital twin's pure parts (heat map, token slots, colour ramps, the building model's transform
+ * and upload chunks). There is no JS test runner in
  * this repo, so this is a plain module: `runTwinSelfTest()` returns the failures (empty means everything passed).
  *
  * Run it with the repo's own TypeScript, from `frontend/`:
- *   ./node_modules/.bin/tsc app/twin/engine/heat.ts app/twin/engine/slots.ts app/twin/twin.selftest.ts \
+ *   ./node_modules/.bin/tsc app/twin/engine/heat.ts app/twin/engine/slots.ts app/twin/model-transform.ts app/twin/twin.selftest.ts \
  *     --outDir /tmp/twintest --module commonjs --target es2020 --skipLibCheck --strict
  *   node -e "const f=require('/tmp/twintest/twin.selftest.js').runTwinSelfTest(); console.log(f.length ? f.join('\n') : 'PASS'); process.exit(f.length ? 1 : 0)"
  */
 import { RAMPS, comfortBand, comfortT, contrast, heatGrid, heatPixels, idwAt, pointIn, rampColor, staleWeight, type HeatSensor, type P } from "./engine/heat";
 import { assignSlots, zoneSlots } from "./engine/slots";
+import { base64, chunkRanges, isGlb2, normalizeTransform, sameTransform } from "./model-transform";
 
 export function runTwinSelfTest(): string[] {
   const fail: string[] = [];
@@ -75,5 +77,20 @@ export function runTwinSelfTest(): string[] {
   check(comfortT(5, comfortBand("room")) === -1 && comfortT(21, comfortBand("room")) === -0.25, "below the band ramps to -1");
   check(JSON.stringify(comfortBand("room", [8, 2])) === JSON.stringify([22, 25]) && JSON.stringify(comfortBand("unknown-kind")) === JSON.stringify([22, 25]), "a bad or missing band falls back to the kind's default");
   check(Number.isNaN(comfortT(NaN, [22, 25])), "no reading, no colour");
+
+  // Building model: chunks are exactly the server's size except the last; transforms are clamped like the server.
+  const ranges = chunkRanges(163840 * 2 + 5, 163840);
+  check(ranges.length === 3 && ranges[0][1] - ranges[0][0] === 163840 && ranges[1][1] - ranges[1][0] === 163840 && ranges[2][1] - ranges[2][0] === 5, "chunks: full chunks then the rest");
+  check(chunkRanges(163840, 163840).length === 1 && chunkRanges(0, 163840).length === 0, "chunks: an exact multiple has no empty tail");
+  check(base64(new Uint8Array([0, 1, 2, 250, 255])) === "AAEC+v8=", "base64 of bytes");
+  const big = new Uint8Array(100000).map((_, i) => i % 251);
+  check(atob(base64(big)).length === big.length && atob(base64(big)).charCodeAt(99999) === 99999 % 251, "base64 of a chunk larger than one slice");
+  const glb = new ArrayBuffer(20);
+  new DataView(glb).setUint32(0, 0x46546c67, true); new DataView(glb).setUint32(4, 2, true); new DataView(glb).setUint32(8, 20, true);
+  check(isGlb2(glb) && !isGlb2(new ArrayBuffer(20)) && !isGlb2(new ArrayBuffer(4)), "GLB v2 header check");
+  const n = normalizeTransform({ scale: 0, opacity: 3, up: "x" as "y", rotation_deg: [270, -190, 30], offset_m: [1, Number.NaN, 2] as [number, number, number], mode: "nope" as "overlay" });
+  check(n.scale === 0.0001 && n.opacity === 1 && n.up === "y" && n.mode === "overlay" && n.visible && n.clip_to_floor, "transform clamps and defaults (clip_to_floor defaults to true, as on the server)");
+  check(n.rotation_deg[0] === -90 && n.rotation_deg[1] === 170 && n.rotation_deg[2] === 30 && n.offset_m[1] === 0, "rotation wraps to ±180, NaN offsets fall back");
+  check(sameTransform(normalizeTransform(null), normalizeTransform({})) && !sameTransform(normalizeTransform(null), normalizeTransform({ scale: 2 })), "transform equality");
   return fail;
 }

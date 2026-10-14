@@ -1,7 +1,7 @@
 "use client";
 // Digital twin page (docs/platform/digital-twin.md): one building, live, in 3D. A thin toolbar over TwinView.
 
-import { Box, Building2, Camera, Crosshair, Expand, Grid3x3, History, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Power, Radio, Table2, Users } from "lucide-react";
+import { Box, Building, Building2, Camera, Crosshair, Expand, Grid3x3, History, Layers, Lock, LockOpen, Map as MapIcon, Orbit, Power, Radio, Sparkles, Table2, Users, Waves } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, createClientFrom } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
@@ -12,9 +12,12 @@ import { LAYERS, type Layer, type PeopleMode, type TwinAlert, type TwinDevice, t
 import { ReplayStore, stateAt, type ReplayIndex } from "./replay/store";
 import ReplayTimeline, { RANGES, thaiTime, type RangeId } from "./replay/timeline";
 import { RAMPS, type HeatKind } from "./engine/heat";
-import type { EngineStats, Preset } from "./engine/engine";
-import TwinView, { type TwinSource, type TwinViewHandle } from "./twin-view";
+import type { EngineStats, Preset, TwinStyle } from "./engine/engine";
+import TwinView, { type ModelStatus, type TwinControls, type TwinSource, type TwinViewHandle } from "./twin-view";
 import { TwinMinimap, zoneSummaries } from "./twin-plan";
+import TwinModelPanel from "./twin-model";
+import { fetchModel, fetchModelFile, modelSender, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
+import { quickToggle, type QuickResult } from "./quick-toggle";
 import "../topology/topology.css";
 import "../floorplan/floorplan.css";
 import "./twin.css";
@@ -40,6 +43,8 @@ const store = {
 export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void }) {
   const handlers = useLatest({ getToken, refresh });
   const [client] = useState(() => createClientFrom(handlers));
+  // The model calls that must read Retry-After go through a sender with the same token and refresh as the client.
+  const modelClient: ModelClient = useMemo(() => ({ raw: client.raw, post: client.post, send: modelSender(handlers) }), [client, handlers]);
   const onUnauthorizedRef = useLatest(onUnauthorized);
   const [sites, setSites] = useState<Site[] | null>(null);
   const [siteId, setSiteId] = useState("");
@@ -47,6 +52,17 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [floorId, setFloorId] = useState("");
   const [layers, setLayers] = useState<Layer[]>(["temperature", "people"]);
   const [people, setPeople] = useState<PeopleMode>(() => (store.get("aether.twin.people") as PeopleMode) || "counts");
+  // The look: classic (the original rendering) or immersive (beacons, badges with buttons, holographic floor).
+  const [style, setStyle] = useState<TwinStyle>(() => (store.get("aether.twin.style") === "immersive" ? "immersive" : "classic"));
+  // Ambient motion is off unless this browser turned it on (wall monitors must idle at 0 fps).
+  const [ambient, setAmbient] = useState(() => store.get("aether.twin.ambient") === "1");
+  const [showModel, setShowModel] = useState(false);
+  const [modelInfo, setModelInfo] = useState<{ model: SiteModel | null; status: ModelStatus }>({ model: null, status: "none" });
+  const [modelKey, setModelKey] = useState(0);
+  const [modelDraft, setModelDraft] = useState<ModelTransform | null>(null);
+  const [canManage, setCanManage] = useState<boolean | null>(null);
+  const [canCommand, setCanCommand] = useState<boolean | null>(null);
+  const [pendingCmd, setPendingCmd] = useState<Record<string, QuickResult>>({});
   const [explode, setExplode] = useState(0.55);
   const [isolate, setIsolate] = useState(false);
   const [tour, setTour] = useState(false);
@@ -99,14 +115,58 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
 
   useEffect(() => { if (siteId) store.set("aether.twin.site", siteId); }, [siteId]);
   useEffect(() => { store.set("aether.twin.people", people); }, [people]);
+  useEffect(() => { store.set("aether.twin.style", style); }, [style]);
+  useEffect(() => { store.set("aether.twin.ambient", ambient ? "1" : "0"); }, [ambient]);
+
+  // Who may upload, align or delete the building model: owners, and admins whose floor plan access is not read-only
+  // (the server's rule for writing sites). Unknown → the panel shows the controls and explains a refusal.
+  useEffect(() => {
+    let active = true;
+    client.me().then((me) => {
+      if (!active) return;
+      const plans = me.permissions?.floorplan, control = me.permissions?.control;
+      setCanManage(me.role === "owner" || (me.role === "admin" && plans !== "read" && plans !== "none"));
+      // Manual commands: owner, admin or operator, unless the control module is limited (the server decides anyway).
+      setCanCommand(me.role === "owner" || ((me.role === "admin" || me.role === "operator") && control !== "read" && control !== "none"));
+    }).catch(() => { if (active) { setCanManage(null); setCanCommand(null); } });
+    return () => { active = false; };
+  }, [client]);
 
   const source: TwinSource = useMemo(() => ({
     site: (id) => client.raw<Site>(`/sites/${id}`),
     state: (id, p) => client.raw<TwinState>(`/twin/sites/${id}/state?people=${p}`),
-  }), [client]);
+    model: {
+      meta: (id) => fetchModel(modelClient, id),
+      file: (id, rev, signal) => fetchModelFile(modelClient, id, rev, signal),
+    },
+  }), [client, modelClient]);
+
+  // In-scene power buttons (immersive): the side card's command flow, one device at a time, then a refetch.
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const onToggle = useCallback((d: TwinDevice) => {
+    const cur = pendingCmd[d.id];
+    if (cur && (cur.status === "pending" || cur.status === "sent")) return;
+    void quickToggle(client, d.id, d.on !== 1, (r) => setPendingCmd((p) => ({ ...p, [d.id]: r })), () => alive.current).then((r) => {
+      if (!alive.current) return;
+      setRefreshKey((k) => k + 1);
+      // The badge says how it ended for a moment, then shows the device's reported state alone.
+      setTimeout(() => {
+        if (alive.current) setPendingCmd((p) => { if (p[d.id] !== r) return p; const next = { ...p }; delete next[d.id]; return next; });
+      }, r.status === "failed" ? 6000 : 2500);
+    });
+  }, [client, pendingCmd]);
+  // A member known not to command devices gets badges without power buttons; unknown → buttons, and a refusal is explained.
+  const controls: TwinControls | undefined = useMemo(() => (canCommand === false ? undefined : { pending: pendingCmd, onToggle, disabled: mode !== "live" }), [canCommand, pendingCmd, onToggle, mode]);
+  const fitModel = useCallback((t: ModelTransform) => handle.current?.fitModel(t) ?? null, []);
+  const onModel = useCallback((m: SiteModel | null, status: ModelStatus) => setModelInfo({ model: m, status }), []);
 
   // Signals refetch now (alerts at once, the rest coalesced by the hook); the poll is only a safety net.
-  const connected = useSignals(handlers, (kind) => { if (kind !== "layout" && kind !== "command") setRefreshKey((k) => k + 1); });
+  // A model upload, alignment or delete elsewhere emits "inventory" too: its record is refetched (the file only on a new revision).
+  const connected = useSignals(handlers, (kind) => {
+    if (kind !== "layout" && kind !== "command") setRefreshKey((k) => k + 1);
+    if (kind === "inventory") setModelKey((k) => k + 1);
+  });
 
   const onReady = useCallback((s: Site) => {
     setSite(s);
@@ -262,9 +322,16 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
           <button type="button" className={mode === "live" ? "is-on" : ""} aria-pressed={mode === "live"} onClick={() => { setMode("live"); setPlaying(false); }}><Radio size={13} />สด</button>
           <button type="button" className={mode === "replay" ? "is-on" : ""} aria-pressed={mode === "replay"} disabled={!state} onClick={() => enterReplay(replayRange)} title="ย้อนดูเหตุการณ์"><History size={13} />ย้อนดู</button>
         </div>
+        <div className="twin-seg" role="group" aria-label="รูปแบบการแสดงผล">
+          <button type="button" className={style === "classic" ? "is-on" : ""} aria-pressed={style === "classic"} onClick={() => setStyle("classic")} title="มุมมองเดิม"><Box size={13} />คลาสสิก</button>
+          <button type="button" className={style === "immersive" ? "is-on" : ""} aria-pressed={style === "immersive"} onClick={() => setStyle("immersive")} title="ห้องควบคุม: สถานะและปุ่มสั่งงานในฉาก"><Sparkles size={13} />Immersive</button>
+        </div>
+        {style === "immersive" && (
+          <button type="button" className={`topo-btn ${ambient ? "is-on" : ""}`} aria-pressed={ambient} onClick={() => setAmbient(!ambient)} title="ภาพเคลื่อนไหวพื้นหลัง (หยุดเองเมื่อซ่อนแท็บหรือตั้งค่าลดการเคลื่อนไหว)" aria-label="ภาพเคลื่อนไหวพื้นหลัง"><Waves size={14} /></button>
+        )}
         <label className="fp-site twin-site">
           <Building2 size={14} />
-          <select aria-label="เลือกอาคาร" value={siteId} onChange={(e) => { setSiteId(e.target.value); setState(null); setSite(null); }}>
+          <select aria-label="เลือกอาคาร" value={siteId} onChange={(e) => { if (e.target.value === siteId) return; setSiteId(e.target.value); setState(null); setSite(null); setModelDraft(null); }}>
             {(sites ?? []).length === 0 && <option value="">ยังไม่มีอาคาร</option>}
             {(sites ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -285,7 +352,8 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         </div>
         <label className="twin-explode" title="ระยะห่างระหว่างชั้น"><Grid3x3 size={13} /><input type="range" min={0} max={1.2} step={0.05} value={explode} onChange={(e) => setExplode(Number(e.target.value))} aria-label="ระยะห่างระหว่างชั้น" /></label>
         <button type="button" className={`topo-btn ${isolate ? "is-on" : ""}`} aria-pressed={isolate} onClick={() => setIsolate(!isolate)} title="แสดงเฉพาะชั้นนี้" aria-label="แสดงเฉพาะชั้นนี้"><Camera size={14} /></button>
-        <button type="button" className={`topo-btn ${showSwitches ? "is-on" : ""}`} aria-pressed={showSwitches} onClick={() => setShowSwitches(!showSwitches)} title="สวิตช์และปลั๊ก" aria-label="สวิตช์และปลั๊ก"><Power size={14} /></button>
+        <button type="button" className={`topo-btn ${showSwitches ? "is-on" : ""}`} aria-pressed={showSwitches} onClick={() => { setShowSwitches(!showSwitches); setShowModel(false); }} title="สวิตช์และปลั๊ก" aria-label="สวิตช์และปลั๊ก"><Power size={14} /></button>
+        <button type="button" className={`topo-btn ${showModel ? "is-on" : ""}`} aria-pressed={showModel} disabled={!siteId} onClick={() => { if (showModel) setModelDraft(null); setShowModel(!showModel); setShowSwitches(false); }} title="โมเดลอาคาร 3 มิติ (CAD)"><Building size={14} />อาคาร 3D</button>
         <button type="button" className={`topo-btn ${showData ? "is-on" : ""}`} aria-pressed={showData} onClick={() => setShowData(!showData)} title="ตารางข้อมูล" aria-label="ตารางข้อมูล"><Table2 size={14} /></button>
         <button type="button" className="topo-btn" onClick={fullscreen} title="เต็มจอ" aria-label="เต็มจอ"><Expand size={14} /></button>
       </header>
@@ -293,7 +361,8 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
       <div className="twin-stage">
         {siteId ? (
           <TwinView siteId={siteId} source={source} floorId={floorId} layers={layers} people={people} tour={tour && mode === "live"} explode={explode} isolate={isolate}
-            mode={mode} frozen={frozen} autoFocus={mode === "live"}
+            mode={mode} frozen={frozen} autoFocus={mode === "live"} style={style} ambient={ambient} controls={controls}
+            modelKey={modelKey} modelTransform={modelDraft} onModel={onModel}
             refreshKey={refreshKey} pollMs={connected ? 20000 : 6000} handleRef={handle} onReady={onReady} onState={onState} onSelect={setSelected} onError={fail}
             onAlertFocus={(a) => { const z = handle.current?.engine()?.zoneName(a.gateway_id); if (z) setFloorId(z.floorId); setTour(false); }} />
         ) : sites && <div className="twin-empty"><Building2 size={28} /><p>ยังไม่มีอาคาร · วาดผังในหน้า &ldquo;ผังอาคาร&rdquo; ก่อน แล้วกลับมาดูแบบ digital twin</p></div>}
@@ -325,6 +394,13 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
           )}
           {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง</small>}
         </div>
+        {showModel && siteId && (
+          // Keyed by site: switching building mid-upload unmounts the panel, which aborts the upload and cancels it on
+          // the server; nothing from the old site lands in the new one.
+          <TwinModelPanel key={siteId} client={modelClient} siteId={siteId} site={site?.id === siteId ? site : null} model={modelInfo.model} status={modelInfo.status} canManage={canManage} explode={explode}
+            draft={modelDraft} onDraft={setModelDraft} fit={fitModel}
+            onChanged={() => setModelKey((k) => k + 1)} onClose={() => setShowModel(false)} />
+        )}
         {showSwitches && mode === "live" && (
           <nav className="twin-switchboard" aria-label="อุปกรณ์ที่สั่งงานได้">
             <strong>สวิตช์ ไฟ ปลั๊ก ม่าน แอร์</strong>

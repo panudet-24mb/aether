@@ -4,6 +4,10 @@
 //
 // Rendering is on demand: nothing is drawn while nothing changes (0 fps when idle). Continuous frames happen only
 // while the camera moves, a tween runs, or an SOS pulses. Quality tiers trade looks for frame rate on TV sticks.
+//
+// Two styles share this engine: classic (the original look) and immersive (immersive.ts: image-based lighting, a
+// holographic floor, devices as status beacons, in-scene badges with buttons, optional ambient motion that runs at
+// 30 fps at most and stops when the tab is hidden or motion is reduced).
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -15,10 +19,15 @@ import type { Zone } from "../../floorplan/model";
 import { buildBuilding, disposeTree, type Floor3D, type FloorFrame } from "./building";
 import { comfortBand, comfortT, heatGrid, heatPixels, staleWeight, type HeatKind, type HeatSensor, type P } from "./heat";
 import { assignSlots, zoneSlots } from "./slots";
+import { beaconColor, makeEnvironment, makeGround, styleBuilding, towerGeometry, type BeaconTone, type Ground } from "./immersive";
+import { ModelLayer, type Flattened, type PlanPlace } from "./model";
+import { readTheme, type TwinTheme } from "../theme";
+import type { ModelTransform } from "../model-api";
 import type { Layer, PeopleMode, TwinAlert, TwinDevice, TwinState } from "../api";
 
 export type Quality = "high" | "med" | "low";
 export type Preset = "overview" | "plan" | "floor" | "alert" | "tour";
+export type TwinStyle = "classic" | "immersive";
 
 const STAGE = 0x0b1418, ACCENT = 0xa7f3d0, AMBER = 0xf6c177, CORAL = 0xff8f70, MUTED = 0x5d7279, BLUE = 0x80b7ff, INK = 0xe6f2ee, LAMP = 0xffe39a, LAMP_OFF = 0x34444a;
 const ZONE_COLORS: Record<string, [number, number, number]> = { mint: [167, 243, 208], blue: [128, 183, 255], amber: [246, 193, 119], coral: [255, 143, 112], violet: [196, 167, 255], slate: [159, 177, 182] };
@@ -26,6 +35,32 @@ const ZONE_COLORS: Record<string, [number, number, number]> = { mint: [167, 243,
 export type LabelSpec = { id: string; floorId: string; x: number; y: number; h: number; text: string; tone?: "sos" | "warn" | "muted" | "person" | "zone" };
 export type EngineStats = { fps: number; calls: number; triangles: number; tier: Quality; textures: number; geometries: number };
 export type PickResult = { kind: "device" | "gateway"; id: string } | null;
+
+/** An in-scene status badge (immersive): a projected DOM node with a select button and, for outputs, a power switch. */
+export type BadgeSpec = {
+  id: string;
+  floorId: string;
+  x: number;
+  y: number;
+  h: number;
+  name: string;
+  /** The key value: °C, %, W, เปิด/ปิด, ประตูเปิด. */
+  value: string;
+  /** Spoken status (ออนไลน์, แจ้งเตือน, …), part of the button's label. */
+  status: string;
+  tone: BeaconTone;
+  /** Higher wins a crowded spot; alerts and the selected device are always shown. */
+  priority: number;
+  always?: boolean;
+  selected?: boolean;
+  toggle?: { on: boolean | null; state: "idle" | "pending" | "sent" | "confirmed" | "failed"; disabled: boolean };
+  message?: string;
+};
+export type BadgeAction = "select" | "toggle";
+type BadgeEl = { el: HTMLDivElement; main: HTMLButtonElement; name: HTMLSpanElement; value: HTMLSpanElement; power: HTMLButtonElement | null; msg: HTMLSpanElement; sig: string; w: number; h: number };
+const MAX_BADGES = 24;
+const AMBIENT_IDLE_MS = 120000;
+const ACTIVITY = ["pointerdown", "pointermove", "keydown", "wheel"] as const;
 
 type FloorInfo = { id: string; draft: Floor3D["draft"]; frame: FloorFrame };
 type ZoneRef = { floorId: string; zone: Zone; index: number; centre: P; slots: P[] };
@@ -41,11 +76,38 @@ export class TwinEngine {
   private labelHost: HTMLDivElement;
   private labelPool: HTMLDivElement[] = [];
   private labels: LabelSpec[] = [];
+  /** Screen rectangles of the labels drawn this frame (badges keep clear of them). */
+  private labelRects: [number, number, number, number][] = [];
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private tier: Quality;
   private autoTier: boolean;
   private reducedMotion: boolean;
+  private style: TwinStyle;
+  private theme: TwinTheme | null = null;
+  private envMap: THREE.WebGLRenderTarget | null = null;
+  private hemi: THREE.HemisphereLight;
+  private sun: THREE.DirectionalLight;
+  private ground: Ground | null = null;
+  private beaconBase: THREE.InstancedMesh | null = null;
+  private alertMesh: THREE.InstancedMesh | null = null;
+  private alerting: { at: THREE.Vector3; phase: number }[] = [];
+  private phases = new Map<string, number>();
+  private markerKey = "";
+  private ambient = false;
+  /** Last pointer or keyboard input, or state change: ambient motion stops 2 minutes after it. */
+  private lastActivity = performance.now();
+  private stateSig = "";
+  private paused = false;
+  private ambientAt = 0;
+  private badgeHost: HTMLDivElement | null = null;
+  private badges: BadgeSpec[] = [];
+  private badgeEls = new Map<string, BadgeEl>();
+  private badgeRange = 60;
+  private onBadge: ((id: string, action: BadgeAction) => void) | null = null;
+  private modelLayer = new ModelLayer();
+  private modelTransform: ModelTransform | null = null;
+  private lastBuild: { floors: Floor3D[]; activeId: string; explode: number; isolate: boolean } | null = null;
 
   private building = new THREE.Group();
   private heat = new THREE.Group();
@@ -80,7 +142,7 @@ export class TwinEngine {
   private raf = 0;
   private tween: { fromPos: THREE.Vector3; toPos: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; start: number; ms: number } | null = null;
   private touring = false;
-  private clock = new THREE.Clock();
+  private startedAt = performance.now();
   private frameTimes: number[] = [];
   private lastFrame = 0;
   private fps = 0;
@@ -90,16 +152,19 @@ export class TwinEngine {
   private raycaster = new THREE.Raycaster();
   private disposed = false;
 
-  constructor(host: HTMLElement, opts: { quality?: Quality | "auto"; reducedMotion?: boolean } = {}) {
+  constructor(host: HTMLElement, opts: { quality?: Quality | "auto"; reducedMotion?: boolean; style?: TwinStyle } = {}) {
     this.host = host;
     this.autoTier = !opts.quality || opts.quality === "auto";
     this.tier = opts.quality && opts.quality !== "auto" ? opts.quality : "high";
     this.reducedMotion = !!opts.reducedMotion;
+    this.style = opts.style ?? "classic";
     this.renderer = new THREE.WebGLRenderer({ antialias: this.tier !== "low", alpha: false, powerPreference: "high-performance" });
     this.renderer.setClearColor(STAGE, 1);
     // Count a whole frame (bloom renders several passes), not only its last pass.
     this.renderer.info.autoReset = false;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // The building model can be cut above the active floor (a clipping plane on its materials only).
+    this.renderer.localClippingEnabled = true;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
     this.labelHost = document.createElement("div");
@@ -108,11 +173,13 @@ export class TwinEngine {
     host.appendChild(this.labelHost);
 
     this.scene.background = new THREE.Color(STAGE);
-    this.scene.add(new THREE.HemisphereLight(0xdff5ee, 0x0b1418, 1.05));
+    this.hemi = new THREE.HemisphereLight(0xdff5ee, 0x0b1418, 1.05);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight(0xffffff, 1.1);
     sun.position.set(30, 60, 20);
+    this.sun = sun;
     this.scene.add(sun);
-    for (const g of [this.stage, this.building, this.heat, this.markers, this.people, this.fx]) this.scene.add(g);
+    for (const g of [this.stage, this.modelLayer.group, this.building, this.heat, this.markers, this.people, this.fx]) this.scene.add(g);
     this.camera.position.set(40, 42, 52);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -123,12 +190,15 @@ export class TwinEngine {
     this.controls.addEventListener("change", () => this.invalidate());
     this.controls.addEventListener("start", () => { this.touring = false; this.tween = null; });
 
+    this.applyLook();
     this.applyTier();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
     this.resize();
     this.renderer.domElement.addEventListener("pointerdown", this.onDown);
     this.renderer.domElement.addEventListener("pointerup", this.onUp);
+    document.addEventListener("visibilitychange", this.onVisibility);
+    for (const ev of ACTIVITY) window.addEventListener(ev, this.onActivity, { passive: true });
     this.loop();
   }
 
@@ -140,9 +210,16 @@ export class TwinEngine {
     this.ro.disconnect();
     this.renderer.domElement.removeEventListener("pointerdown", this.onDown);
     this.renderer.domElement.removeEventListener("pointerup", this.onUp);
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    for (const ev of ACTIVITY) window.removeEventListener(ev, this.onActivity);
     this.controls.dispose();
+    this.ground?.dispose();
     for (const g of [this.stage, this.building, this.heat, this.markers, this.people, this.fx]) disposeTree(g);
     for (const p of this.heatPlanes.values()) p.texture.dispose();
+    this.modelLayer.dispose();
+    this.envMap?.dispose();
+    this.badgeHost?.removeEventListener("click", this.onBadgeClick);
+    this.badgeHost?.remove();
     this.composer?.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss(); // browsers cap live WebGL contexts
@@ -169,7 +246,8 @@ export class TwinEngine {
   private applyTier() {
     const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
     this.renderer.setPixelRatio(this.tier === "high" ? Math.min(dpr, 2) : this.tier === "med" ? Math.min(dpr, 1.5) : 1);
-    this.scene.fog = this.tier === "low" ? null : new THREE.Fog(STAGE, 140, 460);
+    const immersive = this.style === "immersive" && this.theme;
+    this.scene.fog = this.tier === "low" ? null : immersive ? new THREE.FogExp2(this.theme!.paper, 0.0045) : new THREE.Fog(STAGE, 140, 460);
     if (this.tier === "high") {
       if (!this.composer) {
         this.composer = new EffectComposer(this.renderer);
@@ -178,6 +256,10 @@ export class TwinEngine {
         this.composer.addPass(this.bloom);
         this.composer.addPass(new OutputPass());
       }
+      // Bloom only on the high tier; the immersive style lets beacons and edges glow a little more.
+      this.bloom!.strength = immersive ? 0.8 : 0.55;
+      this.bloom!.radius = immersive ? 0.62 : 0.5;
+      this.bloom!.threshold = immersive ? 0.7 : 0.82;
     } else if (this.composer) {
       this.composer.dispose();
       this.composer = null;
@@ -196,6 +278,57 @@ export class TwinEngine {
   }
 
   setReducedMotion(on: boolean) { this.reducedMotion = on; this.invalidate(); }
+
+  /** Switches between the classic and the immersive look without recreating the WebGL context. */
+  setStyle(style: TwinStyle) {
+    if (style === this.style) return;
+    this.style = style;
+    this.applyLook();
+    this.applyTier();
+    if (style === "classic") this.setBadges([]);
+    if (this.lastBuild) {
+      const b = this.lastBuild;
+      this.setBuilding(b.floors, b.activeId, b.explode, b.isolate);
+    }
+    this.invalidate();
+  }
+
+  /** Ambient motion (immersive only): a slow grid sweep and breathing beacons. Off when motion is reduced. */
+  setAmbient(on: boolean) { this.ambient = on; this.invalidate(); }
+
+  /** A paused view (a TV playlist between turns) never runs ambient frames. */
+  setPaused(on: boolean) { this.paused = on; this.invalidate(); }
+
+  private ambientActive(): boolean {
+    return this.style === "immersive" && this.ambient && !this.reducedMotion && !this.paused
+      && !(typeof document !== "undefined" && document.hidden) && performance.now() - this.lastActivity < AMBIENT_IDLE_MS;
+  }
+
+  /** Input or new data: ambient motion (if on) runs again, for another 2 minutes. */
+  private onActivity = () => {
+    const was = this.ambientActive();
+    this.lastActivity = performance.now();
+    if (!was && this.ambientActive()) this.invalidate();
+  };
+
+
+  private onVisibility = () => this.invalidate();
+
+  /** Lights, background and environment for the current style; classic is exactly the original setup. */
+  private applyLook() {
+    const immersive = this.style === "immersive";
+    if (immersive) {
+      this.theme = readTheme();
+      if (!this.envMap) this.envMap = makeEnvironment(this.renderer);
+    }
+    const bg = immersive ? this.theme!.paper : STAGE;
+    this.renderer.setClearColor(bg, 1);
+    (this.scene.background as THREE.Color).setHex(bg);
+    this.scene.environment = immersive && this.envMap ? this.envMap.texture : null;
+    this.scene.environmentIntensity = immersive ? 0.55 : 1;
+    this.hemi.intensity = immersive ? 0.5 : 1.05;
+    this.sun.intensity = immersive ? 0.85 : 1.1;
+  }
 
   stats(): EngineStats {
     const info = this.renderer.info;
@@ -221,8 +354,12 @@ export class TwinEngine {
     this.raf = requestAnimationFrame(this.loop);
     const damping = this.controls.update();
     const moving = this.animating();
-    if (!this.dirty && !moving && !damping) { this.lastFrame = 0; return; }
     const now = performance.now();
+    if (!this.dirty && !moving && !damping) {
+      this.lastFrame = 0;
+      // Ambient motion alone draws at 30 fps at most and is never counted towards the tier's frame rate.
+      if (!this.ambientActive() || now - this.ambientAt < 33) return;
+    }
     if (this.lastFrame > 0) {
       this.frameTimes.push(now - this.lastFrame);
       if (this.frameTimes.length > 300) this.frameTimes.shift();
@@ -238,11 +375,13 @@ export class TwinEngine {
       }
     }
     this.lastFrame = moving || damping ? now : 0;
+    this.ambientAt = now;
     this.step(now);
     this.renderer.info.reset();
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.placeLabels();
+    this.placeBadges();
     this.dirty = false;
   };
 
@@ -257,7 +396,7 @@ export class TwinEngine {
       off.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.0016);
       this.camera.position.copy(t).add(off);
     }
-    const t = this.clock.getElapsedTime();
+    const t = (performance.now() - this.startedAt) / 1000;
     for (const s of this.sosFx) {
       if (this.reducedMotion) { s.ring.scale.setScalar(2.2); (s.ring.material as THREE.MeshBasicMaterial).opacity = 0.55; continue; }
       const k = (t * 0.7 + s.phase) % 1;
@@ -265,6 +404,15 @@ export class TwinEngine {
       (s.ring.material as THREE.MeshBasicMaterial).opacity = 0.75 * (1 - k);
       (s.pillar.material as THREE.MeshBasicMaterial).opacity = 0.32 + 0.18 * Math.sin(t * 4 + s.phase * 6);
     }
+    const ambient = this.ambientActive();
+    // A device alert's ring pulses only as ambient motion (an alert can stay open for hours: never a reason to keep
+    // rendering on its own); still, it is a solid ring. SOS and hazards keep their own always-on pulse above.
+    this.paintAlerts(t, ambient);
+    if (this.ground) {
+      this.ground.uniforms.uTime.value = t;
+      this.ground.uniforms.uScan.value = ambient ? 1 : 0;
+    }
+    if (this.beaconBase) (this.beaconBase.material as THREE.MeshBasicMaterial).opacity = ambient ? 0.42 + 0.16 * Math.sin(t * 1.7) : 0.5;
     if (this.personMesh && this.tokens.size) {
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
       let i = 0;
@@ -294,6 +442,8 @@ export class TwinEngine {
 
   private placeLabels() {
     const w = this.host.clientWidth, h = this.host.clientHeight, v = new THREE.Vector3();
+    const measure = this.badgeEls.size > 0;
+    this.labelRects = [];
     this.labelPool.forEach((el, i) => {
       const spec = this.labels[i];
       if (!spec) { el.style.display = "none"; return; }
@@ -302,11 +452,120 @@ export class TwinEngine {
       v.copy(at).project(this.camera);
       if (v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) { el.style.display = "none"; return; }
       el.style.display = "";
-      if (el.textContent !== spec.text) el.textContent = spec.text;
+      if (el.textContent !== spec.text) { el.textContent = spec.text; delete el.dataset.w; }
       const tone = `twin-label ${spec.tone ? `is-${spec.tone}` : ""}`;
-      if (el.className !== tone) el.className = tone;
-      el.style.transform = `translate(-50%, -100%) translate(${((v.x + 1) / 2) * w}px, ${((1 - v.y) / 2) * h}px)`;
+      if (el.className !== tone) { el.className = tone; delete el.dataset.w; }
+      const sx = ((v.x + 1) / 2) * w, sy = ((1 - v.y) / 2) * h;
+      el.style.transform = `translate(-50%, -100%) translate(${sx}px, ${sy}px)`;
+      if (measure) {
+        // Sizes are read once per text change (a layout read), not every frame.
+        if (!el.dataset.w) { el.dataset.w = String(el.offsetWidth); el.dataset.h = String(el.offsetHeight); }
+        const lw = Number(el.dataset.w), lh = Number(el.dataset.h);
+        this.labelRects.push([sx - lw / 2, sy - lh, lw, lh]);
+      }
     });
+  }
+
+  // ---- badges (immersive: projected DOM with real buttons) ---------------------------------------------------
+
+  setBadgeHandler(fn: ((id: string, action: BadgeAction) => void) | null) { this.onBadge = fn; }
+
+  /** Badges to show; at most 24, keyed by id so a focused button keeps its node while the list changes. */
+  setBadges(list: BadgeSpec[]) {
+    const next = list.slice(0, MAX_BADGES);
+    if (!next.length && !this.badgeEls.size) { this.badges = []; return; }
+    if (!this.badgeHost) {
+      const host = document.createElement("div");
+      host.className = "twin-badges";
+      host.setAttribute("role", "group");
+      host.setAttribute("aria-label", "ป้ายสถานะอุปกรณ์ในฉาก");
+      host.addEventListener("click", this.onBadgeClick);
+      this.host.appendChild(host);
+      this.badgeHost = host;
+    }
+    // The badge holding keyboard focus is never removed while focused (its device may have left the list).
+    const focused = typeof document !== "undefined" ? document.activeElement : null;
+    for (const [id, rec] of this.badgeEls) {
+      if (focused && rec.el.contains(focused) && !next.some((b) => b.id === id)) {
+        const last = this.badges.find((b) => b.id === id);
+        if (last) next.push(last);
+      }
+    }
+    const keep = new Set(next.map((b) => b.id));
+    for (const [id, rec] of this.badgeEls) if (!keep.has(id)) { rec.el.remove(); this.badgeEls.delete(id); }
+    for (const spec of next) {
+      let rec = this.badgeEls.get(spec.id);
+      if (!rec) {
+        rec = makeBadge(spec.id);
+        this.badgeHost.appendChild(rec.el);
+        this.badgeEls.set(spec.id, rec);
+      }
+      fillBadge(rec, spec);
+    }
+    this.badges = next;
+    this.invalidate();
+  }
+
+  private onBadgeClick = (e: MouseEvent) => {
+    const btn = (e.target as Element | null)?.closest?.("button[data-badge]") as HTMLButtonElement | null;
+    if (!btn || btn.disabled) return;
+    e.stopPropagation();
+    this.onBadge?.(btn.dataset.badge ?? "", (btn.dataset.action as BadgeAction) ?? "select");
+  };
+
+  /**
+   * Places badges over their devices. A badge that would cover another badge or a zone label is lifted (a longer
+   * leader line) up to twice; if it still collides it gives way, by priority and then distance to the camera.
+   * Alerts, the selected device and a badge holding keyboard focus always stay. Badges far past the camera's
+   * target hide when zoomed in.
+   */
+  private placeBadges() {
+    if (!this.badgeEls.size) return;
+    const w = this.host.clientWidth, h = this.host.clientHeight, v = new THREE.Vector3();
+    const cam = this.camera.position;
+    const focused = typeof document !== "undefined" ? document.activeElement : null;
+    const items: { spec: BadgeSpec; rec: BadgeEl; sx: number; sy: number; dist: number; pinned: boolean }[] = [];
+    for (const spec of this.badges) {
+      const rec = this.badgeEls.get(spec.id);
+      if (!rec) continue;
+      const at = this.world(spec.floorId, spec.x, spec.y, spec.h);
+      if (at) v.copy(at).project(this.camera);
+      const holdsFocus = !!focused && rec.el.contains(focused);
+      if (!at || v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) {
+        // Off screen: hidden, unless it holds keyboard focus (it stays where it was last drawn).
+        if (!holdsFocus) rec.el.style.display = "none";
+        continue;
+      }
+      const pinned = !!spec.always || !!spec.selected || holdsFocus;
+      items.push({ spec, rec, sx: ((v.x + 1) / 2) * w, sy: ((1 - v.y) / 2) * h, dist: at.distanceTo(cam), pinned });
+    }
+    items.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.spec.priority - a.spec.priority || a.dist - b.dist);
+    const reach = Math.max(this.badgeRange, cam.distanceTo(this.controls.target) * 1.4);
+    const placed: [number, number, number, number][] = [];
+    const obstacles = this.labelRects;
+    const clear = (x0: number, y0: number, bw: number, bh: number) => {
+      const hits = (r: [number, number, number, number]) => x0 < r[0] + r[2] + 4 && x0 + bw + 4 > r[0] && y0 < r[1] + r[3] + 3 && y0 + bh + 3 > r[1];
+      return !placed.some(hits) && !obstacles.some(hits);
+    };
+    for (const it of items) {
+      const { rec } = it;
+      if (!it.pinned && it.dist > reach) { rec.el.style.display = "none"; continue; }
+      if (rec.w < 0) { rec.el.style.display = ""; rec.w = rec.el.offsetWidth; rec.h = rec.el.offsetHeight; }
+      const x0 = it.sx - rec.w / 2;
+      let lift = -1;
+      for (let k = 0; k < 3; k++) {
+        const y0 = it.sy - rec.h - 8 - k * (rec.h + 6);
+        if (clear(x0, y0, rec.w, rec.h)) { lift = k; break; }
+      }
+      if (lift < 0 && !it.pinned) { rec.el.style.display = "none"; continue; }
+      const k = Math.max(0, lift);
+      const y0 = it.sy - rec.h - 8 - k * (rec.h + 6);
+      placed.push([x0, y0, rec.w, rec.h]);
+      rec.el.style.display = "";
+      rec.el.style.transform = `translate(${Math.round(x0)}px, ${Math.round(y0)}px)`;
+      rec.el.style.setProperty("--lead", `${8 + k * (rec.h + 6)}px`);
+      rec.el.classList.toggle("is-far", it.dist > reach * 0.75);
+    }
   }
 
   // ---- geometry -----------------------------------------------------------------------------------------------
@@ -321,8 +580,10 @@ export class TwinEngine {
   /** Rebuilds the building (floors, walls, items), the stage and the zone outlines. Data layers follow. */
   setBuilding(floors: Floor3D[], activeId: string, explode: number, isolate: boolean) {
     this.activeId = activeId;
+    this.lastBuild = { floors, activeId, explode, isolate };
     const { frames } = buildBuilding(this.building, { floors, activeId, assets: [], selection: null, explode, isolate, devices: false, people: false, labels: false, liveZones: false, glass: true, zones: false });
     this.floors = floors.map((f) => ({ id: f.id, draft: f.draft, frame: frames.find((fr) => fr.id === f.id) ?? { id: f.id, y: 0, originX: 0, originZ: 0, visible: false, active: false } }));
+    if (this.style === "immersive" && this.theme) styleBuilding(this.building, this.theme);
     // Floors above the active one fade almost away, so the camera can look down into the active floor.
     const activeY = frames.find((fr) => fr.active)?.y ?? 0;
     for (const g of this.building.children) {
@@ -344,6 +605,8 @@ export class TwinEngine {
         for (const g of z.gateway_ids ?? []) if (!this.zoneByGateway.has(g)) this.zoneByGateway.set(g, ref);
       });
     }
+    const act = this.floors.find((f) => f.id === activeId) ?? this.floors[0];
+    if (act) this.badgeRange = Math.max(45, Math.hypot(act.draft.width_m, act.draft.depth_m) * 1.5);
     this.buildStage();
     this.buildOutlines();
     for (const p of this.heatPlanes.values()) { p.texture.dispose(); }
@@ -351,20 +614,29 @@ export class TwinEngine {
     this.heat.clear();
     this.heatPlanes.clear();
     if (this.state) this.setState(this.state, [...this.layers], true);
+    this.applyModel();
     this.invalidate();
   }
 
   private buildStage() {
+    this.ground?.dispose();
     disposeTree(this.stage);
     this.stage.clear();
     const active = this.floors.find((f) => f.id === this.activeId) ?? this.floors[0];
     if (!active) return;
     const size = Math.max(active.draft.width_m, active.draft.depth_m) * 2.6;
-    const grid = new THREE.GridHelper(size, Math.round(size / 2), 0x1d3038, 0x14222a);
-    grid.position.y = -0.2;
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.55;
-    this.stage.add(grid);
+    this.ground = null;
+    if (this.style === "immersive" && this.theme) {
+      const centre = new THREE.Vector3(active.frame.originX + active.draft.width_m / 2, 0, active.frame.originZ + active.draft.depth_m / 2);
+      this.ground = makeGround(this.theme, centre, size * 0.75, -0.2);
+      this.stage.add(this.ground.group);
+    } else {
+      const grid = new THREE.GridHelper(size, Math.round(size / 2), 0x1d3038, 0x14222a);
+      grid.position.y = -0.2;
+      (grid.material as THREE.Material).transparent = true;
+      (grid.material as THREE.Material).opacity = 0.55;
+      this.stage.add(grid);
+    }
     // A soft contact shadow under each visible slab.
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 128;
@@ -413,6 +685,10 @@ export class TwinEngine {
 
   /** Applies a new live state (or new layers). `force` recomputes the heat textures even if values did not change. */
   setState(state: TwinState, layers: Layer[], force = false) {
+    // A state change that matters (a switch, a door, an alert, a headcount) counts as activity for ambient motion;
+    // a temperature drifting or the same poll again does not.
+    const sig = `${state.devices.map((d) => `${d.id}${d.on}${d.door}${d.alert ? 1 : 0}${d.sos ? 1 : 0}${d.online ? 1 : 0}`).join()}|${state.alerts.map((a) => a.id + a.status).join()}|${state.presence.counts.map((c) => c.gateway_id + c.n).join()}`;
+    if (sig !== this.stateSig) { this.stateSig = sig; this.onActivity(); }
     this.state = state;
     this.layers = new Set(layers);
     const now = Date.parse(state.server_time) || Date.now();
@@ -494,15 +770,25 @@ export class TwinEngine {
     const devices = state.devices.filter((d) => d.kind === "device" && visible.has(d.floor_id));
     const gateways = state.devices.filter((d) => d.kind === "gateway" && visible.has(d.floor_id));
     const low = this.tier === "low";
-    if (!this.deviceMesh || this.deviceMesh.count !== devices.length || this.deviceIndex.length !== devices.length) {
+    const immersive = this.style === "immersive" && !!this.theme;
+    const key = `${this.style}:${low}`;
+    const restyle = key !== this.markerKey;
+    this.markerKey = key;
+    if (!this.deviceMesh || restyle || this.deviceMesh.count !== devices.length || this.deviceIndex.length !== devices.length) {
       if (this.deviceMesh) { this.markers.remove(this.deviceMesh); this.deviceMesh.geometry.dispose(); (this.deviceMesh.material as THREE.Material).dispose(); this.deviceMesh.dispose(); }
-      this.deviceMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, low ? 8 : 16, low ? 6 : 12), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x3a5a52, emissiveIntensity: 0.6, roughness: 0.35 }), Math.max(1, devices.length));
+      // Immersive: an unlit core in the status colour (bright enough to bloom on the high tier).
+      this.deviceMesh = immersive
+        ? new THREE.InstancedMesh(new THREE.SphereGeometry(0.17, low ? 8 : 16, low ? 6 : 12), new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), Math.max(1, devices.length))
+        : new THREE.InstancedMesh(new THREE.SphereGeometry(0.22, low ? 8 : 16, low ? 6 : 12), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x3a5a52, emissiveIntensity: 0.6, roughness: 0.35 }), Math.max(1, devices.length));
       this.deviceMesh.userData.pick = "device";
       this.markers.add(this.deviceMesh);
     }
-    if (!this.gatewayMesh || this.gatewayIndex.length !== gateways.length) {
+    if (!this.gatewayMesh || restyle || this.gatewayIndex.length !== gateways.length) {
       if (this.gatewayMesh) { this.markers.remove(this.gatewayMesh); this.gatewayMesh.geometry.dispose(); (this.gatewayMesh.material as THREE.Material).dispose(); this.gatewayMesh.dispose(); }
-      this.gatewayMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.2, 0.62), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x2c4c46, emissiveIntensity: 0.5, roughness: 0.4 }), Math.max(1, gateways.length));
+      // Immersive: a hub tower standing on the floor up to the gateway's mounting height.
+      this.gatewayMesh = immersive
+        ? new THREE.InstancedMesh(towerGeometry(), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: this.theme!.blue, emissiveIntensity: 0.35, metalness: 0.45, roughness: 0.3 }), Math.max(1, gateways.length))
+        : new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.2, 0.62), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x2c4c46, emissiveIntensity: 0.5, roughness: 0.4 }), Math.max(1, gateways.length));
       this.gatewayMesh.userData.pick = "gateway";
       this.markers.add(this.gatewayMesh);
     }
@@ -511,23 +797,29 @@ export class TwinEngine {
     const m = new THREE.Matrix4(), c = new THREE.Color();
     // Switched outputs glow warm when on and dim when off, so a light switched from the UI is visible in the model.
     const tone = (d: TwinDevice) => (d.sos || d.alert ? CORAL : !d.online ? (d.last_at ? AMBER : MUTED) : d.door === 1 ? AMBER : d.on === 1 ? LAMP : d.on === 0 ? LAMP_OFF : ACCENT);
+    const now = Date.parse(state.server_time) || Date.now();
     const stems: number[] = [];
     this.deviceMesh.count = devices.length;
     devices.forEach((d, i) => {
       const at = this.world(d.floor_id, d.x, d.y, d.z)!;
       m.makeTranslation(at.x, at.y, at.z);
-      if (d.on === 1) m.scale(new THREE.Vector3(1.45, 1.45, 1.45));
+      if (d.on === 1) m.scale(new THREE.Vector3(immersive ? 1.35 : 1.45, immersive ? 1.35 : 1.45, immersive ? 1.35 : 1.45));
       this.deviceMesh!.setMatrixAt(i, m);
-      this.deviceMesh!.setColorAt(i, c.setHex(tone(d)));
+      this.deviceMesh!.setColorAt(i, immersive ? beaconColor(this.theme!, beaconTone(d, now), c) : c.setHex(tone(d)));
       stems.push(at.x, at.y, at.z, at.x, at.y - d.z + 0.1, at.z);
     });
     this.gatewayMesh.count = gateways.length;
     gateways.forEach((g, i) => {
       const at = this.world(g.floor_id, g.x, g.y, g.z)!;
-      m.makeTranslation(at.x, at.y, at.z);
+      if (immersive) {
+        m.makeScale(1, Math.min(3.2, Math.max(0.7, g.z / 1.05)), 1).setPosition(at.x, at.y - g.z, at.z);
+        this.gatewayMesh!.setColorAt(i, g.online ? c.setHex(this.theme!.blue) : beaconColor(this.theme!, g.last_at ? "warn" : "off", c));
+      } else {
+        m.makeTranslation(at.x, at.y, at.z);
+        this.gatewayMesh!.setColorAt(i, c.setHex(g.online ? BLUE : AMBER));
+        stems.push(at.x, at.y, at.z, at.x, at.y - g.z + 0.1, at.z);
+      }
       this.gatewayMesh!.setMatrixAt(i, m);
-      this.gatewayMesh!.setColorAt(i, c.setHex(g.online ? BLUE : AMBER));
-      stems.push(at.x, at.y, at.z, at.x, at.y - g.z + 0.1, at.z);
     });
     for (const im of [this.deviceMesh, this.gatewayMesh]) {
       im.instanceMatrix.needsUpdate = true;
@@ -537,9 +829,76 @@ export class TwinEngine {
     if (this.stems) { this.markers.remove(this.stems); this.stems.geometry.dispose(); (this.stems.material as THREE.Material).dispose(); }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(stems, 3));
-    this.stems = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x5d7279, transparent: true, opacity: 0.5 }));
+    this.stems = new THREE.LineSegments(geo, immersive
+      ? new THREE.LineBasicMaterial({ color: this.theme!.accent, transparent: true, opacity: 0.22, toneMapped: false })
+      : new THREE.LineBasicMaterial({ color: 0x5d7279, transparent: true, opacity: 0.5 }));
     this.markers.add(this.stems);
+    this.updateBeacons(immersive ? devices : [], now, restyle);
   }
+
+  /**
+   * Immersive: a glowing ring on the floor under every device and a pulsing ring under every alerting one. Both are
+   * instanced and updated in place on every poll (matrices and colours only); a device keeps its pulse phase.
+   */
+  private updateBeacons(devices: TwinDevice[], now: number, restyle: boolean) {
+    const drop = (im: THREE.InstancedMesh | null) => { if (im) { im.removeFromParent(); im.geometry.dispose(); (im.material as THREE.Material).dispose(); im.dispose(); } return null; };
+    if (restyle || !devices.length || !this.theme) { this.beaconBase = drop(this.beaconBase); this.alertMesh = drop(this.alertMesh); }
+    if (!devices.length || !this.theme) { this.alerting = []; this.phases.clear(); return; }
+    const low = this.tier === "low";
+    if (!this.beaconBase || this.beaconBase.instanceMatrix.count < devices.length) {
+      this.beaconBase = drop(this.beaconBase);
+      const ring = new THREE.RingGeometry(0.24, 0.38, low ? 16 : 32);
+      ring.rotateX(-Math.PI / 2);
+      this.beaconBase = new THREE.InstancedMesh(ring, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), Math.max(16, devices.length));
+      this.beaconBase.renderOrder = 3;
+      this.markers.add(this.beaconBase);
+    }
+    const m = new THREE.Matrix4(), c = new THREE.Color();
+    this.beaconBase.count = devices.length;
+    devices.forEach((d, i) => {
+      const at = this.world(d.floor_id, d.x, d.y, 0.11)!;
+      this.beaconBase!.setMatrixAt(i, m.makeTranslation(at.x, at.y, at.z));
+      this.beaconBase!.setColorAt(i, beaconColor(this.theme!, beaconTone(d, now), c));
+    });
+    this.beaconBase.instanceMatrix.needsUpdate = true;
+    if (this.beaconBase.instanceColor) this.beaconBase.instanceColor.needsUpdate = true;
+    this.beaconBase.computeBoundingSphere();
+    if (!this.alertMesh) {
+      const ring = new THREE.RingGeometry(0.4, 0.52, 40);
+      ring.rotateX(-Math.PI / 2);
+      // Additive blending: an instance's colour scaled down is its opacity.
+      this.alertMesh = new THREE.InstancedMesh(ring, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), 24);
+      this.alertMesh.renderOrder = 4;
+      this.fx.add(this.alertMesh);
+    }
+    const alerting = devices.filter((d) => d.alert || d.sos).slice(0, 24);
+    const ids = new Set(alerting.map((d) => d.id));
+    for (const id of this.phases.keys()) if (!ids.has(id)) this.phases.delete(id);
+    this.alerting = alerting.flatMap((d) => {
+      const at = this.world(d.floor_id, d.x, d.y, 0.13);
+      if (!at) return [];
+      if (!this.phases.has(d.id)) this.phases.set(d.id, (this.phases.size * 0.27) % 1);
+      return [{ at, phase: this.phases.get(d.id)! }];
+    });
+    this.alertMesh.count = this.alerting.length;
+    this.alertMesh.frustumCulled = false;
+  }
+
+  /** The alert rings' frame: a pulse with ambient motion, a solid ring without it. */
+  private paintAlerts(t: number, ambient: boolean) {
+    if (!this.alertMesh || !this.theme) return;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), c = new THREE.Color();
+    const base = beaconColor(this.theme, "alert");
+    this.alerting.forEach((a, i) => {
+      const k = ambient ? (t * 0.9 + a.phase) % 1 : -1;
+      sc.setScalar(k < 0 ? 1.8 : 1 + k * 2.6);
+      this.alertMesh!.setMatrixAt(i, m.compose(a.at, q, sc));
+      this.alertMesh!.setColorAt(i, c.copy(base).multiplyScalar(k < 0 ? 0.6 : 0.85 * (1 - k)));
+    });
+    this.alertMesh.instanceMatrix.needsUpdate = true;
+    if (this.alertMesh.instanceColor) this.alertMesh.instanceColor.needsUpdate = true;
+  }
+
 
   /** People: tokens in stable slots of their zone; a tag near a gateway with no zone gets a dashed ring there. */
   private updatePeople(state: TwinState) {
@@ -655,6 +1014,57 @@ export class TwinEngine {
     });
   }
 
+  // ---- building model ------------------------------------------------------------------------------------------
+
+  /** The loaded model's key (site and revision), "" when none. */
+  modelKey(): string { return this.modelLayer.key; }
+
+  /** Shows a parsed model (null removes it). Its transform is applied from setModelTransform. */
+  setModel(model: Flattened | null, key = "") {
+    if (model) this.modelLayer.set(model, key);
+    else this.modelLayer.clear();
+    this.applyModel();
+  }
+
+  setModelTransform(t: ModelTransform | null) {
+    this.modelTransform = t;
+    this.applyModel();
+  }
+
+  /** Scale and offset that fit the model inside the plans' footprint (the widest and deepest floor). */
+  fitModel(t: ModelTransform): Pick<ModelTransform, "scale" | "offset_m"> | null {
+    const width = this.floors.reduce((s, f) => Math.max(s, f.draft.width_m), 0);
+    const depth = this.floors.reduce((s, f) => Math.max(s, f.draft.depth_m), 0);
+    if (!width || !depth) return null;
+    return this.modelLayer.fit(t, width, depth);
+  }
+
+  private planPlace(): PlanPlace {
+    const f0 = this.floors[0];
+    const active = this.floors.find((f) => f.frame.active) ?? f0;
+    const baseY = this.floors.length ? Math.min(...this.floors.map((f) => f.frame.y)) : 0;
+    return {
+      originX: f0?.frame.originX ?? 0,
+      originZ: f0?.frame.originZ ?? 0,
+      baseY,
+      clipY: active ? active.frame.y + active.draft.ceiling_m + 0.02 : null,
+    };
+  }
+
+  private applyModel() {
+    const t = this.modelTransform;
+    if (!t || !this.modelLayer.loaded) {
+      this.modelLayer.group.visible = false;
+      this.building.visible = true;
+      this.invalidate();
+      return;
+    }
+    this.modelLayer.apply(t, this.planPlace());
+    // replace: the model stands in for the generated building; devices, heat and people stay.
+    this.building.visible = !(t.visible && t.mode === "replace");
+    this.invalidate();
+  }
+
   // ---- camera ------------------------------------------------------------------------------------------------
 
   private frameFor(floorId?: string) {
@@ -739,7 +1149,10 @@ export class TwinEngine {
   private onDown = (e: PointerEvent) => { this.downAt = [e.clientX, e.clientY]; };
 
   private onUp = (e: PointerEvent) => {
-    if (!this.downAt || Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) > 4) return;
+    // Clear the press first: an orbit drag must not leave a stale press behind.
+    const down = this.downAt;
+    this.downAt = null;
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
     const r = this.renderer.domElement.getBoundingClientRect();
     const pointer = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(pointer, this.camera);
@@ -750,6 +1163,106 @@ export class TwinEngine {
     const d = (kind === "device" ? this.deviceIndex : this.gatewayIndex)[hit.instanceId];
     this.onPick?.(d ? { kind, id: d.id } : null);
   };
+}
+
+/** A device's beacon status: alert coral, stale or door open amber, offline dim grey, a switched-off output dimmed. */
+function beaconTone(d: TwinDevice, now: number): BeaconTone {
+  if (d.sos || d.alert) return "alert";
+  if (!d.online) return d.last_at && now - Date.parse(d.last_at) < 15 * 60000 ? "warn" : "off";
+  if (d.door === 1) return "warn";
+  return d.on === 0 ? "idle" : "ok";
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function powerIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.2");
+  svg.setAttribute("stroke-linecap", "round");
+  for (const d of ["M12 2v10", "M18.4 6.6a9 9 0 1 1-12.77.04"]) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
+function makeBadge(id: string): BadgeEl {
+  const el = document.createElement("div");
+  el.className = "twin-badge";
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "twin-badge-main";
+  main.dataset.badge = id;
+  main.dataset.action = "select";
+  const dot = document.createElement("i");
+  dot.className = "twin-badge-dot";
+  dot.setAttribute("aria-hidden", "true");
+  const name = document.createElement("span");
+  name.className = "twin-badge-name";
+  const value = document.createElement("span");
+  value.className = "twin-badge-value";
+  main.appendChild(dot);
+  main.appendChild(name);
+  main.appendChild(value);
+  const msg = document.createElement("span");
+  msg.className = "twin-badge-msg";
+  msg.setAttribute("role", "status");
+  el.appendChild(main);
+  el.appendChild(msg);
+  return { el, main, name, value, power: null, msg, sig: "", w: -1, h: -1 };
+}
+
+const TOGGLE_TEXT: Record<string, string> = { pending: "กำลังสั่ง…", sent: "รออุปกรณ์ยืนยัน…", confirmed: "อุปกรณ์ยืนยันแล้ว" };
+
+/** Updates a badge's content in place (text only through textContent: names come from users). */
+function fillBadge(rec: BadgeEl, b: BadgeSpec) {
+  const sig = JSON.stringify([b.name, b.value, b.status, b.tone, b.selected, b.toggle, b.message]);
+  if (sig === rec.sig) return;
+  rec.sig = sig;
+  rec.w = -1;
+  rec.el.className = `twin-badge is-${b.tone}${b.selected ? " is-selected" : ""}`;
+  rec.name.textContent = b.name;
+  rec.value.textContent = b.value;
+  rec.value.hidden = !b.value;
+  rec.main.setAttribute("aria-label", `${b.name}${b.value ? ` · ${b.value}` : ""} · ${b.status} · เปิดการ์ดอุปกรณ์`);
+  rec.main.setAttribute("aria-pressed", b.selected ? "true" : "false");
+  if (b.toggle) {
+    if (!rec.power) {
+      const p = document.createElement("button");
+      p.type = "button";
+      p.className = "twin-badge-power";
+      p.dataset.badge = rec.main.dataset.badge ?? "";
+      p.dataset.action = "toggle";
+      p.appendChild(powerIcon());
+      rec.el.insertBefore(p, rec.msg);
+      rec.power = p;
+    }
+    const t = b.toggle;
+    const busy = t.state === "pending" || t.state === "sent";
+    rec.power.disabled = t.disabled || busy;
+    rec.power.className = `twin-badge-power${t.on ? " is-on" : ""}${busy ? " is-pending" : ""}`;
+    // A switch always states whether it is on; with the state unknown it is a plain button.
+    if (t.on === null) { rec.power.removeAttribute("role"); rec.power.removeAttribute("aria-checked"); }
+    else { rec.power.setAttribute("role", "switch"); rec.power.setAttribute("aria-checked", t.on ? "true" : "false"); }
+    rec.power.setAttribute("aria-busy", busy ? "true" : "false");
+    // A stable name: the state is aria-checked's job (and aria-busy's while a command is on its way).
+    rec.power.setAttribute("aria-label", t.on === null ? `เปิด/ปิด ${b.name} (ยังไม่ทราบสถานะ)` : `สวิตช์ ${b.name}`);
+    rec.power.title = busy ? TOGGLE_TEXT[t.state] : t.on ? "เปิดอยู่ · กดเพื่อปิด" : "ปิดอยู่ · กดเพื่อเปิด";
+  } else if (rec.power) {
+    rec.power.remove();
+    rec.power = null;
+  }
+  const msg = b.message ?? (b.toggle && b.toggle.state !== "idle" && b.toggle.state !== "failed" ? TOGGLE_TEXT[b.toggle.state] : "");
+  rec.msg.textContent = msg ?? "";
+  rec.msg.hidden = !msg;
+  rec.msg.className = `twin-badge-msg${b.toggle?.state === "failed" ? " is-error" : ""}`;
 }
 
 function inside(p: P, poly: P[]): boolean {

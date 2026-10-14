@@ -32,13 +32,20 @@ export function label(text: string, color = "#e6f2ee", scale = 1): THREE.Sprite 
   return sprite;
 }
 
+/** Disposes every geometry, material and texture of a tree (every texture slot, not only `map`: a loaded model has
+ *  normal, roughness, AO, emissive and alpha maps too). */
 export function disposeTree(root: THREE.Object3D) {
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     m.geometry?.dispose?.();
     const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
-    for (const mat of mats) { (mat as THREE.SpriteMaterial).map?.dispose?.(); mat.dispose(); }
+    for (const mat of mats) disposeMaterial(mat);
   });
+}
+
+export function disposeMaterial(mat: THREE.Material) {
+  for (const v of Object.values(mat)) if ((v as THREE.Texture | null)?.isTexture) (v as THREE.Texture).dispose();
+  mat.dispose();
 }
 
 export type BuildOptions = {

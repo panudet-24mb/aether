@@ -100,6 +100,230 @@ refetches the drawing when someone saves a floor), `devices`, `presence` and `al
 The page refetches on every realtime signal (alerts at once, others coalesced to one per 3 s) and polls every 20 s as a
 safety net (6 s while the socket is down).
 
+## Building model (3D)
+
+A site (building) may carry **one** 3D model, a CAD export that the browser converts to binary glTF 2.0 (`.glb`). The
+twin draws it over the floor plan or in its place. The server stores and serves the GLB and never parses the geometry.
+It checks the container header and the checksum only.
+
+### API
+
+Paths are under `/api/v1`. Reads need the same rights as `GET /sites/:id`. Writes need the floor-image rights (owner or
+admin, `CanManageDevices`). A site in another workspace, outside the caller's projects or archived is 404. The floor
+plan module set to `none` is 403 (`moduleFor`: `sites` maps to `floorplan`).
+
+| Method and path | Who | What |
+|---|---|---|
+| `GET /sites/:id/model` | read | `{"model": null}` or `{"model": {revision, name, source_format, size, sha256, uploaded_at, transform}}` |
+| `GET /sites/:id/model/file?rev=N` | read | the GLB (`model/gltf-binary`, `nosniff`, `ETag: "<sha256>"`; `Cache-Control: private, max-age=86400` with `rev`, `private, no-cache` without); `If-None-Match` gets 304; 404 when there is no model or `rev` is not the current revision; 503 with `Retry-After` when too many downloads are running |
+| `POST /sites/:id/model/uploads` | manage | `{name, source_format, size, sha256}` gets 201 `{upload_id, chunk_size, chunks}` |
+| `POST /sites/:id/model/uploads/:upload/chunks/:index` | manage | `{data_base64}` gets 204; sending the same index again replaces it |
+| `POST /sites/:id/model/uploads/:upload/commit` | manage | checks the upload and makes it the model, gets 200 `{model}`; 503 with `Retry-After` when 3 commits are already running |
+| `POST /sites/:id/model/uploads/:upload/cancel` | manage | deletes an unfinished upload, whoever started it (the model is untouched), gets 204; audited as `site.model.upload_cancelled` |
+| `POST /sites/:id/model/transform` | manage | a transform gets 200 `{model}`; 404 when there is no model |
+| `POST /sites/:id/model/delete` | manage | 204; also removes an upload in progress; 204 when there is no model |
+
+The client fetches the file as `…/model/file?rev=<revision>`. The revision goes up on every commit and never repeats for
+a site, including after a delete (the counter is `core.sites.model_revision`). A `rev` that is not the current
+revision is 404, so another revision's bytes are never cached under its URL. A cached file is therefore never stale,
+and the client never revalidates within the day.
+
+**Transform.** Fields that are left out take their default. An unknown field, a wrong type or a value out of range is
+400.
+
+| Field | Range | Default |
+|---|---|---|
+| `scale` | 0.0001 to 10000 (model units to metres) | 1 |
+| `up` | `y` or `z` | `y` |
+| `rotation_deg` | `[x,y,z]`, each -360 to 360 | `[0,0,0]` |
+| `offset_m` | `[x,y,z]`, each -100000 to 100000, metres from the floor plan origin | `[0,0,0]` |
+| `opacity` | 0.05 to 1 | 1 |
+| `visible` | bool | true |
+| `mode` | `overlay` or `replace` (the model is drawn instead of the drawn walls) | `overlay` |
+| `clip_to_floor` | bool | true |
+
+### Upload, step by step
+
+Each request body must stay under the API body limit (256 KiB in Fiber and 288 KiB in Caddy), so the file goes up in
+chunks:
+
+1. **Start.** The client sends `name` (at most 120 characters; the server removes the path and any control or format
+   characters, such as bidi overrides), `source_format` (`glb`, `gltf`, `obj`, `fbx`, `stl`, `3dm` or `ifc`, meaning
+   what the browser converted from), `size` (20 B, the GLB header, to 32 MiB) and the `sha256` of the whole GLB. The
+   server first drops every upload of the workspace older than one hour. While **another member's** unfinished upload
+   to the same site is less than an hour old it answers 409
+   `{"error":"upload_in_progress","upload_id":…,"started_at":…}`: it is never cancelled behind their back, and the page
+   can offer to cancel it with `…/uploads/:upload/cancel`. It replaces the caller's own unfinished upload to the site,
+   and answers 409 (`conflict`) when the workspace still has 4 uploads open.
+2. **Chunks.** `chunk_size` is 163,840 bytes (160 KiB). Its base64 JSON body is about 213 KiB. Every chunk except the
+   last must be exactly `chunk_size` bytes, and the last chunk makes up `size`. A 32 MiB file is 205 chunks. The
+   per-IP `/api` limiter (`API_RATE_LIMIT`, 120 a minute by default, shared with the page's other requests) can
+   answer 429 in the middle of an upload. The client then waits for the `Retry-After` header and resends the same
+   index. The API's `ReadTimeout` (10 s) covers a whole request body, so a chunk needs an upload rate of roughly
+   175 kbit/s or more; a slower link sees the chunk fail and should retry it.
+3. **Commit.** The commit runs in one transaction. The server checks that every chunk is present, the total size, the
+   sha256 of the concatenated chunks and the GLB v2 container, reading the chunks one at a time in order (a chunk
+   write locks the upload row `FOR KEY SHARE` and the commit `FOR UPDATE`, so no chunk changes between these checks
+   and the bytes stored; the bytes are concatenated once, by the INSERT). At most 3 commits run at once across all
+   workspaces (transaction advisory locks); without a free slot the commit answers 503 with `Retry-After: 10`. The
+   checks are: the magic `glTF`, version 2, the header length equal to
+   `size`, and a first chunk of type JSON that fits inside the file. It then replaces the site's model, raises the
+   revision, keeps the previous transform (or uses the default when there was none) and deletes the upload. These
+   checks run before anything is written, so a rejected file costs no WAL. The commit emits the realtime `inventory`
+   signal, the same one a floor save emits, so open twin pages refetch. A transform change and a delete emit it too.
+
+An upload that is not committed within one hour is refused (404). It is deleted by the next upload start of the
+workspace, or by `core.sweep_site_model_uploads()` (owner-only `SECURITY DEFINER`, called by the API's hourly
+maintenance loop next to partition maintenance), so an abandoned upload is gone within two hours.
+
+### Storage (migration 00048)
+
+- `core.site_models`: one row per site with the metadata, the `transform` (jsonb) and the `data` (bytea). The column
+  uses `STORAGE EXTERNAL` (uncompressed), so `GET …/file` streams it in 1 MiB slices (`substring`, each in its own
+  short transaction under the caller's row level security and the request's context values, pinned to the
+  revision): a download holds one slice in memory, not the file. At most 16 downloads run at once, 4 per workspace;
+  above that the API answers 503 with `Retry-After: 5`. A download that averages under 32 KiB/s after its first 30 s
+  is dropped, so slow clients cannot hold the slots.
+- `core.site_model_uploads` and `core.site_model_chunks`: an upload in progress and its chunks. Both are **UNLOGGED**:
+  in-flight bytes are never written to the WAL or the PITR archive. **An unfinished upload does not survive a crash
+  or a restore**: the tables come back empty, the next chunk or commit is 404, and the client starts the upload again.
+- All three tables follow the floor plan tables: ENABLE and FORCE RLS, `tenant_scope`, a restrictive `project_scope`
+  through the site (`core.site_in_scope(site_id)`), composite tenant foreign keys (a chunk's key also pins it to its
+  upload's site) and grants to `aether_app` only. Commits, transform changes and deletes are audited as
+  `site.model.uploaded`, `site.model.transformed` and `site.model.deleted`.
+
+**Why the cap is 32 MiB.** A committed model is written to the WAL once and from there to the PITR archive. Replacing a
+model writes the whole file again, and the old row stays on disk until vacuum. The production disk recently filled up
+from WAL volume. Keep CAD exports small: decimate the geometry before export. The browser converter writes uncompressed GLB (three.js
+has no Draco or meshopt glTF encoder) and refuses models above 300,000 triangles (see "Building model import").
+
+**Download time.** The connection's 15 s write deadline moves forward while the client keeps reading, up to 10
+minutes per download. A 32 MiB model therefore needs about 55 KiB/s (450 kbit/s); smaller models need less, down to
+the 32 KiB/s floor. A model replaced in the middle of a download ends that
+response short of its `Content-Length`; the client refetches with the new revision.
+
+### Privacy, export and erasure
+
+A building model is geometry, not personal data. It is not part of a member's data export (`/me/export`), a device
+privacy export or an erasure, and reading it is not written to the access log. It leaves with its site: when a site is
+deleted, the foreign keys (`ON DELETE CASCADE`) remove the site's model and uploads. An archived site keeps its model
+but serves it to nobody. Do not upload models that carry personal data in their metadata or names (for example a CAD
+layer named after a patient).
+
+## Immersive view and building model (UI)
+
+### View style
+
+The toolbar's **คลาสสิก | Immersive** switch picks the look; the choice is kept per browser (`aether.twin.style`,
+default `classic`). Classic is the rendering described above, unchanged. Both styles share one `TwinEngine` (no second
+WebGL context): `setStyle` swaps lights, stage and markers in place. `TwinView` takes it as an optional `style` prop
+whose default is `classic`, so the TV display draws exactly what it drew before.
+
+Immersive (`engine/immersive.ts`), every colour read at runtime from the app's tokens (`theme.ts` paints each oklch token
+on a 1×1 canvas and reads it back as sRGB, since three.js cannot parse oklch):
+
+- image-based light from a PMREM `RoomEnvironment`, a dark slightly metallic floor that fades out at its rim, an
+  additive grid in `--color-accent` (1 m and 5 m lines, fading with distance), exponential fog in `--color-paper` and a
+  CSS vignette (no extra render pass);
+- glass walls with a cool sheen and accent edges bright enough to bloom; bloom stays on the high tier only (a little
+  stronger than classic);
+- devices as status beacons: an unlit core and a ring on the floor in the status colour (online `--color-accent`, stale
+  or door open `--color-warning`, alert `--color-danger`, offline `--color-dim`, a switched-off output a dimmed
+  accent), gateways as hub towers in `--color-blue` standing up to their mounting height. Picking works as in classic.
+- Device-to-gateway link lines are **not drawn**: the live state carries no device→gateway link, and a guessed line
+  (nearest gateway, zone gateway) would state a topology that may be false.
+
+**Ambient motion** (the ≋ button, `aether.twin.ambient`, **off by default**; a browser that turns it on keeps it on): a slow sweep across the grid, breathing
+beacon rings and the pulse of a device alert's ring. It draws at most 30 fps, is never counted towards the quality
+tier's frame rate, and stops when motion is reduced, the tab is hidden, the view is paused (a TV playlist) or the
+button is off, and 2 minutes after the last pointer or keyboard input or meaningful state change (a switch, a door,
+an alert, a headcount); input resumes it. Wall monitors therefore idle at 0 fps. Without it the scene is idle at 0 fps; a device alert then shows a solid ring (an alert can stay open for
+hours and is no reason to keep rendering). SOS and hazard pillars keep their own pulse in both styles.
+
+### In-scene badges and buttons
+
+In immersive, devices on the active floor carry a floating badge: status dot, name and key value (on/off and watts for
+outputs, ประตูเปิด/ปิด, °C with %, %), positioned by the engine each frame from a keyed pool of at most 24 DOM nodes
+(labels get the rest of the 40-node budget; an SOS label is never the one dropped). Alerting devices (any floor) and the
+selected device always show. A badge that would cover another badge or a zone label is lifted on a longer leader line,
+up to twice; if it still collides it gives way by priority (alert, selected, controllable, has a value, stale) and then
+distance; badges far past the camera's target hide when zoomed in. A badge holding keyboard focus never hides.
+
+Each badge is a real `<button>` (Thai `aria-label`: name, value, status) that selects the device and opens the side card
+with the full controls. A controllable device (`kind = device` with a `class`) also gets a power switch
+(`role="switch"` with `aria-checked`, a stable label "สวิตช์ <ชื่อ>"; with the state unknown a plain button "เปิด/ปิด <ชื่อ> (ยังไม่ทราบสถานะ)"). It runs the side card's command flow
+(`quick-toggle.ts`): read the device's controls, queue one command per output with a fresh idempotency key, poll until
+the device's own report settles it (20 s at most), then refetch the state. The badge shows กำลังสั่ง… → รออุปกรณ์ยืนยัน… →
+the confirmed state, or a short Thai reason for a refusal (no right to command, offline, rate limited, timeout: the
+state stays as reported). A member known not to command devices (not owner, admin or operator, or `control` limited)
+gets badges without switches; the server decides in every case. In replay the switches are disabled.
+
+### Building model import
+
+The toolbar's **อาคาร 3D** opens the model panel (`twin-model.tsx`). Upload, alignment save and delete are shown to
+owners and to admins whose floor plan access is not read-only (the server's rule); everyone may preview opacity,
+visibility and clipping locally. A refusal (403) is explained in Thai.
+
+1. **Pick** one model file, with its companions for formats that reference other files: `.glb`; `.gltf` together with
+   its `.bin` and textures (matched by file name through a `LoadingManager` URL modifier; a missing `.bin` is named in
+   the error); `.obj` with an optional `.mtl` and textures; `.fbx`; `.stl`. DWG/DXF, IFC, Rhino `.3dm`, Revit,
+   SketchUp, Blender, Collada, 3DS and PLY are refused with how to export them (GLB, OBJ or FBX). IFC is not supported in
+   this version; `.3dm` would need three's Rhino loader, which downloads its wasm from a CDN.
+2. **Convert** in the browser (`model-import.ts`, loaded on demand with every loader): glTF with Draco and meshopt
+   decoding (the decoders ship with the app's own assets), OBJ/MTL, FBX, STL. Lights, cameras and animations are
+   dropped, Phong/Lambert materials become standard ones, every mesh is baked into world space and merged per material
+   (`engine/model.ts` `flattenModel`), and the result is written as one binary GLB (`GLTFExporter`, textures at most
+   2048 px). The model must fit the scene budget: at most **300,000 triangles** (counted before anything is cloned,
+   an instanced mesh counting every instance; more is refused with how to fix it) and at most **32 draw groups**
+   (past that, the smallest material groups are folded into one vertex-coloured mesh, with a notice). The selected
+   files may total at most 256 MiB (checked before they are read). After conversion the GLB must be at most 32 MiB.
+   The converter does not write Draco or meshopt compression (three.js has no glTF encoder for them): decimate in the CAD tool to stay under the cap.
+3. **Upload**: SHA-256 with WebCrypto, start, every chunk in order at the server's `chunk_size`, commit. A failed chunk is
+   resent up to 3 times; a 429 from the per-IP limiter is waited out for its `Retry-After` and the same index resent,
+   never counted as a failure ("รอคิวอัปโหลด…" shows meanwhile); a 409 (another member's upload to this site is under an
+   hour old) says so in Thai; progress shows in the panel. **ยกเลิก** aborts the request in flight and any wait; after a cancel or a failure the
+   unfinished upload is dropped on the server (`POST …/uploads/:upload/cancel`, best effort, `keepalive`). A 409
+   `upload_in_progress` offers managers **ยกเลิกการอัปโหลดที่ค้างอยู่** (the same route, with the upload id from the 409).
+   A 503 on commit (the server's commit cap) is waited out per `Retry-After`. Switching building mid-upload aborts and
+   cancels it (the panel is keyed by site). Calls that need
+   `Retry-After` use a small sender with the shared client's token and refresh rules (`modelSender`). The view then
+   shows the model from the bytes it just sent (no download).
+4. **Align**: right after an upload the model is fitted to the plans and previewed at 60 % opacity (not saved yet).
+   Controls: scale (number, or the file's unit: m, cm, mm, inch, foot), **ปรับให้พอดีกับผัง** (scale and offset from the
+   model's bounding box against the widest and deepest floor, centred, standing on the lowest slab), up axis Y/Z (CAD is
+   often Z-up), rotation X/Y/Z with a slider and a 90° button, offset X/Y/Z, opacity, visible, overlay (model plus the
+   generated glass walls) or replace (the generated building hidden; devices, heat and people stay), and clip above the
+   active floor's ceiling. Every change previews live; **บันทึกตำแหน่ง** saves it, **คืนค่า** reverts, closing the panel
+   drops an unsaved preview, **ลบโมเดล** asks for an inline confirmation.
+
+Transform axes, as the page uses them: `offset_m` is `[x east (plan x), y up, z south (plan y)]` in metres from the plans'
+origin (the top-left corner of the plans, on the lowest slab); `rotation_deg` is a three.js XYZ Euler applied after the
+up-axis fix (Z-up turns −90° about X) and the scale. With a floor spacing other than 0 the model matches the lowest floor
+only; the panel says so.
+
+### Rendering the model
+
+`TwinView` reads the model through an optional `source.model` (`meta(siteId)`, `file(siteId, revision)`): a source
+without it (the TV display's kiosk source today) draws the generated building only. The record is refetched on site
+change, after an upload, save or delete and on the realtime `inventory` signal; the GLB only on a new revision (the bytes
+of the last two revisions stay in memory). A 503 on the file is waited out per `Retry-After` (5 times at most); a 404 for
+the asked revision means the model changed, so the record is re-read and the new revision fetched. A site change or unmount aborts the download; a failed re-read of the record keeps the model already shown. The file request uses the browser cache (the URL carries the revision). The engine parses it once per revision with the glTF loader imported on
+demand, flattens it again (a GLB from elsewhere may have thousands of nodes), and disposes it on change or unmount. It is
+drawn muted (its own hues at 60 % brightness, matte), so devices, heat and alerts stay the brightest things on the
+stage, and between the stage and the live layers in draw order. Opacity, visibility, replace and the clipping plane (on
+the model's materials only) change in place; nothing is reloaded. A model over the budget (posted straight to the API, or uploaded before the budget existed) is never drawn; like a model that fails to load, it never blocks the live view:
+the generated building stays and a short notice says the model could not be shown. A server without the model API (404)
+reads as "no model".
+
+Measured in a local harness (Chrome, Apple M4 Pro, 1440×900, the two-floor test site): immersive 43 draw calls and 6k
+triangles at 60 fps; with a 24k-triangle model 44 draw calls (the model is one merged mesh). Idle: 0 frames in both
+styles with ambient motion off or motion reduced; about 30 frames a second with ambient motion on.
+
+New `TwinView` props, all optional: `style`, `ambient`, `controls` (`pending`, `onToggle`, `disabled`), `modelKey`,
+`modelTransform` (a preview), `onModel`; the handle adds `fitModel`. Files: `theme.ts`, `quick-toggle.ts`,
+`model-api.ts` (client, upload, cache), `model-transform.ts` (pure helpers, in `twin.selftest.ts`), `model-loaders.ts`,
+`model-import.ts`, `twin-model.tsx`, `engine/immersive.ts`, `engine/model.ts`.
+
 ## History and replay (P2, P3)
 
 ### Storage (migration 00046)

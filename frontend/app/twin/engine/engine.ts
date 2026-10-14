@@ -911,7 +911,7 @@ export class TwinEngine {
    */
   private updateBeacons(devices: TwinDevice[], now: number, restyle: boolean, alertingDevices: TwinDevice[]) {
     const drop = (im: THREE.InstancedMesh | null) => { if (im) { im.removeFromParent(); im.geometry.dispose(); (im.material as THREE.Material).dispose(); im.dispose(); } return null; };
-    if (restyle || !devices.length || !this.theme) { this.beaconBase = drop(this.beaconBase); this.alertMesh = drop(this.alertMesh); }
+    if (restyle || !this.theme || (!devices.length && !alertingDevices.length)) { this.beaconBase = drop(this.beaconBase); this.alertMesh = drop(this.alertMesh); }
     // Only fixtures on screen still need their alert rings.
     if ((!devices.length && !alertingDevices.length) || !this.theme) { this.alerting = []; this.phases.clear(); return; }
     const low = this.tier === "low";

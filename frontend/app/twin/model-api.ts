@@ -74,7 +74,10 @@ export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortS
   if ("any" in AbortSignal) return AbortSignal.any([signal, timeout]);
   const c = new AbortController();
   const stop = () => c.abort();
-  if (signal.aborted || timeout.aborted) c.abort();
+  if (signal.aborted || timeout.aborted) { c.abort(); return c.signal; }
+  // Unhook from the caller's (possibly long-lived) signal once this one is done (the timeout always ends it), so its
+  // listeners don't pile up.
+  c.signal.addEventListener("abort", () => signal.removeEventListener("abort", stop), { once: true });
   signal.addEventListener("abort", stop, { once: true });
   timeout.addEventListener("abort", stop, { once: true });
   return c.signal;

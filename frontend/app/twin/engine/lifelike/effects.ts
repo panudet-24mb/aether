@@ -8,8 +8,8 @@ import * as THREE from "three";
 import type { Draft } from "../../../floorplan/model";
 import type { TwinAlert, TwinDevice } from "../../api";
 import type { TwinTheme } from "../../theme";
-import { comfortBand } from "../heat";
-import { bbox, centroid, hash, inside, rng, type P } from "./geo";
+import { comfortBand, staleWeight } from "../heat";
+import { bbox, hash, inside, rng, type P } from "./geo";
 import { zoneType } from "./interior";
 
 type World = (floorId: string, x: number, y: number, h: number) => THREE.Vector3 | null;
@@ -19,6 +19,13 @@ export type EffectFloor = { id: string; draft: Draft; active: boolean };
 export function hazardKind(a: TwinAlert, device?: TwinDevice): "smoke" | "gas" {
   const s = `${a.title} ${device?.name ?? ""}`.toLowerCase();
   return /แก๊ส|gas|\bco\b|คาร์บอน|carbon/.test(s) && !/ควัน|smoke/.test(s) ? "gas" : "smoke";
+}
+
+/** 19:00–06:00 in a time zone (an unknown zone falls back to the browser's clock). */
+function isNight(timeZone: string): boolean {
+  let hour: number;
+  try { hour = Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hourCycle: "h23", timeZone }).format(new Date())); } catch { hour = new Date().getHours(); }
+  return hour >= 19 || hour < 6;
 }
 
 function soft(): THREE.CanvasTexture {
@@ -108,7 +115,7 @@ void main() {
 }`;
 const VERT = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
-type Door = { pos: THREE.Vector3; yaw: number; width: number; sensor: string | null; angle: number; openSince: number };
+type Door = { pos: THREE.Vector3; yaw: number; width: number; sensor: string | null; angle: number; openSince: number; tone: "closed" | "open" | "amber" };
 type Plume = { points: THREE.Points; origin: THREE.Vector3; top: number; seeds: Float32Array; kind: "smoke" | "gas"; alarm: THREE.Mesh; drift: number };
 
 export class Effects {
@@ -133,6 +140,14 @@ export class Effects {
   private mistSeeds: { base: THREE.Vector3; r: number; seed: number }[] = [];
   private devices = new Map<string, TwinDevice>();
   private uniforms: { uTime: { value: number }; uMotion: { value: number } }[] = [];
+  /** Night is judged in the site's time zone (the deployment default when the site has none). */
+  private timeZone = "Asia/Bangkok";
+  private night: boolean | null = null;
+  private nightCheckedAt = -Infinity;
+  private openingsVisible = true;
+  private tmp = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), s: new THREE.Vector3(), c: new THREE.Color(), up: new THREE.Vector3(0, 1, 0) };
+  private doorColors = { closed: new THREE.Color(0xd7dfde), open: new THREE.Color(), amber: new THREE.Color() };
+  private flash = new THREE.Color();
 
   constructor(private theme: TwinTheme) { this.group.name = "effects"; }
 
@@ -159,7 +174,7 @@ export class Effects {
         const pos = world(f.id, cx - dx, cy - dz, 0);
         if (!pos) continue;
         const near = doorSensors.filter((s) => s.floorId === f.id).map((s) => ({ s, d: Math.hypot(s.x - cx, s.y - cy) })).filter((e) => e.d < 2.5).sort((a, b) => a.d - b.d)[0];
-        leaves.push({ pos, yaw, width, sensor: near?.s.id ?? null, angle: 0, openSince: 0 });
+        leaves.push({ pos, yaw, width, sensor: near?.s.id ?? null, angle: 0, openSince: 0, tone: "closed" });
       }
     }
     this.doors = leaves;
@@ -169,14 +184,25 @@ export class Effects {
       leaf.translate(0.5, 1.025, 0);
       this.doorMesh = new THREE.InstancedMesh(leaf, std(), leaves.length);
       this.doorMesh.name = "doors";
+      this.doorMesh.visible = this.openingsVisible;
       this.group.add(this.doorMesh);
+      this.doorColors.open.setHex(this.theme.accent).lerp(new THREE.Color(0xffffff), 0.35);
+      this.doorColors.amber.setHex(this.theme.warning);
+      // Every leaf written once, closed; afterwards only a leaf that swings or changes colour is touched.
+      leaves.forEach((d, i) => { this.writeDoor(i, d); this.doorMesh!.setColorAt(i, this.doorColors.closed); });
+      this.doorMesh.instanceMatrix.needsUpdate = true;
+      if (this.doorMesh.instanceColor) this.doorMesh.instanceColor.needsUpdate = true;
+      this.doorMesh.computeBoundingSphere();
     }
     if (panes.length) {
       this.windowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1.1, 0.03), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }), panes.length);
       const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
       panes.forEach((p, i) => this.windowMesh!.setMatrixAt(i, m.compose(p.pos, q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.yaw), s.set(p.w, 1, 1))));
       this.windowMesh.name = "windows";
+      this.windowMesh.visible = this.openingsVisible;
       this.windowCount = panes.length;
+      this.windowMesh.computeBoundingSphere();
+      this.night = null;
       this.group.add(this.windowMesh);
     }
     // Room glows (motion) and cold mist, active floor only.
@@ -259,8 +285,14 @@ export class Effects {
         if (poly.length < 3) return;
         const key = `${f.id}:${index}`;
         const inZone = devices.filter((d) => d.floor_id === f.id && inside([d.x, d.y], poly));
-        const temps = inZone.map((d) => d.t).filter((t): t is number => typeof t === "number");
-        const mean = temps.length ? temps.reduce((s, t) => s + t, 0) / temps.length : null;
+        // Fresh readings only, weighted like the heat map (full weight to 5 min, none past 15 min).
+        let sum = 0, weight = 0;
+        for (const d of inZone) {
+          if (typeof d.t !== "number" || !d.last_at) continue;
+          const wgt = staleWeight(now - Date.parse(d.last_at));
+          sum += d.t * wgt; weight += wgt;
+        }
+        const mean = weight > 0 ? sum / weight : null;
         if (mean !== null && mean >= comfortBand(z.kind, z.comfort)[1] + 3) {
           hot.add(key);
           if (!this.shimmers.has(key)) this.shimmers.set(key, this.makeShimmer(f.id, poly));
@@ -306,14 +338,18 @@ export class Effects {
     return m;
   }
 
+  /** A shimmer over exactly the zone's shape (not its bounding box), 1.1 m above the floor. */
   private makeShimmer(floorId: string, poly: P[]): THREE.Mesh {
-    const b = bbox(poly), c = centroid(poly);
+    const b = bbox(poly);
     const u = { uColor: { value: new THREE.Color(this.theme.danger).lerp(new THREE.Color(0xffd0a0), 0.3) }, uTime: { value: 0 }, uMotion: { value: 1 } };
     this.uniforms.push(u);
-    const geo = new THREE.PlaneGeometry((b.x1 - b.x0) * 0.92, (b.y1 - b.y0) * 0.92);
-    geo.rotateX(-Math.PI / 2);
+    const geo = new THREE.ShapeGeometry(new THREE.Shape(poly.map((p) => new THREE.Vector2(p[0], p[1]))));
+    // The shader's edge fade wants 0..1 across the zone.
+    const uv = geo.getAttribute("uv") as THREE.BufferAttribute, pos = geo.getAttribute("position") as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, (pos.getX(i) - b.x0) / Math.max(0.01, b.x1 - b.x0), (pos.getY(i) - b.y0) / Math.max(0.01, b.y1 - b.y0));
+    geo.rotateX(Math.PI / 2);
     const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: SHIMMER_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide }));
-    const at = this.world?.(floorId, c[0], c[1], 1.1);
+    const at = this.world?.(floorId, 0, 0, 1.1);
     if (at) m.position.copy(at);
     m.renderOrder = 4;
     this.group.add(m);
@@ -355,33 +391,38 @@ export class Effects {
       }
       for (const a of [pos, size, alpha, rot, col]) a.needsUpdate = true;
       const flash = motion ? (Math.sin(t * 9) > 0 ? 1.4 : 0.35) : 1;
-      (p.alarm.material as THREE.MeshBasicMaterial).color.setHex(this.theme.danger).multiplyScalar(flash);
+      (p.alarm.material as THREE.MeshBasicMaterial).color.copy(this.flash.setHex(this.theme.danger).multiplyScalar(flash));
     }
     if (this.doorMesh) {
-      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), c = new THREE.Color();
-      const closed = new THREE.Color(0xd7dfde), open = new THREE.Color(this.theme.accent).lerp(new THREE.Color(0xffffff), 0.35), amber = new THREE.Color(this.theme.warning);
+      let moved = false, recoloured = false;
       this.doors.forEach((d, i) => {
-        const dev = d.sensor ? this.devices.get(d.sensor) : undefined;
-        const isOpen = dev?.door === 1;
+        const isOpen = (d.sensor ? this.devices.get(d.sensor)?.door : undefined) === 1;
         if (isOpen && !d.openSince) d.openSince = now;
         if (!isOpen) d.openSince = 0;
         const target = isOpen ? 1.4 : 0;
-        d.angle = motion ? d.angle + (target - d.angle) * Math.min(1, dt * 4) : target;
-        this.doorMesh!.setMatrixAt(i, m.compose(d.pos, q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), d.yaw + d.angle), s.set(d.width * 0.95, 1, 1)));
+        if (Math.abs(d.angle - target) > 0.001) {
+          d.angle = motion ? d.angle + (target - d.angle) * Math.min(1, dt * 4) : target;
+          if (Math.abs(d.angle - target) <= 0.001) d.angle = target;
+          this.writeDoor(i, d);
+          moved = true;
+        }
         // Left open for more than a minute: amber, like the door's beacon.
-        this.doorMesh!.setColorAt(i, c.copy(!isOpen ? closed : now - d.openSince > 60000 ? amber : open));
+        const tone: Door["tone"] = !isOpen ? "closed" : now - d.openSince > 60000 ? "amber" : "open";
+        if (tone !== d.tone) { d.tone = tone; this.doorMesh!.setColorAt(i, this.doorColors[tone]); recoloured = true; }
       });
-      this.doorMesh.instanceMatrix.needsUpdate = true;
-      if (this.doorMesh.instanceColor) this.doorMesh.instanceColor.needsUpdate = true;
-      this.doorMesh.computeBoundingSphere();
+      if (moved) { this.doorMesh.instanceMatrix.needsUpdate = true; this.doorMesh.computeBoundingSphere(); }
+      if (recoloured && this.doorMesh.instanceColor) this.doorMesh.instanceColor.needsUpdate = true;
     }
-    if (this.windowMesh) {
-      // Night (local time 19:00–06:00): windows glow warm from inside; by day they are cool glass.
-      const hour = new Date().getHours();
-      const night = hour >= 19 || hour < 6;
-      const c = night ? new THREE.Color(0xffd9a0).multiplyScalar(0.9) : new THREE.Color(this.theme.blue).lerp(new THREE.Color(0xffffff), 0.5).multiplyScalar(0.6);
-      for (let i = 0; i < this.windowCount; i++) this.windowMesh.setColorAt(i, c);
-      if (this.windowMesh.instanceColor) this.windowMesh.instanceColor.needsUpdate = true;
+    if (this.windowMesh && performance.now() - this.nightCheckedAt > 60000) {
+      // Night (19:00–06:00 in the site's time zone): windows glow warm from inside; by day they are cool glass.
+      this.nightCheckedAt = performance.now();
+      const night = isNight(this.timeZone);
+      if (night !== this.night) {
+        this.night = night;
+        const c = night ? this.tmp.c.setHex(0xffd9a0).multiplyScalar(0.9) : this.tmp.c.setHex(this.theme.blue).lerp(new THREE.Color(0xffffff), 0.5).multiplyScalar(0.6);
+        for (let i = 0; i < this.windowCount; i++) this.windowMesh.setColorAt(i, c);
+        if (this.windowMesh.instanceColor) this.windowMesh.instanceColor.needsUpdate = true;
+      }
     }
     if (this.mist) {
       const pos = this.mist.geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -391,6 +432,21 @@ export class Effects {
       });
       pos.needsUpdate = true;
     }
+  }
+
+  private writeDoor(i: number, d: Door) {
+    const { m, q, s, up } = this.tmp;
+    this.doorMesh!.setMatrixAt(i, m.compose(d.pos, q.setFromAxisAngle(up, d.yaw + d.angle), s.set(d.width * 0.95, 1, 1)));
+  }
+
+  /** The site's IANA time zone for the night look (null keeps the deployment default). */
+  setTimeZone(tz: string | null) { this.timeZone = tz || "Asia/Bangkok"; this.nightCheckedAt = -Infinity; }
+
+  /** Doors and windows: hidden under a customer model in "replace" mode (it has its own). */
+  setOpeningsVisible(on: boolean) {
+    this.openingsVisible = on;
+    if (this.doorMesh) this.doorMesh.visible = on;
+    if (this.windowMesh) this.windowMesh.visible = on;
   }
 
   /** Something here only looks right moving (plumes, puddles, mist, a door mid-swing). */

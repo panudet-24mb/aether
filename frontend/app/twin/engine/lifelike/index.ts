@@ -34,8 +34,11 @@ export class Lifelike {
   private mounts = new Map<string, Mount & { floorId: string }>();
   private world: World | null = null;
   private low = false;
-  /** Triangles of the furniture (the rest is counted by the renderer). */
-  interiorTriangles = 0;
+  /** Each floor's plan origin in the scene (walkers are placed from it without allocating). */
+  private origins = new Map<string, THREE.Vector3>();
+  /** Mounts cached by floor layout and by what decides a mount (position, class, name): see layoutDevices. */
+  private mountCache = new Map<string, Mount>();
+  private layoutKey = new Map<string, string>();
 
   constructor(private theme: TwinTheme) {
     this.group.name = "lifelike";
@@ -51,7 +54,18 @@ export class Lifelike {
     this.world = world;
     this.low = low;
     this.segments.clear();
-    for (const f of floors) this.segments.set(f.id, floorSegments(f.draft));
+    this.origins.clear();
+    for (const f of floors) {
+      this.segments.set(f.id, floorSegments(f.draft));
+      const o = world(f.id, 0, 0, 0);
+      if (o) this.origins.set(f.id, o);
+      // A floor whose drawing changed drops its cached mounts (walls moved, zones redrawn).
+      const key = layoutSignature(f.draft);
+      if (this.layoutKey.get(f.id) !== key) {
+        this.layoutKey.set(f.id, key);
+        for (const k of [...this.mountCache.keys()]) if (k.startsWith(`${f.id}|`)) this.mountCache.delete(k);
+      }
+    }
     this.interiorKey = "";
     this.layoutDevices(devices);
     const doorSensors = devices.filter((d) => d.door !== undefined).map((d) => ({ id: d.id, floorId: d.floor_id, x: d.x, y: d.y }));
@@ -67,7 +81,13 @@ export class Lifelike {
     for (const d of devices) {
       const f = this.floors.find((x) => x.id === d.floor_id);
       if (!f || !f.visible || f.above) continue;
-      const m = mountFor(d, f.draft, this.segments.get(f.id) ?? []);
+      // Only a device that moved, changed class or name (or a redrawn floor) is mounted again.
+      const ck = `${f.id}|${d.id}|${d.x}|${d.y}|${d.class ?? ""}|${d.name}|${d.door !== undefined}`;
+      let m = this.mountCache.get(ck) ?? null;
+      if (!m) {
+        m = mountFor(d, f.draft, this.segments.get(f.id) ?? []);
+        if (m) this.mountCache.set(ck, m);
+      }
       if (!m) continue;
       this.mounts.set(d.id, { ...m, floorId: d.floor_id });
       list.push({ d, m });
@@ -80,14 +100,12 @@ export class Lifelike {
     this.interiorKey = key;
     if (this.interior) { this.group.remove(this.interior); disposeGroup(this.interior); this.interior = null; }
     this.zoneInfo.clear();
-    this.interiorTriangles = 0;
     if (!active) return;
     const origin = world(active.id, 0, 0, 0);
     if (!origin) return;
     const built = buildInterior(active.draft, origin, this.theme, onFloor, this.low);
     this.interior = built.group;
     this.interior.visible = this.furnitureVisible;
-    this.interiorTriangles = built.triangles;
     this.group.add(this.interior);
     for (const z of built.zones) this.zoneInfo.set(`${active.id}:${z.zoneIndex}`, z);
     const obstacles = new Map<string, Obstacles>();
@@ -107,13 +125,16 @@ export class Lifelike {
 
   setState(state: TwinState, placeOf: (a: TwinAlert) => { floorId: string; x: number; y: number } | null) {
     this.layoutDevices(state.devices);
-    this.fixtures.setDevices(state.devices);
+    this.fixtures.setDevices(state.devices, Date.parse(state.server_time) || 0);
     this.effects.setState(state.devices, state.alerts, Date.parse(state.server_time) || 0, placeOf);
   }
 
   setPeople(list: WalkerSpec[], detail: "figure" | "capsule", now: number) {
-    if (this.world) this.crowd.setPeople(list, this.world, detail, now);
+    this.crowd.setPeople(list, (floorId) => this.origins.get(floorId) ?? null, detail, now);
   }
+
+  /** "replace" with a customer model: the model has its own doors and windows. */
+  setReplaceMode(on: boolean) { this.effects.setOpeningsVisible(!on); }
 
   /**
    * One frame: `motion` false when motion is reduced (figures stand, particles hold still). `camera` decides which
@@ -129,6 +150,12 @@ export class Lifelike {
   /** States the live view does not carry (an AC's switch, a cover's position), read from the devices' controls. */
   setFixtureStates(map: Record<string, FixtureState>) { this.fixtures.setStates(map); }
 
+  /** A fixture part on its way (a rocker flipping, a blind moving): a short animation worth its frames. */
+  moving(): boolean { return this.fixtures.moving(); }
+
+  /** The site's time zone, for the night look of windows. */
+  setTimeZone(tz: string | null) { this.effects.setTimeZone(tz); }
+
   /** People walking or effects drifting: worth ambient frames. */
   wantsFrames(): boolean { return this.crowd.size > 0 || this.effects.wantsFrames(); }
 
@@ -142,13 +169,13 @@ export class Lifelike {
   }
 
   /** A click on a fixture: the device and whether a click switches it (else it opens the device's card). */
-  pick(raycaster: THREE.Raycaster): { id: string; toggle: boolean; distance: number } | null {
+  pick(raycaster: THREE.Raycaster): { id: string; toggle: boolean; distance: number; kind: string } | null {
     const hit = raycaster.intersectObjects(this.fixtures.pickables(), false)[0];
     if (!hit) return null;
     const id = this.fixtures.idAt(hit.object, hit.instanceId);
     if (!id) return null;
     const kind = this.mounts.get(id)?.kind;
-    return { id, toggle: !!kind && TOGGLES.has(kind), distance: hit.distance };
+    return { id, toggle: !!kind && TOGGLES.has(kind), distance: hit.distance, kind: kind ?? "" };
   }
 
   dispose() {
@@ -157,6 +184,14 @@ export class Lifelike {
     this.crowd.dispose();
     this.effects.dispose();
   }
+}
+
+/** A cheap signature of a floor's drawing (walls, zones, items): mounts are cached against it. */
+function layoutSignature(d: Draft): string {
+  let h = 0;
+  const s = JSON.stringify([d.layout.walls, d.layout.zones.map((z) => z.points), d.layout.items.map((i) => [i.type, i.x, i.y, i.w, i.h, i.rot]), d.ceiling_m]);
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return `${s.length}:${h}`;
 }
 
 function disposeGroup(g: THREE.Object3D) {

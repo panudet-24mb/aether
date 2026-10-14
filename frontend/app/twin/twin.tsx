@@ -161,25 +161,49 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   // A member known not to command devices gets badges without power buttons; unknown → buttons, and a refusal is explained.
   const controls: TwinControls | undefined = useMemo(() => (canCommand === false ? undefined : { pending: pendingCmd, onToggle, disabled: mode !== "live" }), [canCommand, pendingCmd, onToggle, mode]);
   const fitModel = useCallback((t: ModelTransform) => handle.current?.fitModel(t) ?? null, []);
-  // Immersive: an AC's switch or a blind's position is not in the live view; read the few climate and cover devices'
-  // controls (at most 12) when the view opens and every minute, so their fixtures show what they are doing.
+  // Immersive: an AC's switch or a blind's position is not in the live view, so the controls of the climate and cover
+  // devices (at most 12, the active floor first) are read when the view opens and every minute: two at a time,
+  // never while the tab is hidden or the scene's idle pause is on, a failing device backed off (1, 2, 4 min) and
+  // dropped after 3 failures in a row; leaving the view aborts what is in flight.
   const hasState = !!state;
   const stateNow = useLatest(state);
+  const floorNow = useLatest(floorId);
   useEffect(() => {
     if (style !== "immersive" || mode !== "live" || !hasState) return;
-    let active = true;
+    const abort = new AbortController();
+    const failures = new Map<string, { n: number; until: number }>();
     const load = async () => {
-      const list = (stateNow.current?.devices ?? []).filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover")).slice(0, 12);
+      if (document.hidden || handle.current?.engine()?.idle()) return;
+      const now = Date.now();
+      const list = (stateNow.current?.devices ?? [])
+        .filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover"))
+        .filter((d) => { const f = failures.get(d.id); return !f || (f.n < 3 && now >= f.until); })
+        .sort((a, b) => Number(b.floor_id === floorNow.current) - Number(a.floor_id === floorNow.current))
+        .slice(0, 12);
       const out: Record<string, FixtureState> = {};
-      for (const d of list) {
-        try { out[d.id] = fixtureStateOf((await client.deviceControls(d.id)).state, d.class); } catch { /* unreadable: the fixture keeps its default look */ }
-      }
-      if (active) setFixtureStates(out);
+      const queue = [...list];
+      const worker = async () => {
+        for (let d = queue.shift(); d && !abort.signal.aborted; d = queue.shift()) {
+          try {
+            const r = await modelClient.send("GET", `/devices/${d.id}/controls`, undefined, { signal: abort.signal });
+            if (!r.ok) throw new Error(String(r.status));
+            out[d.id] = fixtureStateOf(((await r.json()) as { state?: Record<string, unknown> }).state ?? {}, d.class);
+            failures.delete(d.id);
+          } catch {
+            if (abort.signal.aborted) return;
+            // Unreadable: the fixture keeps its default look; try again later, then give up on this device.
+            const n = (failures.get(d.id)?.n ?? 0) + 1;
+            failures.set(d.id, { n, until: Date.now() + 60000 * 2 ** (n - 1) });
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      if (!abort.signal.aborted) setFixtureStates((prev) => ({ ...prev, ...out }));
     };
     void load();
     const id = setInterval(load, 60000);
-    return () => { active = false; clearInterval(id); };
-  }, [style, mode, hasState, client, stateNow, siteId]);
+    return () => { abort.abort(); clearInterval(id); };
+  }, [style, mode, hasState, modelClient, stateNow, floorNow, siteId]);
   const onModel = useCallback((m: SiteModel | null, status: ModelStatus) => setModelInfo({ model: m, status }), []);
 
   // Signals refetch now (alerts at once, the rest coalesced by the hook); the poll is only a safety net.
@@ -413,7 +437,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
               <small className="twin-hatch">ลายขีด = ไม่มีเซ็นเซอร์ในโซน</small>
             </>
           )}
-          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง{style === "immersive" ? " · ท่าทางเดินเป็นภาพประกอบ" : ""}</small>}
+          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง{style === "immersive" ? " · ท่าทางเดินและชุดเป็นภาพประกอบ" : ""}</small>}
         </div>
         {showModel && siteId && (
           // Keyed by site: switching building mid-upload unmounts the panel, which aborts the upload and cancels it on

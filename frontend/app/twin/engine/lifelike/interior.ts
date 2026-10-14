@@ -50,8 +50,8 @@ function itemFp(it: Item): Fp {
 }
 
 type Ctx = {
-  kit: Kit; pal: Pal; draft: Draft; origin: THREE.Vector3; ceiling: number;
-  doors: P[]; devices: P[]; placed: Fp[]; low: boolean;
+  kit: Kit; pal: Pal; origin: THREE.Vector3;
+  doors: P[]; devices: P[]; placed: Fp[];
 };
 
 /** The plan point (x, y) of a floor as a world position at height h. */
@@ -322,7 +322,9 @@ function furnish(ctx: Ctx, zone: Zone, index: number, drawnItems: Item[]): ZoneI
     case "storage": tryWall(1.8, 0.5, 2.0, 10, (f) => shelf(f, ctx.pal)); break;
     default: tryWall(1.4, 0.7, 2.6, 4, (f) => desk(f, ctx.pal)); corners();
   }
-  return { zoneIndex: index, type, anchors, blocked: ctx.placed.slice(before) };
+  // People walk around what was generated here and around the furniture the operator drew in this zone.
+  const drawnFps = drawnItems.filter((it) => FURNITURE_ITEMS.has(it.type)).map(itemFp);
+  return { zoneIndex: index, type, anchors, blocked: [...drawnFps, ...ctx.placed.slice(before)] };
 }
 
 /** The plan items drawn as furniture (the generic grey boxes of these types are hidden in this style). */
@@ -332,11 +334,11 @@ export const FURNITURE_ITEMS = new Set(["bed", "desk", "stairs", "elevator", "ra
  * Builds the interior of one floor into a group (a handful of instanced meshes). `devices` are the floor's placed
  * devices (plan x, y): furniture keeps clear of them.
  */
-export function buildInterior(draft: Draft, origin: THREE.Vector3, theme: TwinTheme, devices: P[], low: boolean): { group: THREE.Group; zones: ZoneInterior[]; triangles: number; parts: number } {
+export function buildInterior(draft: Draft, origin: THREE.Vector3, theme: TwinTheme, devices: P[], low: boolean): { group: THREE.Group; zones: ZoneInterior[] } {
   const pal = palette(theme);
   const kit = new Kit();
   const doors = draft.layout.items.filter((it) => it.type === "door" || it.type === "exit").map((it) => [it.x + it.w / 2, it.y + it.h / 2] as P);
-  const ctx: Ctx = { kit, pal, draft, origin, ceiling: draft.ceiling_m, doors, devices, placed: [], low };
+  const ctx: Ctx = { kit, pal, origin, doors, devices, placed: [] };
   // The drawn items first: they are what the operator placed, and generated furniture keeps clear of them.
   for (const it of draft.layout.items) {
     if (!FURNITURE_ITEMS.has(it.type)) continue;
@@ -361,5 +363,5 @@ export function buildInterior(draft: Draft, origin: THREE.Vector3, theme: TwinTh
     zones.push(furnish(ctx, z, index, drawn));
   });
   const group = kit.build(low, "interior");
-  return { group, zones, triangles: kit.triangles, parts: kit.count };
+  return { group, zones };
 }

@@ -29,8 +29,11 @@ export function fixtureKind(d: TwinDevice): FixtureKind | null {
   return null;
 }
 
-/** Fixtures that are switched on and off by a click (others open the side card). */
-export const TOGGLES = new Set<FixtureKind>(["switch", "socket", "light", "purifier"]);
+/**
+ * Fixtures a second click (on the selected fixture) switches. A socket never switches from the canvas (what is
+ * plugged in may be a fridge or a monitor): only from its badge or card.
+ */
+export const TOGGLES = new Set<FixtureKind>(["switch", "light", "purifier"]);
 /** Fixtures that replace the device's beacon entirely (sensors keep a small beacon at their mount). */
 export const REPLACES_BEACON = new Set<FixtureKind>(["switch", "socket", "light", "ac", "thermostat", "blind", "purifier"]);
 
@@ -121,7 +124,12 @@ function softTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
-/** The fixtures of the visible floors: instanced, rebuilt when the device set changes, recoloured on every poll. */
+type Status = "ok" | "alert" | "stale" | "offline";
+
+/**
+ * The fixtures of the visible floors: instanced and rebuilt only when the device set changes. Matrices are written
+ * once at build; a poll only recolours; a frame touches only what is moving (a rocker or a blind on its way, airflow).
+ */
 export class Fixtures {
   readonly group = new THREE.Group();
   private meshes: Record<string, THREE.InstancedMesh> = {};
@@ -134,9 +142,37 @@ export class Fixtures {
   private airflow: { points: THREE.Points; seeds: Float32Array; units: Inst[] } | null = null;
   private tex = softTexture();
   private key = "";
-  private c = new THREE.Color();
+  private now = 0;
+  private louver = new Map<string, number>();
+  private tmp = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), s: new THREE.Vector3(), p: new THREE.Vector3(), e: new THREE.Euler(), side: new THREE.Vector3() };
+  private pal: Record<string, THREE.Color>;
 
-  constructor(private theme: TwinTheme) { this.group.name = "fixtures"; }
+  constructor(private theme: TwinTheme) {
+    this.group.name = "fixtures";
+    const white = new THREE.Color(0xd5dcdb), accent = new THREE.Color(theme.accent), warm = new THREE.Color(0xffe2a8);
+    this.pal = {
+      white, accent, off: new THREE.Color(0x101518), dim: new THREE.Color(0x3a4448), slot: new THREE.Color(0x1a2124),
+      rockerOn: white.clone().lerp(accent, 0.35), rockerOff: white.clone().multiplyScalar(0.82), louver: white.clone().multiplyScalar(0.9),
+      ledOn: accent.clone().multiplyScalar(1.3), screen: accent.clone().multiplyScalar(0.8),
+      // Lit, but under the bloom threshold up close: the glow comes from the pool and from bloom at a distance.
+      panelOn: warm.clone().multiplyScalar(0.86), poolOn: warm.clone().multiplyScalar(0.075), none: new THREE.Color(0),
+      blind: accent.clone().lerp(white, 0.75),
+      // Status: an alert tints the fixture coral, stale data amber, no contact grey; a light in doubt is neither lit nor dark.
+      alert: white.clone().lerp(new THREE.Color(theme.danger), 0.55), stale: white.clone().lerp(new THREE.Color(theme.warning), 0.5),
+      offline: new THREE.Color(0x6f797d), doubt: new THREE.Color(theme.warning).lerp(new THREE.Color(0x3a4448), 0.6),
+    };
+  }
+
+  private status(id: string): Status {
+    const d = this.devices.get(id);
+    if (!d) return "offline";
+    if (d.alert || d.sos) return "alert";
+    if (d.online) return "ok";
+    return d.last_at && this.now - Date.parse(d.last_at) < 15 * 60000 ? "stale" : "offline";
+  }
+
+  /** A unit runs when its controls say so (an AC's switch, a thermostat's mode), else when the live view says on. */
+  private on(id: string): boolean { return this.states[id]?.running ?? this.devices.get(id)?.on === 1; }
 
   /** The ids of the fixture meshes' instances, for picking. */
   pickables(): THREE.Object3D[] { return Object.values(this.meshes); }
@@ -197,104 +233,138 @@ export class Fixtures {
       this.group.add(points);
       this.airflow = { points, seeds, units };
     }
+    this.rocker.clear(); this.blindAt.clear(); this.louver.clear();
+    this.layout();
+    this.recolour();
   }
 
-  setStates(map: Record<string, FixtureState>) { this.states = map; }
+  setStates(map: Record<string, FixtureState>) { this.states = map; this.recolour(); }
 
-  /** New readings: remembers each device's state for the next frames. */
-  setDevices(devices: TwinDevice[]) {
+  /** New readings (and the server's clock, for staleness): recolours; moving parts follow in the next frames. */
+  setDevices(devices: TwinDevice[], now: number) {
     this.devices.clear();
     for (const d of devices) this.devices.set(d.id, d);
+    this.now = now;
+    this.recolour();
   }
 
-  /** Draws a frame: rockers glide to their state (or snap without motion), airflow drifts while units run. */
-  step(t: number, dt: number, motion: boolean) {
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), e = new THREE.Euler();
-    // A unit runs when its controls say so (an AC's switch, a thermostat's mode), else when the live view says on.
-    const on = (id: string) => this.states[id]?.running ?? this.devices.get(id)?.on === 1;
-    const online = (id: string) => this.devices.get(id)?.online !== false;
-    const set = (name: string, i: number, pos: THREE.Vector3, yaw: number, w: number, h: number, d: number, local: [number, number, number] = [0, 0, 0], tilt = 0) => {
-      const mesh = this.meshes[name];
-      if (!mesh) return;
-      q.setFromEuler(e.set(tilt, yaw, 0, "YXZ"));
-      p.set(local[0], local[1], local[2]).applyQuaternion(q).add(pos);
-      mesh.setMatrixAt(i, m.compose(p, q, s.set(w, h, d)));
-    };
-    const col = (name: string, i: number, color: THREE.Color) => this.meshes[name]?.setColorAt(i, color);
-    const accent = new THREE.Color(this.theme.accent), warm = new THREE.Color(0xffe2a8), dim = new THREE.Color(0x3a4448), white = new THREE.Color(0xd5dcdb), off = new THREE.Color(0x101518);
+  /** One part's matrix: the fixture's frame (position, yaw, optional tilt about its own x), a local offset, a size. */
+  private put(name: string, i: number, pos: THREE.Vector3, yaw: number, w: number, h: number, d: number, lx = 0, ly = 0, lz = 0, tilt = 0) {
+    const mesh = this.meshes[name];
+    if (!mesh) return;
+    const { m, q, s, p, e } = this.tmp;
+    q.setFromEuler(e.set(tilt, yaw, 0, "YXZ"));
+    p.set(lx, ly, lz).applyQuaternion(q).add(pos);
+    mesh.setMatrixAt(i, m.compose(p, q, s.set(w, h, d)));
+  }
+
+  private rockerAt(f: Inst, i: number, a: number) { this.put("rocker", i, f.pos, f.yaw, 0.044, 0.07, 0.014, 0, 0, 0.018, a); }
+  private louverAt(f: Inst, i: number, a: number) { this.put("vent", i * 2 + 1, f.pos, f.yaw, 0.78, 0.012, 0.07, 0, -0.15, 0.24, a); }
+  private blindAtHeight(f: Inst, i: number, open: number) { const h = 0.1 + (1 - open) * 1.3; this.put("blind", i, f.pos, f.yaw, 1.3, h, 0.025, 0, 0.75 - h / 2, 0.03); }
+
+  /** Every static matrix, once per build; moving parts start at their current state. */
+  private layout() {
     let k = 0;
-    // Plates: switches, sockets, thermostats.
     for (const kind of ["switch", "socket", "thermostat"] as FixtureKind[]) for (const f of this.byKind.get(kind) ?? []) {
       const [w, h] = kind === "socket" ? [0.086, 0.086] : kind === "thermostat" ? [0.1, 0.1] : [0.086, 0.12];
-      set("plate", k, f.pos, f.yaw, w, h, 0.012, [0, 0, 0.006]);
-      col("plate", k++, white);
+      this.put("plate", k++, f.pos, f.yaw, w, h, 0.012, 0, 0, 0.006);
     }
+    (this.byKind.get("switch") ?? []).forEach((f, i) => { const a = this.on(f.id) ? 0.25 : -0.25; this.rocker.set(f.id, a); this.rockerAt(f, i, a); });
     k = 0;
-    for (const f of this.byKind.get("switch") ?? []) {
-      const target = on(f.id) ? 0.25 : -0.25;
-      const cur = this.rocker.get(f.id);
-      const a = cur === undefined || !motion ? target : cur + (target - cur) * Math.min(1, dt * 12);
-      this.rocker.set(f.id, a);
-      set("rocker", k, f.pos, f.yaw, 0.044, 0.07, 0.014, [0, 0, 0.018], a);
-      // The rocker takes a hint of the accent when on, so the state reads at a glance as well as by its tilt.
-      col("rocker", k++, on(f.id) ? white.clone().lerp(accent, 0.35) : white.clone().multiplyScalar(0.82));
-    }
-    k = 0;
-    // Indicators: a switch's dot, a socket's LED, a thermostat's screen, a unit's lamp.
     for (const kind of ["switch", "socket", "thermostat", "ac", "purifier"] as FixtureKind[]) for (const f of this.byKind.get(kind) ?? []) {
-      const live = online(f.id);
-      if (kind === "switch") set("led", k, f.pos, f.yaw, 0.014, 0.014, 0.004, [0, -0.047, 0.014]);
-      else if (kind === "socket") set("led", k, f.pos, f.yaw, 0.012, 0.012, 0.004, [0.028, 0.028, 0.014]);
-      else if (kind === "thermostat") set("led", k, f.pos, f.yaw, 0.07, 0.05, 0.004, [0, 0.01, 0.014]);
-      else if (kind === "ac") set("led", k, f.pos, f.yaw, 0.04, 0.012, 0.004, [0.36, -0.06, 0.125]);
-      else set("led", k, f.pos, f.yaw, 0.06, 0.012, 0.012, [0, 0.62, 0.2]);
-      const lit = kind === "thermostat" ? live && (this.states[f.id]?.running ?? true) : on(f.id) && live;
-      col("led", k++, lit ? (kind === "thermostat" ? accent.clone().multiplyScalar(0.8) : accent.clone().multiplyScalar(1.3)) : off);
+      if (kind === "switch") this.put("led", k++, f.pos, f.yaw, 0.014, 0.014, 0.004, 0, -0.047, 0.014);
+      else if (kind === "socket") this.put("led", k++, f.pos, f.yaw, 0.012, 0.012, 0.004, 0.028, 0.028, 0.014);
+      else if (kind === "thermostat") this.put("led", k++, f.pos, f.yaw, 0.07, 0.05, 0.004, 0, 0.01, 0.014);
+      else if (kind === "ac") this.put("led", k++, f.pos, f.yaw, 0.04, 0.012, 0.004, 0.36, -0.06, 0.125);
+      else this.put("led", k++, f.pos, f.yaw, 0.06, 0.012, 0.012, 0, 0.62, 0.2);
     }
-    k = 0;
-    for (const f of this.byKind.get("ac") ?? []) {
-      // A split-type indoor unit: a rounded body, a dark air outlet along its underside and a louver that opens when it runs.
-      set("ac", k, f.pos, f.yaw, 0.9, 0.28, 0.22, [0, 0, 0.11]);
-      col("ac", k, white);
-      set("vent", k * 2, f.pos, f.yaw, 0.8, 0.04, 0.12, [0, -0.13, 0.17]);
-      col("vent", k * 2, new THREE.Color(0x1a2124));
-      set("vent", k * 2 + 1, f.pos, f.yaw, 0.78, 0.012, 0.07, [0, -0.15, 0.24], on(f.id) ? 0.6 : 0.05);
-      col("vent", k * 2 + 1, white.clone().multiplyScalar(0.9));
-      k++;
-    }
-    k = 0;
-    // Blinds: hang from a fixed head rail, down by how closed the cover is (its controls' position; half when unknown).
-    for (const f of this.byKind.get("blind") ?? []) {
-      const target = this.states[f.id]?.open ?? 0.5;
-      const cur = this.blindAt.get(f.id);
-      const open = cur === undefined || !motion ? target : cur + (target - cur) * Math.min(1, dt * 2);
-      this.blindAt.set(f.id, open);
-      const h = 0.1 + (1 - open) * 1.3;
-      set("blind", k, f.pos, f.yaw, 1.3, h, 0.025, [0, 0.75 - h / 2, 0.03]);
-      col("blind", k++, new THREE.Color(this.theme.accent).lerp(white, 0.75));
-    }
-    k = 0;
-    for (const f of this.byKind.get("light") ?? []) {
-      const lit = on(f.id) && online(f.id);
-      set("panel", k, f.pos, 0, 0.62, 0.035, 0.62);
-      // Lit, but under the bloom threshold up close: the glow comes from the pool and the bloom at a distance.
-      col("panel", k, lit ? warm.clone().multiplyScalar(0.86) : dim);
-      const floorPos = f.pos.clone();
-      floorPos.y = f.floorY + 0.03;
-      set("pool", k, floorPos, 0, 3.4, 1, 3.4);
-      col("pool", k++, lit ? warm.clone().multiplyScalar(0.075) : off.clone().multiplyScalar(0));
-    }
-    k = 0;
-    for (const f of this.byKind.get("purifier") ?? []) { set("purifier", k, f.pos, 0, 1, 1, 1, [0, 0.375, 0]); col("purifier", k++, white); }
-    for (const mesh of Object.values(this.meshes)) {
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.computeBoundingSphere();
-    }
-    this.stepAirflow(t, motion, on);
+    (this.byKind.get("ac") ?? []).forEach((f, i) => {
+      // A split-type indoor unit: a body, a dark air outlet along its underside and a louver that opens when it runs.
+      this.put("ac", i, f.pos, f.yaw, 0.9, 0.28, 0.22, 0, 0, 0.11);
+      this.put("vent", i * 2, f.pos, f.yaw, 0.8, 0.04, 0.12, 0, -0.13, 0.17);
+      const a = this.on(f.id) ? 0.6 : 0.05;
+      this.louver.set(f.id, a);
+      this.louverAt(f, i, a);
+    });
+    (this.byKind.get("blind") ?? []).forEach((f, i) => { const o = this.states[f.id]?.open ?? 0.5; this.blindAt.set(f.id, o); this.blindAtHeight(f, i, o); });
+    (this.byKind.get("light") ?? []).forEach((f, i) => {
+      this.put("panel", i, f.pos, 0, 0.62, 0.035, 0.62);
+      this.tmp.side.copy(f.pos).setY(f.floorY + 0.03);
+      this.put("pool", i, this.tmp.side, 0, 3.4, 1, 3.4);
+    });
+    (this.byKind.get("purifier") ?? []).forEach((f, i) => this.put("purifier", i, f.pos, 0, 1, 1, 1, 0, 0.375, 0));
+    for (const mesh of Object.values(this.meshes)) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
   }
 
-  private stepAirflow(t: number, motion: boolean, on: (id: string) => boolean) {
+  /** Colours from the latest readings and controls: state (on, running, open) and status (alert, stale, offline). */
+  private recolour() {
+    const P = this.pal;
+    const body = (st: Status) => (st === "alert" ? P.alert : st === "stale" ? P.stale : st === "offline" ? P.offline : P.white);
+    const col = (name: string, i: number, c: THREE.Color) => this.meshes[name]?.setColorAt(i, c);
+    let k = 0;
+    for (const kind of ["switch", "socket", "thermostat"] as FixtureKind[]) for (const f of this.byKind.get(kind) ?? []) col("plate", k++, body(this.status(f.id)));
+    (this.byKind.get("switch") ?? []).forEach((f, i) => col("rocker", i, this.status(f.id) !== "ok" && this.status(f.id) !== "alert" ? body(this.status(f.id)) : this.on(f.id) ? P.rockerOn : P.rockerOff));
+    k = 0;
+    for (const kind of ["switch", "socket", "thermostat", "ac", "purifier"] as FixtureKind[]) for (const f of this.byKind.get(kind) ?? []) {
+      const live = this.status(f.id) === "ok" || this.status(f.id) === "alert";
+      const lit = kind === "thermostat" ? live && (this.states[f.id]?.running ?? true) : live && this.on(f.id);
+      col("led", k++, lit ? (kind === "thermostat" ? P.screen : P.ledOn) : P.off);
+    }
+    (this.byKind.get("ac") ?? []).forEach((f, i) => { col("ac", i, body(this.status(f.id))); col("vent", i * 2, P.slot); col("vent", i * 2 + 1, P.louver); });
+    (this.byKind.get("blind") ?? []).forEach((f, i) => col("blind", i, this.status(f.id) === "ok" ? P.blind : body(this.status(f.id))));
+    (this.byKind.get("light") ?? []).forEach((f, i) => {
+      const st = this.status(f.id);
+      // A light we cannot vouch for (stale, offline) is neither lit nor dark; an alert tints it coral.
+      const lit = (st === "ok" || st === "alert") && this.on(f.id);
+      col("panel", i, st === "stale" || st === "offline" ? P.doubt : st === "alert" ? P.alert : lit ? P.panelOn : P.dim);
+      col("pool", i, lit ? P.poolOn : P.none);
+    });
+    (this.byKind.get("purifier") ?? []).forEach((f, i) => col("purifier", i, body(this.status(f.id))));
+    for (const mesh of Object.values(this.meshes)) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  /** A frame: only parts on their way move (a rocker flipping, a louver, a blind); airflow drifts while units run. */
+  step(t: number, dt: number, motion: boolean) {
+    const ease = (cur: number, target: number, rate: number) => (!motion || Math.abs(target - cur) < 0.002 ? target : cur + (target - cur) * Math.min(1, dt * rate));
+    let rockers = false, vents = false, blinds = false;
+    (this.byKind.get("switch") ?? []).forEach((f, i) => {
+      const target = this.on(f.id) ? 0.25 : -0.25, cur = this.rocker.get(f.id) ?? target;
+      if (cur === target) return;
+      const a = ease(cur, target, 12);
+      this.rocker.set(f.id, a);
+      this.rockerAt(f, i, a);
+      rockers = true;
+    });
+    (this.byKind.get("ac") ?? []).forEach((f, i) => {
+      const target = this.on(f.id) ? 0.6 : 0.05, cur = this.louver.get(f.id) ?? target;
+      if (cur === target) return;
+      const a = ease(cur, target, 3);
+      this.louver.set(f.id, a);
+      this.louverAt(f, i, a);
+      vents = true;
+    });
+    (this.byKind.get("blind") ?? []).forEach((f, i) => {
+      const target = this.states[f.id]?.open ?? 0.5, cur = this.blindAt.get(f.id) ?? target;
+      if (cur === target) return;
+      const o = ease(cur, target, 2);
+      this.blindAt.set(f.id, o);
+      this.blindAtHeight(f, i, o);
+      blinds = true;
+    });
+    if (rockers && this.meshes.rocker) this.meshes.rocker.instanceMatrix.needsUpdate = true;
+    if (vents && this.meshes.vent) this.meshes.vent.instanceMatrix.needsUpdate = true;
+    if (blinds && this.meshes.blind) { this.meshes.blind.instanceMatrix.needsUpdate = true; this.meshes.blind.computeBoundingSphere(); }
+    this.stepAirflow(t, motion);
+  }
+
+  /** Something is on its way (worth a few more frames even without ambient motion). */
+  moving(): boolean {
+    for (const f of this.byKind.get("switch") ?? []) if (this.rocker.get(f.id) !== (this.on(f.id) ? 0.25 : -0.25)) return true;
+    for (const f of this.byKind.get("blind") ?? []) if (this.blindAt.get(f.id) !== (this.states[f.id]?.open ?? 0.5)) return true;
+    return false;
+  }
+
+  private stepAirflow(t: number, motion: boolean) {
     const a = this.airflow;
     if (!a) return;
     a.points.visible = motion;
@@ -302,7 +372,7 @@ export class Fixtures {
     const pos = a.points.geometry.getAttribute("position") as THREE.BufferAttribute;
     const per = pos.count / a.units.length;
     a.units.forEach((u, ui) => {
-      const running = on(u.id);
+      const running = this.on(u.id) && (this.status(u.id) === "ok" || this.status(u.id) === "alert");
       for (let j = 0; j < per; j++) {
         const i = ui * per + j;
         if (!running) { pos.setXYZ(i, 0, -1000, 0); continue; }
@@ -310,7 +380,7 @@ export class Fixtures {
         const spread = (a.seeds[(i * 7) % a.seeds.length] - 0.5) * 0.7;
         if (u.kind === "ac" && u.normal) {
           // Out of the unit's front and gently down into the room.
-          const side = new THREE.Vector3(u.normal.z, 0, -u.normal.x);
+          const side = this.tmp.side.set(u.normal.z, 0, -u.normal.x);
           pos.setXYZ(i, u.pos.x + u.normal.x * (0.25 + life * 1.6) + side.x * spread, u.pos.y - 0.1 - life * life * 1.1, u.pos.z + u.normal.z * (0.25 + life * 1.6) + side.z * spread);
         } else {
           pos.setXYZ(i, u.pos.x + spread * 0.4 * life, u.pos.y + 0.8 + life * 1.0, u.pos.z + (a.seeds[(i * 3) % a.seeds.length] - 0.5) * 0.4 * life);
@@ -338,8 +408,6 @@ export class Fixtures {
     const ids = object.userData.ids as string[] | undefined;
     return ids && instanceId !== undefined ? ids[instanceId] ?? null : null;
   }
-
-  kindOf(id: string): FixtureKind | null { return this.insts.find((i) => i.id === id)?.kind ?? null; }
 
   dispose() { this.clear(); this.tex.dispose(); }
 }

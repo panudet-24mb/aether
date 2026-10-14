@@ -112,6 +112,9 @@ export class TwinEngine {
   /** The furnished interior, fixtures, walking figures and effects (immersive only). */
   private lifelike: Lifelike | null = null;
   private lastStep = 0;
+  private tierRebuild: ReturnType<typeof setTimeout> | undefined;
+  private paintTmp = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), sc: new THREE.Vector3(), c: new THREE.Color(), base: new THREE.Color() };
+  private timeZone: string | null = null;
   private modelTransform: ModelTransform | null = null;
   private lastBuild: { floors: Floor3D[]; activeId: string; explode: number; isolate: boolean } | null = null;
 
@@ -224,6 +227,7 @@ export class TwinEngine {
     for (const p of this.heatPlanes.values()) p.texture.dispose();
     this.modelLayer.dispose();
     this.lifelike?.dispose();
+    clearTimeout(this.tierRebuild);
     this.envMap?.dispose();
     this.badgeHost?.removeEventListener("click", this.onBadgeClick);
     this.badgeHost?.remove();
@@ -343,6 +347,7 @@ export class TwinEngine {
     this.sun.intensity = immersive ? 0.85 : 1.1;
     if (immersive && !this.lifelike && this.theme) {
       this.lifelike = new Lifelike(this.theme);
+      this.lifelike.setTimeZone(this.timeZone);
       this.scene.add(this.lifelike.group);
     } else if (!immersive && this.lifelike) {
       this.scene.remove(this.lifelike.group);
@@ -359,7 +364,7 @@ export class TwinEngine {
   // ---- the loop ---------------------------------------------------------------------------------------------
 
   private animating(): boolean {
-    return !!this.tween || this.touring || (this.sosFx.length > 0 && !this.reducedMotion) || this.gliding();
+    return !!this.tween || this.touring || (this.sosFx.length > 0 && !this.reducedMotion) || this.gliding() || (this.lifelike?.moving() ?? false);
   }
 
   private gliding(): boolean {
@@ -395,6 +400,11 @@ export class TwinEngine {
         this.tier = this.tier === "high" ? "med" : "low";
         this.frameTimes = [];
         this.applyTier();
+        // The lifelike interior and fixtures are rebuilt for the lower tier (fewer segments and particles), once.
+        if (this.lifelike && this.lastBuild) {
+          clearTimeout(this.tierRebuild);
+          this.tierRebuild = setTimeout(() => { if (this.lastBuild && !this.disposed) { const b = this.lastBuild; this.setBuilding(b.floors, b.activeId, b.explode, b.isolate); } }, 800);
+        }
       }
     }
     this.lastFrame = moving || damping ? now : 0;
@@ -503,6 +513,15 @@ export class TwinEngine {
   // ---- badges (immersive: projected DOM with real buttons) ---------------------------------------------------
 
   setBadgeHandler(fn: ((id: string, action: BadgeAction) => void) | null) { this.onBadge = fn; }
+
+  /** The site's IANA time zone (windows look like night after 19:00 there); null: the deployment default. */
+  setTimeZone(tz: string | null) { this.timeZone = tz; this.lifelike?.setTimeZone(tz); }
+
+  /** Whether ambient motion is paused for lack of input (the controls poll waits too). */
+  idle(): boolean { return performance.now() - this.lastActivity >= AMBIENT_IDLE_MS; }
+
+  /** Moves keyboard focus to a device's badge (after a fixture click selects it). */
+  focusBadge(id: string) { this.badgeEls.get(id)?.main.focus({ preventScroll: true }); }
 
   /** Badges to show; at most 24, keyed by id so a focused button keeps its node while the list changes. */
   setBadges(list: BadgeSpec[]) {
@@ -724,9 +743,10 @@ export class TwinEngine {
 
   /** Applies a new live state (or new layers). `force` recomputes the heat textures even if values did not change. */
   setState(state: TwinState, layers: Layer[], force = false) {
-    // A state change that matters (a switch, a door, an alert, a headcount) counts as activity for ambient motion;
-    // a temperature drifting or the same poll again does not.
-    const sig = `${state.devices.map((d) => `${d.id}${d.on}${d.door}${d.alert ? 1 : 0}${d.sos ? 1 : 0}${d.online ? 1 : 0}`).join()}|${state.alerts.map((a) => a.id + a.status).join()}|${state.presence.counts.map((c) => c.gateway_id + c.n).join()}`;
+    // A state change that matters (a switch, a door, an online state, an alert opening) counts as activity for ambient
+    // motion; a temperature drifting, people moving or the same poll again does not.
+    // People moving (headcounts, figures) are not: a busy hospital's wall screen must still idle.
+    const sig = `${state.devices.map((d) => `${d.id}${d.on}${d.door}${d.online ? 1 : 0}`).join()}|${state.alerts.filter((a) => a.status === "open").map((a) => a.id).join()}`;
     if (sig !== this.stateSig) { this.stateSig = sig; this.onActivity(); }
     this.state = state;
     this.layers = new Set(layers);
@@ -879,14 +899,17 @@ export class TwinEngine {
       ? new THREE.LineBasicMaterial({ color: this.theme!.accent, transparent: true, opacity: 0.22, toneMapped: false })
       : new THREE.LineBasicMaterial({ color: 0x5d7279, transparent: true, opacity: 0.5 }));
     this.markers.add(this.stems);
-    this.updateBeacons(immersive ? devices : [], now, restyle);
+    // Fixtures have no beacon, but an alerting one still gets the pulsing ring (at the floor under its mount).
+    const alerting = immersive ? state.devices.filter((d) => d.kind === "device" && visible.has(d.floor_id) && (d.alert || d.sos))
+      .map((d) => { const mt = lf?.mount(d.id); return mt ? { ...d, x: mt.x, y: mt.y } : d; }) : [];
+    this.updateBeacons(immersive ? devices : [], now, restyle, alerting);
   }
 
   /**
    * Immersive: a glowing ring on the floor under every device and a pulsing ring under every alerting one. Both are
    * instanced and updated in place on every poll (matrices and colours only); a device keeps its pulse phase.
    */
-  private updateBeacons(devices: TwinDevice[], now: number, restyle: boolean) {
+  private updateBeacons(devices: TwinDevice[], now: number, restyle: boolean, alertingDevices: TwinDevice[]) {
     const drop = (im: THREE.InstancedMesh | null) => { if (im) { im.removeFromParent(); im.geometry.dispose(); (im.material as THREE.Material).dispose(); im.dispose(); } return null; };
     if (restyle || !devices.length || !this.theme) { this.beaconBase = drop(this.beaconBase); this.alertMesh = drop(this.alertMesh); }
     if (!devices.length || !this.theme) { this.alerting = []; this.phases.clear(); return; }
@@ -917,7 +940,7 @@ export class TwinEngine {
       this.alertMesh.renderOrder = 4;
       this.fx.add(this.alertMesh);
     }
-    const alerting = devices.filter((d) => d.alert || d.sos).slice(0, 24);
+    const alerting = alertingDevices.slice(0, 24);
     const ids = new Set(alerting.map((d) => d.id));
     for (const id of this.phases.keys()) if (!ids.has(id)) this.phases.delete(id);
     this.alerting = alerting.flatMap((d) => {
@@ -932,9 +955,9 @@ export class TwinEngine {
 
   /** The alert rings' frame: a pulse with ambient motion, a solid ring without it. */
   private paintAlerts(t: number, ambient: boolean) {
-    if (!this.alertMesh || !this.theme) return;
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), c = new THREE.Color();
-    const base = beaconColor(this.theme, "alert");
+    if (!this.alertMesh || !this.theme || !this.alerting.length) return;
+    const { m, q, sc, c, base } = this.paintTmp;
+    beaconColor(this.theme, "alert", base);
     this.alerting.forEach((a, i) => {
       const k = ambient ? (t * 0.9 + a.phase) % 1 : -1;
       sc.setScalar(k < 0 ? 1.8 : 1 + k * 2.6);
@@ -1006,14 +1029,28 @@ export class TwinEngine {
     }
     if (this.lifelike) {
       // Lifelike: the first people walk as figures inside their zone; past MAX_FIGURES the rest stay tokens.
+      // A figure's key: in counts and tracks the slot (gateway#index, an SOS first), never the pseudonym (it changes
+      // with every response), so a refresh moves and re-dresses nobody; in named mode the tag, so a person keeps their
+      // figure and walks into the next zone.
+      const named = state.presence.mode === "named";
       const specs: WalkerSpec[] = [];
       for (const [z, list] of byZone) {
-        const slots = assignSlots(list.map((e) => e.id), z.slots);
-        for (const e of list) specs.push({ id: e.id, floorId: z.floorId, zoneKey: `${z.floorId}:${z.index}`, poly: z.zone.points as P[], slot: slots.get(e.id)!, sos: e.sos });
+        const keyed: { key: string; sos: boolean }[] = [];
+        const byGateway = new Map<string, typeof list>();
+        for (const e of list) byGateway.set(e.gateway, [...(byGateway.get(e.gateway) ?? []), e]);
+        for (const [gw, group] of byGateway) {
+          group.sort((a, b) => Number(b.sos) - Number(a.sos) || (named ? a.id.localeCompare(b.id) : 0));
+          group.forEach((e, i) => keyed.push({ key: named ? `tag:${e.id}` : `${gw}#${i}`, sos: e.sos }));
+        }
+        // Slots by key too, so a figure's place (with motion reduced) stays put across refreshes.
+        const slots = assignSlots(keyed.map((k) => k.key), z.slots);
+        for (const k of keyed) specs.push({ id: k.key, floorId: z.floorId, zoneKey: `${z.floorId}:${z.index}`, poly: z.zone.points as P[], slot: slots.get(k.key)!, sos: k.sos });
       }
       const figures = specs.slice(0, MAX_FIGURES);
       this.lifelike.setPeople(figures, this.tier === "high" ? "figure" : "capsule", now);
-      for (const f of figures) next.delete(f.id);
+      // The tokens of the people drawn as figures go (the first MAX_FIGURES; the rest stay tokens).
+      let n = 0;
+      for (const id of [...next.keys()]) if (n++ < figures.length) next.delete(id);
     }
     this.tokens = next;
     const low = this.tier === "low";
@@ -1115,6 +1152,7 @@ export class TwinEngine {
     const t = this.modelTransform;
     if (!t || !this.modelLayer.loaded) {
       this.lifelike?.setFurnitureVisible(true);
+      this.lifelike?.setReplaceMode(false);
       this.modelLayer.group.visible = false;
       this.building.visible = true;
       this.invalidate();
@@ -1123,6 +1161,7 @@ export class TwinEngine {
     this.modelLayer.apply(t, this.planPlace());
     // A customer model has its own furniture: no procedural interior while it is shown.
     this.lifelike?.setFurnitureVisible(!t.visible);
+    this.lifelike?.setReplaceMode(t.visible && t.mode === "replace");
     // replace: the model stands in for the generated building; devices, heat and people stay.
     this.building.visible = !(t.visible && t.mode === "replace");
     this.invalidate();
@@ -1209,20 +1248,24 @@ export class TwinEngine {
 
   // ---- picking --------------------------------------------------------------------------------------------------
 
-  private onDown = (e: PointerEvent) => { this.downAt = [e.clientX, e.clientY]; };
+  private onDown = (e: PointerEvent) => { this.downAt = e.button === 0 ? [e.clientX, e.clientY] : null; };
 
   private onUp = (e: PointerEvent) => {
     // Clear the press first: an orbit drag must not leave a stale press behind.
     const down = this.downAt;
     this.downAt = null;
-    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+    // Only a primary-button click picks (a right or middle click, or a drag, does nothing).
+    if (e.button !== 0 || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
     const r = this.renderer.domElement.getBoundingClientRect();
     const pointer = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(pointer, this.camera);
     const hits = this.raycaster.intersectObjects([this.deviceMesh, this.gatewayMesh].filter((x): x is THREE.InstancedMesh => !!x), false);
     const hit = hits[0];
     const fixture = this.lifelike?.pick(this.raycaster);
-    if (fixture && (!hit || fixture.distance <= hit.distance)) { this.onPick?.({ kind: "fixture", id: fixture.id, toggle: fixture.toggle }); return; }
+    // A sensor or beacon beside a light panel wins when both are hit within half a metre (the panel is big, the
+    // sensor is what the operator aims at).
+    const beaconFirst = !!hit && !!fixture && fixture.kind === "light" && hit.distance - fixture.distance < 0.5;
+    if (fixture && !beaconFirst && (!hit || fixture.distance <= hit.distance)) { this.onPick?.({ kind: "fixture", id: fixture.id, toggle: fixture.toggle }); return; }
     if (!hit || hit.instanceId === undefined) { this.onPick?.(null); return; }
     const kind = hit.object.userData.pick as "device" | "gateway";
     const d = (kind === "device" ? this.deviceIndex : this.gatewayIndex)[hit.instanceId];

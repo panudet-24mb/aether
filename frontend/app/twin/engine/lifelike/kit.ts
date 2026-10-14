@@ -26,15 +26,12 @@ export class Frame {
 
 export class Kit {
   private parts: Record<Shape, Part[]> = { box: [], cyl: [], ball: [], glow: [] };
-  triangles = 0;
 
   frame(origin: THREE.Vector3, rotY: number) { return new Frame(this, origin, rotY); }
 
   push(shape: Shape, m: THREE.Matrix4, color: number | THREE.Color) {
     this.parts[shape].push({ m, c: color instanceof THREE.Color ? color.clone() : new THREE.Color(color) });
   }
-
-  get count() { return this.parts.box.length + this.parts.cyl.length + this.parts.ball.length + this.parts.glow.length; }
 
   /** One instanced mesh per primitive that has parts. `low` uses fewer segments. */
   build(low: boolean, name: string): THREE.Group {
@@ -46,7 +43,6 @@ export class Kit {
       cyl: () => new THREE.CylinderGeometry(0.5, 0.5, 1, low ? 6 : 12, 1),
       ball: () => new THREE.IcosahedronGeometry(0.5, low ? 0 : 1),
     };
-    this.triangles = 0;
     for (const shape of Object.keys(this.parts) as Shape[]) {
       const list = this.parts[shape];
       if (!list.length) continue;
@@ -61,8 +57,6 @@ export class Kit {
       mesh.computeBoundingSphere();
       mesh.name = `${name}:${shape}`;
       group.add(mesh);
-      const idx = geo.index ? geo.index.count : geo.getAttribute("position").count;
-      this.triangles += (idx / 3) * list.length;
     }
     return group;
   }

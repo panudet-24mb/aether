@@ -143,6 +143,7 @@ export default function TwinView(props: TwinViewProps) {
   const qualityRef = useLatest(quality);
   const styleRef = useLatest(style);
   const controlsRef = useLatest(controls);
+  const selectedRef = useRef<string | null>(null);
   // Bumped when an engine is created, so the model and style are applied to a new WebGL context too.
   const [engineGen, setEngineGen] = useState(0);
   const [site, setSite] = useState<Site | null>(null);
@@ -202,11 +203,15 @@ export default function TwinView(props: TwinViewProps) {
     }
     engineRef.current = engine;
     engine.setPickHandler((p) => {
-      // A switch, plug, light or purifier fixture (immersive) is switched by a click, through the same flow as its
-      // badge's button; anything else, or a member who may not command, or replay, opens the device's card.
-      if (p?.kind === "fixture" && p.toggle) {
+      // Fixtures (immersive): the first click selects the device (its card opens, its badge takes focus); a second
+      // click on the selected switch, light or purifier switches it through the badge's command flow. Sockets, and
+      // anything a member may not command or in replay, only ever select.
+      if (p?.kind === "fixture") {
         const ctl = controlsRef.current, d = stateRef.current?.devices.find((x) => x.id === p.id);
-        if (ctl && !ctl.disabled && d) { ctl.onToggle(d); return; }
+        if (p.toggle && selectedRef.current === p.id && ctl && !ctl.disabled && d) { ctl.onToggle(d); return; }
+        setSelected(p.id);
+        setTimeout(() => engineRef.current?.focusBadge(p.id), 80);
+        return;
       }
       setSelected(p ? p.id : null);
     });
@@ -244,10 +249,13 @@ export default function TwinView(props: TwinViewProps) {
       if (debug) delete (window as unknown as { __twin?: unknown }).__twin;
     };
     // A quality change is applied below without recreating the context.
-  }, [fallback, qualityRef, styleRef, stateRef, cb, controlsRef]);
+  }, [fallback, qualityRef, styleRef, stateRef, cb, controlsRef, selectedRef]);
 
   useEffect(() => { engineRef.current?.setQuality(quality); }, [quality]);
   useEffect(() => { engineRef.current?.setStyle(style); }, [style, engineGen]);
+  // Night windows follow the site's time zone when the site carries one (else the deployment default, Asia/Bangkok).
+  const siteTimeZone = (site as (Site & { timezone?: string }) | null)?.timezone ?? null;
+  useEffect(() => { engineRef.current?.setTimeZone(siteTimeZone); }, [siteTimeZone, engineGen]);
   useEffect(() => { if (props.fixtureStates) engineRef.current?.setFixtureStates(props.fixtureStates); }, [props.fixtureStates, style, engineGen]);
   useEffect(() => {
     engineRef.current?.setAmbient(ambient);
@@ -437,7 +445,7 @@ export default function TwinView(props: TwinViewProps) {
     } else e.setLabels(out.slice(0, 40));
   }, [state, site, floorId, layers, selected, style, badges.length]);
 
-  useEffect(() => { cb.current.onSelect?.(state?.devices.find((d) => d.id === selected) ?? null); }, [selected, state, cb]);
+  useEffect(() => { selectedRef.current = selected; cb.current.onSelect?.(state?.devices.find((d) => d.id === selected) ?? null); }, [selected, state, cb]);
 
   // The handle the page (and a TV playlist) drives.
   useImperativeHandle(props.handleRef, () => ({

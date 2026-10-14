@@ -7,7 +7,7 @@
 
 import * as THREE from "three";
 import type { TwinTheme } from "../../theme";
-import { centroid, closestOnSegment, hash, insideWithMargin, randomInside, rng, segmentInside, type P } from "./geo";
+import { centroid, closestOnSegment, hash, inside, insideWithMargin, randomInside, rng, segmentInside, type P } from "./geo";
 
 export type WalkerSpec = { id: string; floorId: string; zoneKey: string; poly: P[]; slot: P; sos: boolean };
 export type Obstacles = { anchors: P[]; blocked: { x: number; y: number; w: number; d: number }[] };
@@ -20,6 +20,12 @@ type Look = { outfit: Outfit; top: THREE.Color; bottom: THREE.Color; sleeve: THR
 
 type Walker = {
   spec: WalkerSpec;
+  /** The slot moved off any furniture (computed once per zone). */
+  home: P;
+  /** Speed of a zone-change walk (fast enough to finish in about 3 s); 0 while wandering. */
+  transit: number;
+  /** Scene position, reused every frame. */
+  at: THREE.Vector3;
   pos: P;
   heading: number;
   target: P | null;
@@ -50,6 +56,10 @@ function lookFor(id: string, theme: TwinTheme): Look {
   return { outfit: "visitor", top: casual, bottom: new THREE.Color(0x30394a), sleeve: casual, shoe: new THREE.Color(0x2a2522), skin, hair };
 }
 
+/** Child offsets: a shoe at the foot of its leg, eyes on the face, a hand at the end of its arm. */
+const SHOE: [number, number, number] = [0, -0.82, 0.035], HAND: [number, number, number] = [0, -0.62, 0];
+const EYE_L: [number, number, number] = [-0.036, 0.012, 0.098], EYE_R: [number, number, number] = [0.036, 0.012, 0.098];
+
 /** Beyond this distance from the camera a figure is drawn as a plain capsule. */
 const LOD_DISTANCE = 25;
 
@@ -64,46 +74,89 @@ export class Crowd {
   private capacity = 0;
   private detail: "figure" | "capsule" = "figure";
   private obstacles = new Map<string, Obstacles>();
-  private world: ((floorId: string, x: number, y: number, h: number) => THREE.Vector3 | null) | null = null;
-  private tmp = { m: new THREE.Matrix4(), base: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(), v: new THREE.Vector3(), s: new THREE.Vector3(), e: new THREE.Euler(), e2: new THREE.Euler() };
+  private origin: ((floorId: string) => THREE.Vector3 | null) | null = null;
+  private tmp = { m: new THREE.Matrix4(), base: new THREE.Matrix4(), child: new THREE.Matrix4(), local: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(), v: new THREE.Vector3(), s: new THREE.Vector3(), e: new THREE.Euler(), e2: new THREE.Euler() };
+  private eyeColor = new THREE.Color(0x15191c);
+  private sosColor: THREE.Color;
+  private count: Record<Part, number> = { leg: 0, shoe: 0, torso: 0, shoulders: 0, skirt: 0, neck: 0, head: 0, hair: 0, eye: 0, arm: 0, hand: 0, capsule: 0 };
 
-  constructor(private theme: TwinTheme) { this.group.name = "crowd"; }
+  constructor(private theme: TwinTheme) { this.group.name = "crowd"; this.sosColor = new THREE.Color(theme.danger); }
 
   /** Where people may pause and what they must walk around, per zone key. */
   setObstacles(map: Map<string, Obstacles>) { this.obstacles = map; }
 
   get size() { return this.walkers.size; }
 
-  /** The people now: new ones appear at their slot, gone ones leave, a zone change starts a walk across. */
-  setPeople(list: WalkerSpec[], world: (floorId: string, x: number, y: number, h: number) => THREE.Vector3 | null, detail: "figure" | "capsule", now: number) {
-    this.world = world;
+  /**
+   * The people now. A figure is kept by its key (the engine keys counts and tracks by slot, named people by tag), so a
+   * refresh never re-dresses or snaps anyone. New keys appear at their slot, gone keys leave. A key whose zone changes
+   * (named people only) walks to the edge the two zones share and in, in about 3 s, when that path stays inside the
+   * two zones; otherwise, or on another floor, it appears at its new slot.
+   */
+  setPeople(list: WalkerSpec[], origin: (floorId: string) => THREE.Vector3 | null, detail: "figure" | "capsule", now: number) {
+    this.origin = origin;
     const seen = new Set<string>();
     for (const spec of list.slice(0, MAX_FIGURES)) {
       seen.add(spec.id);
       const w = this.walkers.get(spec.id);
       if (!w) {
         const rand = rng(hash(`walk:${spec.id}`));
-        this.walkers.set(spec.id, { spec, pos: [...spec.slot] as P, heading: rand() * Math.PI * 2, target: null, path: [], pauseUntil: now + rand() * 3000, speed: 0.75 + rand() * 0.45, phase: rand() * 6.28, moving: false, rand, look: lookFor(spec.id, this.theme) });
+        const home = this.freeSpot(spec);
+        this.walkers.set(spec.id, { spec, home, transit: 0, at: new THREE.Vector3(), pos: [home[0], home[1]], heading: rand() * Math.PI * 2, target: null, path: [], pauseUntil: now + rand() * 3000, speed: 0.75 + rand() * 0.45, phase: rand() * 6.28, moving: false, rand, look: lookFor(spec.id, this.theme) });
         continue;
       }
       if (w.spec.zoneKey !== spec.zoneKey) {
-        if (w.spec.floorId !== spec.floorId) {
-          // Another floor: it simply appears in its new zone (no stairs are walked).
-          w.pos = [...spec.slot] as P;
-          w.path = [];
+        const home = this.freeSpot(spec);
+        const walk = w.spec.floorId === spec.floorId ? this.crossing(w, spec) : null;
+        if (walk) {
+          w.path = walk.path;
+          w.transit = Math.max(w.speed, walk.length / 3);
         } else {
-          // Walk to the edge the two zones share (the closest boundary point towards the new zone), then in.
-          const exit = this.edgeTowards(w.spec.poly, centroid(spec.poly));
-          const entry = this.edgeTowards(spec.poly, exit, 0.5);
-          w.path = [exit, entry];
+          w.pos[0] = home[0]; w.pos[1] = home[1];
+          w.path = [];
+          w.transit = 0;
         }
+        w.home = home;
         w.target = null;
         w.pauseUntil = 0;
+      } else if (w.spec.slot[0] !== spec.slot[0] || w.spec.slot[1] !== spec.slot[1]) {
+        w.home = this.freeSpot(spec);
       }
       w.spec = spec;
     }
     for (const id of [...this.walkers.keys()]) if (!seen.has(id)) this.walkers.delete(id);
     if (detail !== this.detail || this.walkers.size > this.capacity) this.rebuild(detail);
+  }
+
+  /**
+   * The walk from the current spot into the new zone: to the old zone's edge towards the new zone, across it, in.
+   * Null when the zones do not touch there or a leg would leave the two zones (through a wall or another room).
+   */
+  private crossing(w: Walker, spec: WalkerSpec): { path: P[]; length: number } | null {
+    const from = w.spec.poly, to = spec.poly;
+    const exit = this.edgeTowards(from, centroid(to));
+    const entry = this.edgeTowards(to, exit, 0.5);
+    if (!insideWithMargin(entry, to, 0.2) || Math.hypot(entry[0] - exit[0], entry[1] - exit[1]) > 1.2) return null;
+    if (!segmentInside(w.pos, exit, from)) return null;
+    // The short step across the boundary must stay in one zone or the other at every sample.
+    for (let k = 0; k <= 6; k++) {
+      const p: P = [exit[0] + ((entry[0] - exit[0]) * k) / 6, exit[1] + ((entry[1] - exit[1]) * k) / 6];
+      if (!inside(p, from) && !inside(p, to)) return null;
+    }
+    const length = Math.hypot(exit[0] - w.pos[0], exit[1] - w.pos[1]) + Math.hypot(entry[0] - exit[0], entry[1] - exit[1]);
+    return length / 1.9 <= 3 ? { path: [exit, entry], length } : null;
+  }
+
+  /** The slot, or the nearest walkable point around it when furniture covers it. */
+  private freeSpot(spec: WalkerSpec): P {
+    if (this.walkable(spec.zoneKey, spec.poly, spec.slot)) return [spec.slot[0], spec.slot[1]];
+    for (let r = 0.4; r <= 2.4; r += 0.4) {
+      for (let a = 0; a < 8; a++) {
+        const p: P = [spec.slot[0] + Math.cos((a / 8) * Math.PI * 2) * r, spec.slot[1] + Math.sin((a / 8) * Math.PI * 2) * r];
+        if (this.walkable(spec.zoneKey, spec.poly, p)) return p;
+      }
+    }
+    return [spec.slot[0], spec.slot[1]];
   }
 
   /** A point on the polygon's boundary closest to `towards`, pulled `inset` metres inside. */
@@ -152,16 +205,19 @@ export class Crowd {
     make("head", head); make("hair", hair); make("eye", eye); make("arm", arm); make("hand", hand);
   }
 
-  private walkable(key: string, poly: P[], p: P): boolean {
+  /** Inside the zone (0.3 m from its edges) and off the furniture; `ignore` is a footprint the walk starts in. */
+  private walkable(key: string, poly: P[], p: P, ignore?: { x: number; y: number; w: number; d: number }): boolean {
     if (!insideWithMargin(p, poly, 0.3)) return false;
     const ob = this.obstacles.get(key);
-    return !ob || !ob.blocked.some((b) => Math.abs(p[0] - b.x) * 2 < b.w + 0.5 && Math.abs(p[1] - b.y) * 2 < b.d + 0.5);
+    return !ob || !ob.blocked.some((b) => b !== ignore && Math.abs(p[0] - b.x) * 2 < b.w + 0.5 && Math.abs(p[1] - b.y) * 2 < b.d + 0.5);
   }
 
   /** The next place to go: often a spot by the furniture (a bedside, a counter), else a free point of the zone. */
   private pickTarget(w: Walker): P | null {
     const { poly, zoneKey } = w.spec;
     const ob = this.obstacles.get(zoneKey);
+    // A figure standing in a footprint (it arrived before the furniture was known) may walk out of it.
+    const start = ob?.blocked.find((b) => Math.abs(w.pos[0] - b.x) * 2 < b.w + 0.5 && Math.abs(w.pos[1] - b.y) * 2 < b.d + 0.5);
     for (let i = 0; i < 12; i++) {
       let p: P | null;
       if (ob?.anchors.length && w.rand() < 0.45) p = ob.anchors[Math.floor(w.rand() * ob.anchors.length)];
@@ -170,7 +226,7 @@ export class Crowd {
       // The straight walk must not cross furniture (sampled every 0.4 m).
       const n = Math.ceil(Math.hypot(p[0] - w.pos[0], p[1] - w.pos[1]) / 0.4);
       let clear = true;
-      for (let k = 1; k < n && clear; k++) clear = this.walkable(zoneKey, poly, [w.pos[0] + ((p[0] - w.pos[0]) * k) / n, w.pos[1] + ((p[1] - w.pos[1]) * k) / n]);
+      for (let k = 1; k < n && clear; k++) clear = this.walkable(zoneKey, poly, [w.pos[0] + ((p[0] - w.pos[0]) * k) / n, w.pos[1] + ((p[1] - w.pos[1]) * k) / n], start);
       if (clear) return p;
     }
     return null;
@@ -183,16 +239,23 @@ export class Crowd {
   step(now: number, dt: number, motion: boolean, camera?: THREE.Vector3) {
     const d = Math.min(0.1, Math.max(0, dt));
     for (const w of this.walkers.values()) {
-      if (!motion) {
-        w.pos = [...w.spec.slot] as P;
+      // Reduced motion: everyone stands at their slot. An SOS kneels at its slot in its CURRENT zone, never mid-walk.
+      if (!motion || w.spec.sos) {
+        w.pos[0] = w.home[0]; w.pos[1] = w.home[1];
         w.moving = false;
         w.path = [];
+        w.target = null;
+        w.transit = 0;
         continue;
       }
-      if (w.spec.sos) { w.moving = false; continue; }
       if (!w.target) {
         if (w.path.length) w.target = w.path.shift()!;
-        else if (now >= w.pauseUntil) w.target = this.pickTarget(w);
+        else if (now >= w.pauseUntil) {
+          w.transit = 0;
+          w.target = this.pickTarget(w);
+          // Nowhere to go from here right now: wait a moment rather than trying again every frame.
+          if (!w.target) w.pauseUntil = now + 2000 + w.rand() * 2000;
+        }
       }
       if (!w.target) { w.moving = false; continue; }
       const dx = w.target[0] - w.pos[0], dy = w.target[1] - w.pos[1], dist = Math.hypot(dx, dy);
@@ -200,28 +263,30 @@ export class Crowd {
         w.target = null;
         w.moving = false;
         // Pauses: longer at a bedside or a counter, short in passing.
-        if (!w.path.length) w.pauseUntil = now + 1500 + w.rand() * 6000;
+        if (!w.path.length) { w.pauseUntil = now + 1500 + w.rand() * 6000; w.transit = 0; }
         continue;
       }
-      const step = Math.min(dist, w.speed * d);
-      w.pos = [w.pos[0] + (dx / dist) * step, w.pos[1] + (dy / dist) * step];
+      const speed = w.transit || w.speed;
+      const step = Math.min(dist, speed * d);
+      w.pos[0] += (dx / dist) * step;
+      w.pos[1] += (dy / dist) * step;
       // Turn smoothly towards the way it walks.
       const want = Math.atan2(dx, dy);
       let dh = want - w.heading;
       dh = Math.atan2(Math.sin(dh), Math.cos(dh));
       w.heading += dh * Math.min(1, d * 8);
-      w.phase += w.speed * d * 5.2;
+      w.phase += speed * d * 5.2;
       w.moving = true;
     }
     this.draw(now, motion, camera);
   }
 
   private draw(now: number, motion: boolean, camera?: THREE.Vector3) {
-    const { m, base, q, q2, v, s, e, e2 } = this.tmp;
+    const { m, base, child, local, q, q2, v, s, e, e2 } = this.tmp;
     const t = now / 1000;
-    const count: Record<Part, number> = { leg: 0, shoe: 0, torso: 0, shoulders: 0, skirt: 0, neck: 0, head: 0, hair: 0, eye: 0, arm: 0, hand: 0, capsule: 0 };
-    const child = new THREE.Matrix4(), local = new THREE.Matrix4();
-    const eyeColor = new THREE.Color(0x15191c);
+    const count = this.count;
+    for (const k of Object.keys(count) as Part[]) count[k] = 0;
+    const eyeColor = this.eyeColor;
     /** Writes one part: base · T(x, y, z) · R(rx, 0, rz) · S, then an optional child offset (a hand on an arm). */
     const put = (name: Part, x: number, y: number, z: number, rx: number, rz: number, color: THREE.Color, sy = 1, offset?: [number, number, number]) => {
       const mesh = this.meshes[name];
@@ -234,8 +299,9 @@ export class Crowd {
       mesh.setColorAt(i, color);
     };
     for (const w of this.walkers.values()) {
-      const at = this.world?.(w.spec.floorId, w.pos[0], w.pos[1], 0);
-      if (!at) continue;
+      const o = this.origin?.(w.spec.floorId);
+      if (!o) continue;
+      const at = w.at.set(o.x + w.pos[0], o.y, o.z + w.pos[1]);
       const swing = w.moving ? Math.sin(w.phase) * 0.5 : 0;
       const bob = w.moving ? Math.abs(Math.sin(w.phase)) * 0.03 : Math.sin(t * 1.3 + w.phase) * (motion ? 0.004 : 0);
       const kneel = w.spec.sos;
@@ -243,7 +309,7 @@ export class Crowd {
       base.compose(at, q, s.set(1, 1, 1));
       const far = this.detail === "capsule" || (camera ? camera.distanceTo(at) > LOD_DISTANCE : false);
       if (far) {
-        put("capsule", 0, (kneel ? 0.45 : 0.67) + bob, 0, 0, 0, kneel ? new THREE.Color(this.theme.danger) : w.look.top, kneel ? 0.6 : 1);
+        put("capsule", 0, (kneel ? 0.45 : 0.67) + bob, 0, 0, 0, kneel ? this.sosColor : w.look.top, kneel ? 0.6 : 1);
         continue;
       }
       const L = w.look, hip = kneel ? 0.5 : 0.88 + bob;
@@ -251,8 +317,8 @@ export class Crowd {
       const legA = kneel ? 1.35 : swing, legB = kneel ? -0.25 : -swing;
       put("leg", -0.085, hip, 0, legA, 0, L.bottom);
       put("leg", 0.085, hip, kneel ? 0.2 : 0, legB, 0, L.bottom);
-      put("shoe", -0.085, hip, 0, legA, 0, L.shoe, 1, [0, -0.82, 0.035]);
-      put("shoe", 0.085, hip, kneel ? 0.2 : 0, legB, 0, L.shoe, 1, [0, -0.82, 0.035]);
+      put("shoe", -0.085, hip, 0, legA, 0, L.shoe, 1, SHOE);
+      put("shoe", 0.085, hip, kneel ? 0.2 : 0, legB, 0, L.shoe, 1, SHOE);
       const lean = kneel ? 0.18 : 0;
       put("torso", 0, hip + 0.28, 0, lean, 0, L.top);
       put("shoulders", 0, hip + 0.54, lean * 0.3, lean, 0, L.top);
@@ -263,15 +329,15 @@ export class Crowd {
       const hy = hip + 0.76;
       put("head", 0, hy, lean * 0.5, 0, 0, L.skin);
       put("hair", 0, hy + 0.012, lean * 0.5 - 0.008, -0.12, 0, L.hair);
-      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, [-0.036, 0.012, 0.098]);
-      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, [0.036, 0.012, 0.098]);
+      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, EYE_L);
+      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, EYE_R);
       // Arms: opposite to the legs; an SOS raises one arm and waves (still with motion reduced).
       const wave = kneel ? Math.PI * 0.9 + (motion ? Math.sin(t * 6) * 0.35 : 0) : 0;
       const armA = kneel ? 0 : -swing * 0.8, armB = kneel ? 0.3 : swing * 0.8;
       put("arm", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.sleeve);
       put("arm", 0.205, hip + 0.53, 0, armB, -0.05, L.sleeve);
-      put("hand", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.skin, 1, [0, -0.62, 0]);
-      put("hand", 0.205, hip + 0.53, 0, armB, -0.05, L.skin, 1, [0, -0.62, 0]);
+      put("hand", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.skin, 1, HAND);
+      put("hand", 0.205, hip + 0.53, 0, armB, -0.05, L.skin, 1, HAND);
     }
     for (const [name, mesh] of Object.entries(this.meshes) as [Part, THREE.InstancedMesh][]) {
       mesh.count = count[name];

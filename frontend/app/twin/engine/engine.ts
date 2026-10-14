@@ -21,7 +21,7 @@ import { comfortBand, comfortT, heatGrid, heatPixels, staleWeight, type HeatKind
 import { assignSlots, zoneSlots } from "./slots";
 import { beaconColor, makeEnvironment, makeGround, styleBuilding, towerGeometry, type BeaconTone, type Ground } from "./immersive";
 import { ModelLayer, type Flattened, type PlanPlace } from "./model";
-import { Lifelike, MAX_FIGURES, type WalkerSpec } from "./lifelike";
+import { Lifelike, MAX_FIGURES, type FixtureState, type WalkerSpec } from "./lifelike";
 import { readTheme, type TwinTheme } from "../theme";
 import type { ModelTransform } from "../model-api";
 import type { Layer, PeopleMode, TwinAlert, TwinDevice, TwinState } from "../api";
@@ -61,6 +61,7 @@ export type BadgeSpec = {
 export type BadgeAction = "select" | "toggle";
 type BadgeEl = { el: HTMLDivElement; main: HTMLButtonElement; name: HTMLSpanElement; value: HTMLSpanElement; power: HTMLButtonElement | null; msg: HTMLSpanElement; sig: string; w: number; h: number };
 const MAX_BADGES = 24;
+const BLOOM_IMMERSIVE = 0.7;
 const AMBIENT_IDLE_MS = 120000;
 const ACTIVITY = ["pointerdown", "pointermove", "keydown", "wheel"] as const;
 
@@ -264,9 +265,9 @@ export class TwinEngine {
       }
       // Bloom only on the high tier; the immersive style lets beacons and edges glow a little more.
       // Immersive: only what is meant to glow (beacons, screens, lit fixtures, edges) blooms, not white furniture.
-      this.bloom!.strength = immersive ? 0.7 : 0.55;
+      this.bloom!.strength = immersive ? BLOOM_IMMERSIVE : 0.55;
       this.bloom!.radius = immersive ? 0.55 : 0.5;
-      this.bloom!.threshold = immersive ? 0.88 : 0.82;
+      this.bloom!.threshold = immersive ? 0.92 : 0.82;
     } else if (this.composer) {
       this.composer.dispose();
       this.composer = null;
@@ -400,6 +401,11 @@ export class TwinEngine {
     this.ambientAt = now;
     this.step(now);
     this.renderer.info.reset();
+    if (this.bloom && this.style === "immersive") {
+      // Close up, a lit panel fills the screen and bloom would turn it into a white blob: fade bloom in with distance.
+      const dist = this.camera.position.distanceTo(this.controls.target);
+      this.bloom.strength = BLOOM_IMMERSIVE * Math.min(1, Math.max(0.15, (dist - 2) / 22));
+    }
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.placeLabels();
@@ -430,7 +436,8 @@ export class TwinEngine {
     if (this.lifelike) {
       const dt = this.lastStep ? (now - this.lastStep) / 1000 : 0;
       this.lastStep = now;
-      this.lifelike.step(now, t, dt, this.motionAllowed());
+      const px = this.renderer.domElement.height / (2 * Math.tan((this.camera.fov * Math.PI) / 360));
+      this.lifelike.step(now, t, dt, this.motionAllowed(), this.camera.position, px);
     }
     // A device alert's ring pulses only as ambient motion (an alert can stay open for hours: never a reason to keep
     // rendering on its own); still, it is a solid ring. SOS and hazards keep their own always-on pulse above.
@@ -1075,6 +1082,9 @@ export class TwinEngine {
     else this.modelLayer.clear();
     this.applyModel();
   }
+
+  /** Lifelike: states the live view lacks (an AC's switch, a blind's position), from the devices' controls. */
+  setFixtureStates(map: Record<string, FixtureState>) { this.lifelike?.setFixtureStates(map); this.invalidate(); }
 
   setModelTransform(t: ModelTransform | null) {
     this.modelTransform = t;

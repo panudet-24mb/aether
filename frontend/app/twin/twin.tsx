@@ -18,6 +18,7 @@ import { TwinMinimap, zoneSummaries } from "./twin-plan";
 import TwinModelPanel from "./twin-model";
 import { fetchModel, fetchModelFile, modelSender, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
 import { quickToggle, type QuickResult } from "./quick-toggle";
+import { fixtureStateOf, type FixtureState } from "./engine/lifelike/fixtures";
 import "../topology/topology.css";
 import "../floorplan/floorplan.css";
 import "./twin.css";
@@ -64,6 +65,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [canManage, setCanManage] = useState<boolean | null>(null);
   const [canCommand, setCanCommand] = useState<boolean | null>(null);
   const [pendingCmd, setPendingCmd] = useState<Record<string, QuickResult>>({});
+  const [fixtureStates, setFixtureStates] = useState<Record<string, FixtureState>>({});
   const [explode, setExplode] = useState(0.55);
   const [isolate, setIsolate] = useState(false);
   const [tour, setTour] = useState(false);
@@ -159,6 +161,25 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   // A member known not to command devices gets badges without power buttons; unknown → buttons, and a refusal is explained.
   const controls: TwinControls | undefined = useMemo(() => (canCommand === false ? undefined : { pending: pendingCmd, onToggle, disabled: mode !== "live" }), [canCommand, pendingCmd, onToggle, mode]);
   const fitModel = useCallback((t: ModelTransform) => handle.current?.fitModel(t) ?? null, []);
+  // Immersive: an AC's switch or a blind's position is not in the live view; read the few climate and cover devices'
+  // controls (at most 12) when the view opens and every minute, so their fixtures show what they are doing.
+  const hasState = !!state;
+  const stateNow = useLatest(state);
+  useEffect(() => {
+    if (style !== "immersive" || mode !== "live" || !hasState) return;
+    let active = true;
+    const load = async () => {
+      const list = (stateNow.current?.devices ?? []).filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover")).slice(0, 12);
+      const out: Record<string, FixtureState> = {};
+      for (const d of list) {
+        try { out[d.id] = fixtureStateOf((await client.deviceControls(d.id)).state, d.class); } catch { /* unreadable: the fixture keeps its default look */ }
+      }
+      if (active) setFixtureStates(out);
+    };
+    void load();
+    const id = setInterval(load, 60000);
+    return () => { active = false; clearInterval(id); };
+  }, [style, mode, hasState, client, stateNow, siteId]);
   const onModel = useCallback((m: SiteModel | null, status: ModelStatus) => setModelInfo({ model: m, status }), []);
 
   // Signals refetch now (alerts at once, the rest coalesced by the hook); the poll is only a safety net.
@@ -362,7 +383,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         {siteId ? (
           <TwinView siteId={siteId} source={source} floorId={floorId} layers={layers} people={people} tour={tour && mode === "live"} explode={explode} isolate={isolate}
             mode={mode} frozen={frozen} autoFocus={mode === "live"} style={style} ambient={ambient} controls={controls}
-            modelKey={modelKey} modelTransform={modelDraft} onModel={onModel}
+            modelKey={modelKey} modelTransform={modelDraft} onModel={onModel} fixtureStates={fixtureStates}
             refreshKey={refreshKey} pollMs={connected ? 20000 : 6000} handleRef={handle} onReady={onReady} onState={onState} onSelect={setSelected} onError={fail}
             onAlertFocus={(a) => { const z = handle.current?.engine()?.zoneName(a.gateway_id); if (z) setFloorId(z.floorId); setTour(false); }} />
         ) : sites && <div className="twin-empty"><Building2 size={28} /><p>ยังไม่มีอาคาร · วาดผังในหน้า &ldquo;ผังอาคาร&rdquo; ก่อน แล้วกลับมาดูแบบ digital twin</p></div>}

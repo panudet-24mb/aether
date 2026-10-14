@@ -15,7 +15,8 @@ export type Obstacles = { anchors: P[]; blocked: { x: number; y: number; w: numb
 /** At most this many walking figures; the rest of a crowd stays as the plain tokens. */
 export const MAX_FIGURES = 150;
 
-type Look = { top: THREE.Color; bottom: THREE.Color; skin: THREE.Color; hair: THREE.Color; coat: boolean };
+type Outfit = "scrubs" | "coat" | "gown" | "visitor";
+type Look = { outfit: Outfit; top: THREE.Color; bottom: THREE.Color; sleeve: THREE.Color; shoe: THREE.Color; skin: THREE.Color; hair: THREE.Color };
 
 type Walker = {
   spec: WalkerSpec;
@@ -35,20 +36,26 @@ type Walker = {
 function lookFor(id: string, theme: TwinTheme): Look {
   const r = rng(hash(id));
   const pick = r();
-  const skins = [0xf1d0b5, 0xd9a882, 0xb47b57, 0x8a5a3c, 0xe8c3a0];
-  const hairs = [0x2b2220, 0x4a3426, 0x1c1c1c, 0x6b4a2f, 0x9c9a96];
+  const skins = [0xe9c6a8, 0xd2a07c, 0xae7752, 0x845638, 0xe0bb98];
+  const hairs = [0x2b2220, 0x4a3426, 0x1c1c1c, 0x6b4a2f, 0x8f8c88];
   const skin = new THREE.Color(skins[Math.floor(r() * skins.length)]), hair = new THREE.Color(hairs[Math.floor(r() * hairs.length)]);
+  const bare = skin.clone();
   if (pick < 0.4) {
     const scrub = [new THREE.Color(theme.accent).lerp(new THREE.Color(0x1e5a52), 0.45), new THREE.Color(theme.blue).lerp(new THREE.Color(0x1f3a63), 0.4), new THREE.Color(0x3f7e86)][Math.floor(r() * 3)];
-    return { top: scrub, bottom: scrub.clone().multiplyScalar(0.85), skin, hair, coat: false };
+    return { outfit: "scrubs", top: scrub, bottom: scrub.clone().multiplyScalar(0.88), sleeve: bare, shoe: new THREE.Color(0xc9d0d0), skin, hair };
   }
-  if (pick < 0.65) return { top: new THREE.Color(0xd3dad9), bottom: new THREE.Color(0x2c3640), skin, hair, coat: true };
-  if (pick < 0.85) return { top: new THREE.Color(0xa6c0d4), bottom: new THREE.Color(0xa6c0d4), skin, hair, coat: false };
-  const casual = [0x8a5a6b, 0x55707f, 0x7a7350, 0x5a5f8a, 0x9a6a3c][Math.floor(r() * 5)];
-  return { top: new THREE.Color(casual), bottom: new THREE.Color(0x30353a), skin, hair, coat: false };
+  if (pick < 0.65) return { outfit: "coat", top: new THREE.Color(0xd3dad9), bottom: new THREE.Color(0x2c3640), sleeve: new THREE.Color(0xd3dad9), shoe: new THREE.Color(0x24292d), skin, hair };
+  if (pick < 0.85) return { outfit: "gown", top: new THREE.Color(0x9fb9cf), bottom: bare, sleeve: bare, shoe: new THREE.Color(0xc9d6de), skin, hair };
+  const casual = new THREE.Color([0x8a5a6b, 0x55707f, 0x7a7350, 0x5a5f8a, 0x9a6a3c][Math.floor(r() * 5)]);
+  return { outfit: "visitor", top: casual, bottom: new THREE.Color(0x30394a), sleeve: casual, shoe: new THREE.Color(0x2a2522), skin, hair };
 }
 
-type Part = "leg" | "arm" | "torso" | "head" | "hair" | "capsule";
+/** Beyond this distance from the camera a figure is drawn as a plain capsule. */
+const LOD_DISTANCE = 25;
+
+type Part = "leg" | "shoe" | "torso" | "shoulders" | "skirt" | "neck" | "head" | "hair" | "eye" | "arm" | "hand" | "capsule";
+/** Instances per figure of each part. */
+const PER: Record<Part, number> = { leg: 2, shoe: 2, torso: 1, shoulders: 1, skirt: 1, neck: 1, head: 1, hair: 1, eye: 2, arm: 2, hand: 2, capsule: 1 };
 
 export class Crowd {
   readonly group = new THREE.Group();
@@ -58,7 +65,7 @@ export class Crowd {
   private detail: "figure" | "capsule" = "figure";
   private obstacles = new Map<string, Obstacles>();
   private world: ((floorId: string, x: number, y: number, h: number) => THREE.Vector3 | null) | null = null;
-  private tmp = { m: new THREE.Matrix4(), base: new THREE.Matrix4(), part: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(), v: new THREE.Vector3(), s: new THREE.Vector3(), e: new THREE.Euler(), e2: new THREE.Euler() };
+  private tmp = { m: new THREE.Matrix4(), base: new THREE.Matrix4(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(), v: new THREE.Vector3(), s: new THREE.Vector3(), e: new THREE.Euler(), e2: new THREE.Euler() };
 
   constructor(private theme: TwinTheme) { this.group.name = "crowd"; }
 
@@ -115,27 +122,34 @@ export class Crowd {
     this.disposeMeshes();
     this.detail = detail;
     this.capacity = Math.max(32, Math.ceil(this.walkers.size * 1.25));
-    const std = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0.02 });
-    const make = (part: Part, geo: THREE.BufferGeometry, per: number) => {
-      const mesh = new THREE.InstancedMesh(geo, std(), this.capacity * per);
+    const std = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.02 });
+    const make = (part: Part, geo: THREE.BufferGeometry) => {
+      const mesh = new THREE.InstancedMesh(geo, std(), this.capacity * PER[part]);
       mesh.name = `crowd:${part}`;
       mesh.frustumCulled = false;
       mesh.raycast = () => {};
+      mesh.count = 0;
       this.meshes[part] = mesh;
       this.group.add(mesh);
     };
-    if (detail === "capsule") {
-      make("capsule", new THREE.CapsuleGeometry(0.19, 0.7, 3, 8), 1);
-      return;
-    }
-    // Pivots at the hip and the shoulder: limbs hang down from the origin.
-    const leg = new THREE.BoxGeometry(0.13, 0.84, 0.15); leg.translate(0, -0.42, 0);
-    const arm = new THREE.BoxGeometry(0.09, 0.62, 0.1); arm.translate(0, -0.31, 0);
-    make("leg", leg, 2);
-    make("arm", arm, 2);
-    make("torso", new THREE.BoxGeometry(0.38, 0.6, 0.22), 1);
-    make("head", new THREE.IcosahedronGeometry(0.12, 1), 1);
-    make("hair", new THREE.SphereGeometry(0.128, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55), 1);
+    // Far figures (and every figure on the med and low tiers) are capsules.
+    make("capsule", new THREE.CapsuleGeometry(0.19, 0.95, 3, 8));
+    if (detail === "capsule") return;
+    // About 1.75 m tall; the head is 1/7.5 of that; shoulders (0.41 m) wider than hips (0.3 m). Limbs hang from
+    // their pivot at the origin (hip, shoulder) so a rotation swings them.
+    const leg = new THREE.CapsuleGeometry(0.062, 0.72, 3, 8); leg.translate(0, -0.42, 0);
+    const shoe = new THREE.CapsuleGeometry(0.046, 0.13, 2, 6); shoe.rotateX(Math.PI / 2); shoe.scale(1, 0.75, 1);
+    const torso = new THREE.CylinderGeometry(0.19, 0.15, 0.56, 14); torso.scale(1, 1, 0.62);
+    const shoulders = new THREE.CapsuleGeometry(0.075, 0.27, 3, 8); shoulders.rotateZ(Math.PI / 2); shoulders.scale(1, 1, 0.85);
+    const skirt = new THREE.CylinderGeometry(0.155, 0.2, 1, 14); skirt.scale(1, 1, 0.66);
+    const neck = new THREE.CylinderGeometry(0.045, 0.05, 0.1, 8);
+    const head = new THREE.SphereGeometry(0.105, 12, 9); head.scale(1, 1.12, 1.04);
+    const hair = new THREE.SphereGeometry(0.111, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.52); hair.scale(1, 1.12, 1.06);
+    const eye = new THREE.SphereGeometry(0.012, 5, 4);
+    const arm = new THREE.CapsuleGeometry(0.045, 0.5, 3, 8); arm.translate(0, -0.29, 0);
+    const hand = new THREE.SphereGeometry(0.046, 7, 5); hand.scale(0.85, 1.1, 0.7);
+    make("leg", leg); make("shoe", shoe); make("torso", torso); make("shoulders", shoulders); make("skirt", skirt); make("neck", neck);
+    make("head", head); make("hair", hair); make("eye", eye); make("arm", arm); make("hand", hand);
   }
 
   private walkable(key: string, poly: P[], p: P): boolean {
@@ -166,7 +180,7 @@ export class Crowd {
    * One frame. `motion` false (reduced motion): everyone stands at their slot in their zone. A paused view simply
    * draws no frames, so figures freeze where they are.
    */
-  step(now: number, dt: number, motion: boolean) {
+  step(now: number, dt: number, motion: boolean, camera?: THREE.Vector3) {
     const d = Math.min(0.1, Math.max(0, dt));
     for (const w of this.walkers.values()) {
       if (!motion) {
@@ -199,49 +213,69 @@ export class Crowd {
       w.phase += w.speed * d * 5.2;
       w.moving = true;
     }
-    this.draw(now, motion);
+    this.draw(now, motion, camera);
   }
 
-  private draw(now: number, motion: boolean) {
-    const { m, base, part, q, q2, v, s, e, e2 } = this.tmp;
+  private draw(now: number, motion: boolean, camera?: THREE.Vector3) {
+    const { m, base, q, q2, v, s, e, e2 } = this.tmp;
     const t = now / 1000;
-    let i = 0;
+    const count: Record<Part, number> = { leg: 0, shoe: 0, torso: 0, shoulders: 0, skirt: 0, neck: 0, head: 0, hair: 0, eye: 0, arm: 0, hand: 0, capsule: 0 };
+    const child = new THREE.Matrix4(), local = new THREE.Matrix4();
+    const eyeColor = new THREE.Color(0x15191c);
+    /** Writes one part: base · T(x, y, z) · R(rx, 0, rz) · S, then an optional child offset (a hand on an arm). */
+    const put = (name: Part, x: number, y: number, z: number, rx: number, rz: number, color: THREE.Color, sy = 1, offset?: [number, number, number]) => {
+      const mesh = this.meshes[name];
+      if (!mesh) return;
+      local.compose(v.set(x, y, z), q2.setFromEuler(e2.set(rx, 0, rz)), s.set(1, sy, 1));
+      m.multiplyMatrices(base, local);
+      if (offset) m.multiply(child.makeTranslation(offset[0], offset[1], offset[2]));
+      const i = count[name]++;
+      mesh.setMatrixAt(i, m);
+      mesh.setColorAt(i, color);
+    };
     for (const w of this.walkers.values()) {
       const at = this.world?.(w.spec.floorId, w.pos[0], w.pos[1], 0);
       if (!at) continue;
-      const swing = w.moving ? Math.sin(w.phase) * 0.55 : 0;
-      const bob = w.moving ? Math.abs(Math.sin(w.phase)) * 0.035 : Math.sin(t * 1.3 + w.phase) * (motion ? 0.004 : 0);
+      const swing = w.moving ? Math.sin(w.phase) * 0.5 : 0;
+      const bob = w.moving ? Math.abs(Math.sin(w.phase)) * 0.03 : Math.sin(t * 1.3 + w.phase) * (motion ? 0.004 : 0);
       const kneel = w.spec.sos;
       q.setFromEuler(e.set(0, w.heading, 0));
       base.compose(at, q, s.set(1, 1, 1));
-      const put = (name: Part, index: number, x: number, y: number, z: number, rx: number, rz: number, color: THREE.Color) => {
-        const mesh = this.meshes[name];
-        if (!mesh) return;
-        part.compose(v.set(x, y, z), q2.setFromEuler(e2.set(rx, 0, rz)), s.set(1, 1, 1));
-        mesh.setMatrixAt(index, m.multiplyMatrices(base, part));
-        mesh.setColorAt(index, color);
-      };
-      if (this.detail === "capsule") {
-        put("capsule", i, 0, 0.62 + bob, 0, 0, 0, kneel ? new THREE.Color(this.theme.danger) : w.look.top);
-        i++;
+      const far = this.detail === "capsule" || (camera ? camera.distanceTo(at) > LOD_DISTANCE : false);
+      if (far) {
+        put("capsule", 0, (kneel ? 0.45 : 0.67) + bob, 0, 0, 0, kneel ? new THREE.Color(this.theme.danger) : w.look.top, kneel ? 0.6 : 1);
         continue;
       }
-      const hip = kneel ? 0.5 : 0.86 + bob;
-      // Legs: swing forward and back; kneeling, one knee down and one leg folded forward.
-      put("leg", i * 2, -0.1, hip, 0, kneel ? 1.3 : swing, 0, w.look.bottom);
-      put("leg", i * 2 + 1, 0.1, hip, kneel ? 0.25 : 0, kneel ? -0.2 : -swing, 0, w.look.bottom);
-      put("torso", i, 0, hip + 0.31, 0, kneel ? 0.15 : 0, 0, w.look.top);
+      const L = w.look, hip = kneel ? 0.5 : 0.88 + bob;
+      // Legs and shoes: swing from the hip; kneeling, one leg folded under and one knee forward.
+      const legA = kneel ? 1.35 : swing, legB = kneel ? -0.25 : -swing;
+      put("leg", -0.085, hip, 0, legA, 0, L.bottom);
+      put("leg", 0.085, hip, kneel ? 0.2 : 0, legB, 0, L.bottom);
+      put("shoe", -0.085, hip, 0, legA, 0, L.shoe, 1, [0, -0.82, 0.035]);
+      put("shoe", 0.085, hip, kneel ? 0.2 : 0, legB, 0, L.shoe, 1, [0, -0.82, 0.035]);
+      const lean = kneel ? 0.18 : 0;
+      put("torso", 0, hip + 0.28, 0, lean, 0, L.top);
+      put("shoulders", 0, hip + 0.54, lean * 0.3, lean, 0, L.top);
+      // A coat to mid-thigh, a gown to the knee; scrubs and visitors have none (scaled away).
+      const skirt = L.outfit === "coat" ? 0.36 : L.outfit === "gown" ? 0.46 : 0.0001;
+      put("skirt", 0, hip - skirt / 2 + 0.02, 0, lean, 0, L.top, skirt);
+      put("neck", 0, hip + 0.61, lean * 0.4, 0, 0, L.skin);
+      const hy = hip + 0.76;
+      put("head", 0, hy, lean * 0.5, 0, 0, L.skin);
+      put("hair", 0, hy + 0.012, lean * 0.5 - 0.008, -0.12, 0, L.hair);
+      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, [-0.036, 0.012, 0.098]);
+      put("eye", 0, hy, lean * 0.5, 0, 0, eyeColor, 1, [0.036, 0.012, 0.098]);
       // Arms: opposite to the legs; an SOS raises one arm and waves (still with motion reduced).
       const wave = kneel ? Math.PI * 0.9 + (motion ? Math.sin(t * 6) * 0.35 : 0) : 0;
-      const sleeve = w.look.coat ? w.look.top : w.look.top.clone().lerp(w.look.skin, 0.35);
-      put("arm", i * 2, -0.24, hip + 0.58, 0, kneel ? 0 : -swing * 0.8, kneel ? -wave : 0.06, sleeve);
-      put("arm", i * 2 + 1, 0.24, hip + 0.58, 0, kneel ? 0.3 : swing * 0.8, -0.06, sleeve);
-      put("head", i, 0, hip + 0.76, 0, 0, 0, w.look.skin);
-      put("hair", i, 0, hip + 0.79, -0.01, -0.15, 0, w.look.hair);
-      i++;
+      const armA = kneel ? 0 : -swing * 0.8, armB = kneel ? 0.3 : swing * 0.8;
+      put("arm", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.sleeve);
+      put("arm", 0.205, hip + 0.53, 0, armB, -0.05, L.sleeve);
+      put("hand", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.skin, 1, [0, -0.62, 0]);
+      put("hand", 0.205, hip + 0.53, 0, armB, -0.05, L.skin, 1, [0, -0.62, 0]);
     }
     for (const [name, mesh] of Object.entries(this.meshes) as [Part, THREE.InstancedMesh][]) {
-      mesh.count = name === "leg" || name === "arm" ? i * 2 : i;
+      mesh.count = count[name];
+      mesh.visible = mesh.count > 0;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }

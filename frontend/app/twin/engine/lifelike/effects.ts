@@ -34,6 +34,59 @@ function soft(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(c);
 }
 
+/**
+ * A puff of smoke: a few overlapping soft blobs inside a feathered round mask, so the sprite has no edge at any
+ * rotation and reads as cloud rather than a disc.
+ */
+function puff(): THREE.CanvasTexture {
+  const size = 128, c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d")!;
+  const r = rng(hash("smoke-puff"));
+  for (let i = 0; i < 14; i++) {
+    const x = size / 2 + (r() - 0.5) * size * 0.34, y = size / 2 + (r() - 0.5) * size * 0.34, rad = size * (0.16 + r() * 0.16);
+    const grad = g.createRadialGradient(x, y, 0, x, y, rad);
+    grad.addColorStop(0, "rgba(255,255,255,0.32)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+  }
+  // Feather everything to zero well inside the square.
+  g.globalCompositeOperation = "destination-in";
+  const mask = g.createRadialGradient(size / 2, size / 2, size * 0.12, size / 2, size / 2, size * 0.48);
+  mask.addColorStop(0, "rgba(0,0,0,1)");
+  mask.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = mask;
+  g.fillRect(0, 0, size, size);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// Smoke particles: a size in metres (perspective-correct), an alpha, a rotation and a colour each.
+const SMOKE_VERT = /* glsl */ `
+attribute float aSize; attribute float aAlpha; attribute float aRot; attribute vec3 aColor;
+uniform float uScale;
+varying float vAlpha; varying float vRot; varying vec3 vColor;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  gl_PointSize = clamp(aSize * uScale / max(0.1, -mv.z), 1.0, 900.0);
+  vAlpha = aAlpha; vRot = aRot; vColor = aColor;
+}`;
+const SMOKE_FRAG = /* glsl */ `
+uniform sampler2D uMap;
+varying float vAlpha; varying float vRot; varying vec3 vColor;
+void main() {
+  vec2 p = gl_PointCoord - 0.5;
+  float c = cos(vRot), s = sin(vRot);
+  vec2 uv = vec2(c * p.x - s * p.y, s * p.x + c * p.y) + 0.5;
+  float a = texture2D(uMap, uv).a * vAlpha;
+  if (a < 0.003) discard;
+  gl_FragColor = vec4(vColor, a);
+  #include <colorspace_fragment>
+}`;
+
 const RIPPLE_FRAG = /* glsl */ `
 uniform vec3 uColor; uniform float uTime; uniform float uMotion; varying vec2 vUv;
 void main() {
@@ -56,11 +109,15 @@ void main() {
 const VERT = /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
 type Door = { pos: THREE.Vector3; yaw: number; width: number; sensor: string | null; angle: number; openSince: number };
-type Plume = { points: THREE.Points; origin: THREE.Vector3; top: number; seeds: Float32Array; kind: "smoke" | "gas"; alarm: THREE.Mesh };
+type Plume = { points: THREE.Points; origin: THREE.Vector3; top: number; seeds: Float32Array; kind: "smoke" | "gas"; alarm: THREE.Mesh; drift: number };
 
 export class Effects {
   readonly group = new THREE.Group();
   private tex = soft();
+  private puffTex = puff();
+  /** Pixels per metre at 1 m (viewport height / 2·tan(fov/2)), for perspective-sized smoke. */
+  private pixelScale = 600;
+  private smokeUniforms: { uScale: { value: number } }[] = [];
   private floors: EffectFloor[] = [];
   private world: World | null = null;
   private low = false;
@@ -216,20 +273,25 @@ export class Effects {
   }
 
   private makePlume(origin: THREE.Vector3, ceiling: number, kind: "smoke" | "gas", id: string): Plume {
-    const n = this.low ? 40 : 110;
+    const n = this.low ? 60 : 150;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-    geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n * 4), 4));
+    geo.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(n), 1));
+    geo.setAttribute("aAlpha", new THREE.BufferAttribute(new Float32Array(n), 1));
+    geo.setAttribute("aRot", new THREE.BufferAttribute(new Float32Array(n), 1));
+    geo.setAttribute("aColor", new THREE.BufferAttribute(new Float32Array(n * 3), 3));
     const r = rng(hash(`plume:${id}`));
-    const seeds = new Float32Array(n * 3);
+    const seeds = new Float32Array(n * 4);
     for (let i = 0; i < seeds.length; i++) seeds[i] = r();
-    const points = new THREE.Points(geo, new THREE.PointsMaterial({ map: this.tex, size: 1.5, vertexColors: true, transparent: true, depthWrite: false, toneMapped: false }));
+    const uniforms = { uMap: { value: this.puffTex }, uScale: { value: this.pixelScale } };
+    this.smokeUniforms.push(uniforms);
+    const points = new THREE.Points(geo, new THREE.ShaderMaterial({ uniforms, vertexShader: SMOKE_VERT, fragmentShader: SMOKE_FRAG, transparent: true, depthWrite: false, toneMapped: false }));
     points.frustumCulled = false;
     points.renderOrder = 5;
     const alarm = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.07, 16), new THREE.MeshBasicMaterial({ color: this.theme.danger, toneMapped: false }));
     alarm.position.copy(origin).setY(origin.y - 0.2 + ceiling - 0.06);
     this.group.add(points, alarm);
-    return { points, origin, top: ceiling - 0.3, seeds, kind, alarm };
+    return { points, origin, top: ceiling - 0.3, seeds, kind, alarm, drift: r() * Math.PI * 2 };
   }
 
   private makePuddle(pos: THREE.Vector3): THREE.Mesh {
@@ -261,26 +323,37 @@ export class Effects {
   /** A frame: plumes rise and spread, alarms flash, puddles ripple, doors swing, mist drifts. */
   step(t: number, dt: number, motion: boolean, now: number) {
     for (const u of this.uniforms) { u.uTime.value = t; u.uMotion.value = motion ? 1 : 0; }
-    const grey = new THREE.Color(0x4b5155), gas = new THREE.Color(this.theme.warning).lerp(new THREE.Color(this.theme.accent), 0.45);
+    // Gas and CO keep a yellow-green tint from the tokens (warning towards accent).
+    const gas = new THREE.Color(this.theme.warning).lerp(new THREE.Color(this.theme.accent), 0.45);
+    for (const u of this.smokeUniforms) u.uScale.value = this.pixelScale;
     for (const p of this.plumes.values()) {
-      const pos = p.points.geometry.getAttribute("position") as THREE.BufferAttribute;
-      const col = p.points.geometry.getAttribute("color") as THREE.BufferAttribute;
-      const base = p.kind === "gas" ? gas : grey;
+      const g = p.points.geometry;
+      const pos = g.getAttribute("position") as THREE.BufferAttribute, size = g.getAttribute("aSize") as THREE.BufferAttribute;
+      const alpha = g.getAttribute("aAlpha") as THREE.BufferAttribute, rot = g.getAttribute("aRot") as THREE.BufferAttribute, col = g.getAttribute("aColor") as THREE.BufferAttribute;
+      const gasTint = p.kind === "gas";
+      // A slow wind for this plume: the column leans and wanders a little.
+      const windX = Math.cos(p.drift + (motion ? t * 0.05 : 0)) * 0.55, windZ = Math.sin(p.drift + (motion ? t * 0.05 : 0)) * 0.55;
       for (let i = 0; i < pos.count; i++) {
-        const s0 = p.seeds[i * 3], s1 = p.seeds[i * 3 + 1], s2 = p.seeds[i * 3 + 2];
-        // Life 0 → 1: rise from the source to the ceiling, then spread under it. Still: a fixed haze.
-        const life = motion ? (t * (p.kind === "gas" ? 0.12 : 0.17) + s0) % 1 : s0;
-        const rise = Math.min(1, life * 1.8);
-        const spread = 0.2 + life * 3.6;
-        const ang = s1 * Math.PI * 2 + (motion ? t * 0.15 : 0);
-        const h = p.kind === "gas" ? 0.3 + life * 1.2 : rise * (p.top - 0.2);
-        pos.setXYZ(i, p.origin.x + Math.cos(ang) * spread * (0.3 + s2 * 0.7), p.origin.y + h, p.origin.z + Math.sin(ang) * spread * (0.3 + s2 * 0.7));
-        const fade = Math.sin(Math.PI * Math.min(1, life * 1.15));
-        col.setXYZW(i, base.r * (0.85 + s2 * 0.3), base.g * (0.85 + s2 * 0.3), base.b * (0.85 + s2 * 0.3), (p.kind === "gas" ? 0.35 : 0.55) * fade);
+        const s0 = p.seeds[i * 4], s1 = p.seeds[i * 4 + 1], s2 = p.seeds[i * 4 + 2], s3 = p.seeds[i * 4 + 3];
+        // Life 0 → 1. Smoke rises fast, slows under the ceiling and spreads; gas stays low and creeps outwards.
+        const life = motion ? (t * (gasTint ? 0.07 : 0.1) + s0) % 1 : 0.15 + s0 * 0.75;
+        const rise = 1 - Math.pow(1 - Math.min(1, life * 1.6), 2.2);
+        const h = gasTint ? 0.15 + life * 1.1 : 0.1 + rise * (p.top - 0.1);
+        const widen = 0.12 + Math.pow(life, 1.25) * (gasTint ? 3.6 : 3.1) + Math.max(0, life - 0.55) * 2.2;
+        const ang = s1 * Math.PI * 2 + (motion ? Math.sin(t * 0.3 + s2 * 6) * 0.25 : 0);
+        const rr = widen * (0.25 + 0.75 * Math.sqrt(s2));
+        pos.setXYZ(i, p.origin.x + Math.cos(ang) * rr + windX * life, p.origin.y + h, p.origin.z + Math.sin(ang) * rr + windZ * life);
+        // Puffs grow as they rise; fade in quickly, fade out slowly; denser near the source.
+        size.setX(i, (0.55 + life * 2.6) * (0.8 + s3 * 0.5));
+        const fadeIn = Math.min(1, life / 0.08), fadeOut = 1 - Math.max(0, (life - 0.55) / 0.45);
+        alpha.setX(i, (gasTint ? 0.32 : 0.5) * fadeIn * fadeOut * fadeOut * (1 - life * 0.45));
+        rot.setX(i, s3 * 6.283 + (motion ? t * (s2 - 0.5) * 0.5 : 0));
+        // Dark at the source, lighter grey (or paler tint) as it spreads.
+        const shade = 0.14 + life * 0.3 + s3 * 0.05;
+        if (gasTint) col.setXYZ(i, gas.r * (0.55 + life * 0.4), gas.g * (0.55 + life * 0.4), gas.b * (0.55 + life * 0.4));
+        else col.setXYZ(i, shade, shade * 1.03, shade * 1.06);
       }
-      pos.needsUpdate = true;
-      col.needsUpdate = true;
-      (p.points.material as THREE.PointsMaterial).size = this.low ? 1.8 : 1.5;
+      for (const a of [pos, size, alpha, rot, col]) a.needsUpdate = true;
       const flash = motion ? (Math.sin(t * 9) > 0 ? 1.4 : 0.35) : 1;
       (p.alarm.material as THREE.MeshBasicMaterial).color.setHex(this.theme.danger).multiplyScalar(flash);
     }
@@ -335,6 +408,7 @@ export class Effects {
     const sm = mat as THREE.ShaderMaterial;
     if (sm?.uniforms) this.uniforms = this.uniforms.filter((u) => u !== (sm.uniforms as unknown));
     if ((mat as THREE.PointsMaterial)?.map === this.tex) (mat as THREE.PointsMaterial).map = null;
+    if (sm?.uniforms?.uScale) this.smokeUniforms = this.smokeUniforms.filter((u) => u !== (sm.uniforms as unknown));
     mat?.dispose();
   }
 
@@ -347,5 +421,8 @@ export class Effects {
     this.mist = null; this.mistSeeds = []; this.doorMesh = null; this.windowMesh = null; this.doors = []; this.uniforms = [];
   }
 
-  dispose() { this.clear(); this.tex.dispose(); }
+  /** Pixels per metre at 1 m of the current camera and viewport (smoke sprites are sized in metres). */
+  setPixelScale(v: number) { this.pixelScale = v; }
+
+  dispose() { this.clear(); this.tex.dispose(); this.puffTex.dispose(); }
 }

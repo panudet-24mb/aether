@@ -38,6 +38,26 @@ const HEIGHT: Partial<Record<FixtureKind, number>> = { switch: 1.2, socket: 0.3,
 
 export type Mount = { x: number; y: number; h: number; normal: P | null; kind: FixtureKind };
 
+/**
+ * What the live view does not carry for some fixtures, read from the device's controls by the page: whether an AC or
+ * thermostat is running (its switch / system mode), how far a cover is open (0 closed … 1 open).
+ */
+export type FixtureState = { running?: boolean; open?: number };
+
+/** A device's controls state (Zigbee2MQTT / Tuya keys) → what its fixture shows. */
+export function fixtureStateOf(state: Record<string, unknown>, cls: TwinDevice["class"]): FixtureState {
+  if (cls === "cover") {
+    const pos = state.position;
+    if (typeof pos === "number" && Number.isFinite(pos)) return { open: Math.max(0, Math.min(1, pos / 100)) };
+    return state.state === "OPEN" ? { open: 1 } : state.state === "CLOSE" ? { open: 0 } : {};
+  }
+  const sw = state.switch ?? state.state;
+  if (sw === "ON" || sw === true) return { running: true };
+  if (sw === "OFF" || sw === false) return { running: false };
+  const mode = state.system_mode ?? state.mode;
+  return typeof mode === "string" ? { running: mode.toLowerCase() !== "off" } : {};
+}
+
 /** Wall segments of a floor: drawn walls and every zone's outline. */
 export function floorSegments(draft: Draft): Segment[] {
   const out: Segment[] = [];
@@ -108,6 +128,8 @@ export class Fixtures {
   private insts: Inst[] = [];
   private byKind = new Map<string, Inst[]>();
   private rocker = new Map<string, number>();
+  private blindAt = new Map<string, number>();
+  private states: Record<string, FixtureState> = {};
   private devices = new Map<string, TwinDevice>();
   private airflow: { points: THREE.Points; seeds: Float32Array; units: Inst[] } | null = null;
   private tex = softTexture();
@@ -138,8 +160,8 @@ export class Fixtures {
     const box = () => new THREE.BoxGeometry(1, 1, 1);
     const std = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05 });
     const glow = () => new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-    const add = (name: string, kinds: FixtureKind[], geo: THREE.BufferGeometry, mat: THREE.Material, pick: boolean) => {
-      const n = kinds.reduce((s, k) => s + (this.byKind.get(k)?.length ?? 0), 0);
+    const add = (name: string, kinds: FixtureKind[], geo: THREE.BufferGeometry, mat: THREE.Material, pick: boolean, per = 1) => {
+      const n = kinds.reduce((s, k) => s + (this.byKind.get(k)?.length ?? 0), 0) * per;
       if (!n) { geo.dispose(); mat.dispose(); return; }
       const mesh = new THREE.InstancedMesh(geo, mat, n);
       mesh.name = `fixture:${name}`;
@@ -153,6 +175,7 @@ export class Fixtures {
     add("rocker", ["switch"], box(), std(), true);
     add("led", ["switch", "socket", "thermostat", "ac", "purifier"], box(), glow(), false);
     add("ac", ["ac"], box(), std(), true);
+    add("vent", ["ac"], box(), std(), false, 2);
     add("blind", ["blind"], box(), std(), true);
     add("panel", ["light"], box(), glow(), true);
     add("purifier", ["purifier"], new THREE.CylinderGeometry(0.2, 0.22, 0.75, low ? 8 : 16), std(), true);
@@ -176,6 +199,8 @@ export class Fixtures {
     }
   }
 
+  setStates(map: Record<string, FixtureState>) { this.states = map; }
+
   /** New readings: remembers each device's state for the next frames. */
   setDevices(devices: TwinDevice[]) {
     this.devices.clear();
@@ -185,7 +210,8 @@ export class Fixtures {
   /** Draws a frame: rockers glide to their state (or snap without motion), airflow drifts while units run. */
   step(t: number, dt: number, motion: boolean) {
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), e = new THREE.Euler();
-    const on = (id: string) => this.devices.get(id)?.on === 1;
+    // A unit runs when its controls say so (an AC's switch, a thermostat's mode), else when the live view says on.
+    const on = (id: string) => this.states[id]?.running ?? this.devices.get(id)?.on === 1;
     const online = (id: string) => this.devices.get(id)?.online !== false;
     const set = (name: string, i: number, pos: THREE.Vector3, yaw: number, w: number, h: number, d: number, local: [number, number, number] = [0, 0, 0], tilt = 0) => {
       const mesh = this.meshes[name];
@@ -222,23 +248,41 @@ export class Fixtures {
       else if (kind === "thermostat") set("led", k, f.pos, f.yaw, 0.07, 0.05, 0.004, [0, 0.01, 0.014]);
       else if (kind === "ac") set("led", k, f.pos, f.yaw, 0.04, 0.012, 0.004, [0.36, -0.06, 0.125]);
       else set("led", k, f.pos, f.yaw, 0.06, 0.012, 0.012, [0, 0.62, 0.2]);
-      const lit = kind === "thermostat" ? live : on(f.id) && live;
+      const lit = kind === "thermostat" ? live && (this.states[f.id]?.running ?? true) : on(f.id) && live;
       col("led", k++, lit ? (kind === "thermostat" ? accent.clone().multiplyScalar(0.8) : accent.clone().multiplyScalar(1.3)) : off);
     }
     k = 0;
-    for (const f of this.byKind.get("ac") ?? []) { set("ac", k, f.pos, f.yaw, 0.9, 0.28, 0.22, [0, 0, 0.11]); col("ac", k++, white); }
+    for (const f of this.byKind.get("ac") ?? []) {
+      // A split-type indoor unit: a rounded body, a dark air outlet along its underside and a louver that opens when it runs.
+      set("ac", k, f.pos, f.yaw, 0.9, 0.28, 0.22, [0, 0, 0.11]);
+      col("ac", k, white);
+      set("vent", k * 2, f.pos, f.yaw, 0.8, 0.04, 0.12, [0, -0.13, 0.17]);
+      col("vent", k * 2, new THREE.Color(0x1a2124));
+      set("vent", k * 2 + 1, f.pos, f.yaw, 0.78, 0.012, 0.07, [0, -0.15, 0.24], on(f.id) ? 0.6 : 0.05);
+      col("vent", k * 2 + 1, white.clone().multiplyScalar(0.9));
+      k++;
+    }
     k = 0;
-    // Blinds: the cover's openness is not in the live state, so the blind hangs half down.
-    for (const f of this.byKind.get("blind") ?? []) { set("blind", k, f.pos, f.yaw, 1.3, 0.75, 0.025, [0, 0.35, 0.03]); col("blind", k++, new THREE.Color(this.theme.accent).lerp(white, 0.75)); }
+    // Blinds: hang from a fixed head rail, down by how closed the cover is (its controls' position; half when unknown).
+    for (const f of this.byKind.get("blind") ?? []) {
+      const target = this.states[f.id]?.open ?? 0.5;
+      const cur = this.blindAt.get(f.id);
+      const open = cur === undefined || !motion ? target : cur + (target - cur) * Math.min(1, dt * 2);
+      this.blindAt.set(f.id, open);
+      const h = 0.1 + (1 - open) * 1.3;
+      set("blind", k, f.pos, f.yaw, 1.3, h, 0.025, [0, 0.75 - h / 2, 0.03]);
+      col("blind", k++, new THREE.Color(this.theme.accent).lerp(white, 0.75));
+    }
     k = 0;
     for (const f of this.byKind.get("light") ?? []) {
       const lit = on(f.id) && online(f.id);
       set("panel", k, f.pos, 0, 0.62, 0.035, 0.62);
-      col("panel", k, lit ? warm.clone().multiplyScalar(1.15) : dim);
+      // Lit, but under the bloom threshold up close: the glow comes from the pool and the bloom at a distance.
+      col("panel", k, lit ? warm.clone().multiplyScalar(0.86) : dim);
       const floorPos = f.pos.clone();
       floorPos.y = f.floorY + 0.03;
       set("pool", k, floorPos, 0, 3.4, 1, 3.4);
-      col("pool", k++, lit ? warm.clone().multiplyScalar(0.12) : off.clone().multiplyScalar(0));
+      col("pool", k++, lit ? warm.clone().multiplyScalar(0.075) : off.clone().multiplyScalar(0));
     }
     k = 0;
     for (const f of this.byKind.get("purifier") ?? []) { set("purifier", k, f.pos, 0, 1, 1, 1, [0, 0.375, 0]); col("purifier", k++, white); }

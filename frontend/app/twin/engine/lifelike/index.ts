@@ -8,7 +8,7 @@ import type { TwinAlert, TwinDevice, TwinState } from "../../api";
 import type { TwinTheme } from "../../theme";
 import { Crowd, type Obstacles, type WalkerSpec } from "./crowd";
 import { Effects } from "./effects";
-import { Fixtures, REPLACES_BEACON, TOGGLES, floorSegments, mountFor, type Mount } from "./fixtures";
+import { Fixtures, REPLACES_BEACON, TOGGLES, floorSegments, mountFor, type FixtureState, type Mount } from "./fixtures";
 import { buildInterior, type ZoneInterior } from "./interior";
 import type { P, Segment } from "./geo";
 
@@ -18,6 +18,7 @@ export type LifelikeFloor = { id: string; draft: Draft; visible: boolean; active
 
 export { MAX_FIGURES } from "./crowd";
 export type { WalkerSpec } from "./crowd";
+export type { FixtureState } from "./fixtures";
 
 export class Lifelike {
   readonly group = new THREE.Group();
@@ -114,12 +115,19 @@ export class Lifelike {
     if (this.world) this.crowd.setPeople(list, this.world, detail, now);
   }
 
-  /** One frame: `motion` false when motion is reduced (figures stand, particles hold still). */
-  step(now: number, t: number, dt: number, motion: boolean) {
+  /**
+   * One frame: `motion` false when motion is reduced (figures stand, particles hold still). `camera` decides which
+   * figures are drawn in detail; `pixelScale` sizes smoke in metres.
+   */
+  step(now: number, t: number, dt: number, motion: boolean, camera: THREE.Vector3, pixelScale: number) {
     this.fixtures.step(t, dt, motion);
-    this.crowd.step(now, dt, motion);
+    this.crowd.step(now, dt, motion, camera);
+    this.effects.setPixelScale(pixelScale);
     this.effects.step(t, dt, motion, now);
   }
+
+  /** States the live view does not carry (an AC's switch, a cover's position), read from the devices' controls. */
+  setFixtureStates(map: Record<string, FixtureState>) { this.fixtures.setStates(map); }
 
   /** People walking or effects drifting: worth ambient frames. */
   wantsFrames(): boolean { return this.crowd.size > 0 || this.effects.wantsFrames(); }

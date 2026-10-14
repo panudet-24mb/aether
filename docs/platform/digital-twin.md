@@ -271,20 +271,28 @@ fit).
 - **Fixtures** (`fixtures.ts`): a device's look comes from its class and name. Wall switches, sockets (switched devices
   that meter power: the appliance's plug), wall air conditioners and thermostats snap to the nearest wall of their zone
   (projected onto it, off by half the thickest wall there) at 1.2 m, 0.3 m, 2.4 m and 1.5 m. A switch is a plate whose
-  rocker tilts and takes a hint of the accent when on, a socket has a glowing indicator, an air conditioner breathes
-  soft airflow when on, a purifier puffs upwards, a cover is a blind (its position is not in the live state, so it
-  hangs half down). Lights are ceiling panels that glow with a pool of light on the floor when on. Sensors keep a small
+  rocker tilts and takes a hint of the accent when on, a socket has a glowing indicator, an air conditioner is a split
+  unit with a dark outlet and a louver that opens and breathes soft airflow while it runs, a purifier puffs upwards, a
+  cover is a blind that hangs down as far as it is closed. The live view carries no state for climate and cover
+  devices, so in this style the page reads the controls of at most 12 of them when it opens and every minute (an AC's
+  `switch`, a thermostat's `system_mode`, a cover's `position`); without that a blind hangs half down and an AC stays
+  still. Lights are ceiling panels that glow with a pool of light on the floor when on; their glow is kept under the
+  bloom threshold and bloom fades in with camera distance, so a close look does not turn them into white blobs. Sensors keep a small
   status dot where they really hang: environment sensors on the wall at 1.6 m, PIR and smoke, gas and CO detectors on
   the ceiling, door sensors on the frame of the nearest door. **Clicking a fixture** of a switch, socket, light or
   purifier runs the same command flow as its badge's power button (pending, sent, confirmed or a Thai reason, the same
   permissions, nothing in replay); any other fixture opens the device's card. The badges stay as the accessible
   control and float above the fixture.
-- **People** (`crowd.ts`): stylised low-poly figures (legs, arms, torso, head, hair: six instanced meshes for up to 150
-  figures) with a walk cycle and an idle pose, dressed in scrubs, white coats, patient gowns or visitors' clothes chosen
-  by a hash of the person's key (the data has no role). Past 150 people the rest stay the plain tokens; on the med and
-  low tiers figures are capsules. The walking rules are under "Honest positioning".
-- **Effects** (`effects.ts`), each one a reading or an open alert: an open hazard alert (smoke, gas, CO) puts a rising,
-  spreading plume in its zone (dark grey; a yellow-green tint for gas or CO) under a flashing ceiling alarm; an open leak
+- **People** (`crowd.ts`): stylised figures about 1.75 m tall (head one 7.5th of it, shoulders wider than hips) built
+  from rounded parts: capsule legs and arms, a tapered torso with rounded shoulders, neck, head with two eyes and a
+  hair cap, hands and shoes; a coat to mid-thigh or a hospital gown to the knee. Each part is one instanced mesh (12
+  for up to 150 figures), with a walk cycle and an idle pose. Outfits (scrubs, white coat, patient gown, visitor) are
+  chosen by a hash of the person's key (the data has no role). Figures more than 25 m from the camera, and every figure
+  on the med and low tiers, are plain capsules; past 150 people the rest stay the plain tokens. The walking rules are under "Honest positioning".
+- **Effects** (`effects.ts`), each one a reading or an open alert: an open hazard alert (smoke, gas, CO) puts a smoke
+  plume at its detector under a flashing ceiling alarm: soft, feathered puffs sized in metres that rotate slowly, grow
+  as they rise, fade in and out, lean with a slow drift and spread under the ceiling, dark and dense at the source and
+  lighter as they spread (gas and CO stay low, tinted yellow-green); an open leak
   alert puts a rippling puddle under its sensor; a door with a door sensor swings open with it and turns amber when
   open for more than a minute; a zone 3 °C or more above its comfort band shimmers; a cold store has a low mist; a room
   whose PIR saw motion in the last 5 minutes gets a soft light; windows glow warm from 19:00 to 06:00 local time.
@@ -292,9 +300,11 @@ fit).
   figures stand in their slots, plumes, mist and airflow hold still and doors snap, nothing flashes. On the med and low
   tiers particle counts drop and figures become capsules. The walls are frosted rather than clear in this style, so
   wall fixtures have a wall to sit on, and the operator may zoom in to 1 m (classic keeps 4 m). Measured on the demo
-  hospital (3 floors, 44 people, 1440×900, Chrome on an Apple M4 Pro, high tier): all floors 81 draw calls, 63k
-  triangles, 60 fps while figures walk; one floor isolated 51–58 draw calls and 19–29k triangles, 58–60 fps; the
-  furniture of one floor is 6–8k triangles. Budget: under 150 draw calls and 400k triangles.
+  hospital (3 floors, 44 people, 1440×900, Chrome on an Apple M4 Pro, high tier): all floors 78 draw calls, 61k
+  triangles, 60 fps while figures walk; one floor isolated 48–54 draw calls and 18–26k triangles, 57–60 fps; a close-up
+  among detailed figures 75–81 draw calls and 113k triangles; with a smoke plume open 90 draw calls and 90–112k
+  triangles at 60 fps. A detailed figure is about 1,300 triangles, so 150 of them near the camera stay inside the
+  budget: under 150 draw calls and 400k triangles. The furniture of one floor is 6–8k triangles.
 
 ### In-scene badges and buttons
 

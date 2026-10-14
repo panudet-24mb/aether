@@ -9,6 +9,7 @@ import { draftOf, type Site } from "../floorplan/model";
 import { useLatest } from "../topology/use-latest";
 import { type Layer, type PeopleMode, type TwinAlert, type TwinDevice, type TwinState } from "./api";
 import { TwinEngine, type BadgeSpec, type Preset, type Quality, type TwinStyle } from "./engine/engine";
+import type { FixtureState } from "./engine/lifelike";
 import { disposeTree, type Floor3D } from "./engine/building";
 import { parseModel } from "./engine/model";
 import { cachedModel, primeModelCache, type ModelTransform, type SiteModel } from "./model-api";
@@ -81,6 +82,8 @@ export type TwinViewProps = {
   ambient?: boolean;
   /** Immersive only: power buttons on the badges of controllable devices. */
   controls?: TwinControls;
+  /** Immersive: states the live view lacks (an AC's switch, a cover's position), from the devices' controls. */
+  fixtureStates?: Record<string, FixtureState>;
   /** Changing it refetches the building model's record (after an upload, a save or a delete). */
   modelKey?: number;
   /** A transform to preview instead of the saved one (the alignment panel). */
@@ -245,6 +248,7 @@ export default function TwinView(props: TwinViewProps) {
 
   useEffect(() => { engineRef.current?.setQuality(quality); }, [quality]);
   useEffect(() => { engineRef.current?.setStyle(style); }, [style, engineGen]);
+  useEffect(() => { if (props.fixtureStates) engineRef.current?.setFixtureStates(props.fixtureStates); }, [props.fixtureStates, style, engineGen]);
   useEffect(() => {
     engineRef.current?.setAmbient(ambient);
     engineRef.current?.setPaused(paused);

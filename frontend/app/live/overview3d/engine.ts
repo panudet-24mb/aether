@@ -28,6 +28,8 @@ export type PanelSpec = { el: HTMLElement; place: PanelPlace; width: number; kin
 const PANEL_PX: Record<PanelKind, number> = { kpi: KPI_PX.w, list: LIST_PX_W, sos: 600, detail: 460 };
 /** Wall slots sit behind (KPIs) or a little in front of (lists) the default view's target. */
 const SLOT_DEPTH: Partial<Record<PanelKind, number>> = { kpi: 1.2, list: 0.95 };
+/** A non-detail panel this many times its CSS size (the camera right at it) is hidden instead of filling the screen. */
+const MAX_PANEL_SCALE = 4;
 /** Pixels the bottom-corner controls take at the bottom of the stage. */
 const BOTTOM_ROW = 48;
 
@@ -197,6 +199,7 @@ export class ConstellationEngine {
   private atHome = false;
   private tweenHome = false;
   private detailFrame = { f: 0.46, h: 0.7 };
+  private detailMaxScale = Infinity;
   private detailRO: ResizeObserver | null = null;
   /** The device whose detail is open: its label always shows (above every tier) beside its ring. */
   private selected: string | null = null;
@@ -261,6 +264,7 @@ export class ConstellationEngine {
     this.controls.maxDistance = 900;
     this.controls.screenSpacePanning = false;
     this.controls.listenToKeyEvents(host);
+    host.addEventListener("keydown", this.onKeyPan);
     this.controls.addEventListener("change", () => this.invalidate());
     this.controls.addEventListener("start", () => { this.tween = null; this.atHome = false; if (this.touring) { this.touring = false; this.hooks.onTourEnd(); } });
 
@@ -290,6 +294,7 @@ export class ConstellationEngine {
     el.removeEventListener("pointermove", this.onMove);
     el.removeEventListener("pointerleave", this.onLeave);
     el.removeEventListener("pointercancel", this.onCancel);
+    this.host.removeEventListener("keydown", this.onKeyPan);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.controls.dispose();
     this.registry?.bind(null);
@@ -523,8 +528,9 @@ export class ConstellationEngine {
       const top = it.below ? it.y + 6 : it.y - lh;
       const box: [number, number, number, number] = [it.x - lw / 2, top, it.x + lw / 2, top + lh];
       const clash = placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
-      // Panels (KPIs, lists, SOS, detail) always win over labels, at every tier: a label under one is hidden.
-      const underPanel = this.panelBoxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
+      // Panels (KPIs, lists, SOS, detail) win over labels: a label under one is hidden, except an SOS label or the
+      // selected device's (tier ≤ 0), which always show.
+      const underPanel = it.tier > 0 && this.panelBoxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
       if (underPanel && !it.el.contains(focused)) { hidden.push(it.el); return; }
       // SOS always shows; a label holding keyboard focus never disappears under the operator.
       if (clash && it.tier > 0 && !it.el.contains(focused)) { hidden.push(it.el); return; }
@@ -942,6 +948,8 @@ export class ConstellationEngine {
   private fitDetail(spec: PanelSpec) {
     const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1, { f, h } = this.detailFrame;
     spec.el.style.maxHeight = `${Math.round((h * H * PANEL_PX.detail) / (f * W))}px`;
+    // Zooming in never grows the card past its framing size, so ✕ stays on screen.
+    this.detailMaxScale = (f * W) / PANEL_PX.detail;
   }
 
   /** A faded panel is out of the way for the pointer, the keyboard and screen readers too. */
@@ -975,9 +983,18 @@ export class ConstellationEngine {
       v.copy(p.at).applyMatrix4(this.camera.matrixWorldInverse);
       const depth = -v.z;
       if (depth <= this.camera.near || p.width <= 0) { placed.set(p, null); continue; }
-      const scale = (p.width * (H / 2 / (depth * tan))) / PANEL_PX[p.spec.kind];
+      let scale = (p.width * (H / 2 / (depth * tan))) / PANEL_PX[p.spec.kind];
+      // Very close panels would fill the screen: the detail keeps its framing size, others step out of the way.
+      if (p.spec.kind === "detail") scale = Math.min(scale, this.detailMaxScale);
+      else if (scale > MAX_PANEL_SCALE) { placed.set(p, null); continue; }
       v.copy(p.at).project(this.camera);
       const rect = { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, w: PANEL_PX[p.spec.kind] * scale, h: (p.el.offsetHeight || PANEL_PX[p.spec.kind] * 0.6) * scale };
+      if (p.spec.kind === "detail") {
+        // However the camera zooms, the card (and its ✕) stays inside the visible part of the stage.
+        const m = 8, top = this.safeTop + m, bottom = H - this.safeBottom - m;
+        rect.x = Math.min(Math.max(rect.x, m + rect.w / 2), Math.max(m + rect.w / 2, W - m - rect.w / 2));
+        rect.y = Math.min(Math.max(rect.y, top + rect.h / 2), Math.max(top + rect.h / 2, bottom - rect.h / 2));
+      }
       placed.set(p, { rect, scale, depth });
     }
     this.panelBoxes = [];
@@ -1071,7 +1088,6 @@ export class ConstellationEngine {
     this.invalidate();
   }
 
-
   // ---- picking --------------------------------------------------------------------------------------------------
 
   private cast(cx: number, cy: number): Pick {
@@ -1107,6 +1123,9 @@ export class ConstellationEngine {
   };
 
   private onCancel = () => { this.downAt = null; };
+
+  /** Arrow keys pan the camera (OrbitControls): the operator left the overview pose. */
+  private onKeyPan = (e: KeyboardEvent) => { if (e.key.startsWith("Arrow")) this.atHome = false; };
 
   private onLeave = () => { this.pointer = null; this.setHovered(null); this.renderer.domElement.style.cursor = ""; };
 

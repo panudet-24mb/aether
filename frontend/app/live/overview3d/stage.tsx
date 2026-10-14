@@ -261,8 +261,18 @@ export default function OverviewStage(props: StageProps) {
         hadDetail.current = false;
         const back = returnTo.current;
         returnTo.current = null;
-        if (back?.isConnected && !back.closest("[inert]")) back.focus({ preventScroll: true });
-        else hostRef.current?.focus({ preventScroll: true });
+        // Opened from a wall row or tile: the camera goes back to the wall so that row is on screen again. The row may
+        // also have been faded under the card; the next panel passes un-fade it, then it gets the focus back.
+        const fromWall = !!back?.closest(".ov3d-panel");
+        if (fromWall) engineRef.current?.preset("overview");
+        let raf = 0, tries = 0;
+        const restore = () => {
+          if (back?.isConnected && !back.closest("[inert]")) back.focus({ preventScroll: true });
+          else if (back?.isConnected && tries++ < (fromWall ? 120 : 10)) raf = requestAnimationFrame(restore);
+          else hostRef.current?.focus({ preventScroll: true });
+        };
+        raf = requestAnimationFrame(restore);
+        return () => cancelAnimationFrame(raf);
       }
       return;
     }

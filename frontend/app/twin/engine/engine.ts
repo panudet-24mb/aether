@@ -912,7 +912,8 @@ export class TwinEngine {
   private updateBeacons(devices: TwinDevice[], now: number, restyle: boolean, alertingDevices: TwinDevice[]) {
     const drop = (im: THREE.InstancedMesh | null) => { if (im) { im.removeFromParent(); im.geometry.dispose(); (im.material as THREE.Material).dispose(); im.dispose(); } return null; };
     if (restyle || !devices.length || !this.theme) { this.beaconBase = drop(this.beaconBase); this.alertMesh = drop(this.alertMesh); }
-    if (!devices.length || !this.theme) { this.alerting = []; this.phases.clear(); return; }
+    // Only fixtures on screen still need their alert rings.
+    if ((!devices.length && !alertingDevices.length) || !this.theme) { this.alerting = []; this.phases.clear(); return; }
     const low = this.tier === "low";
     if (!this.beaconBase || this.beaconBase.instanceMatrix.count < devices.length) {
       this.beaconBase = drop(this.beaconBase);
@@ -958,12 +959,14 @@ export class TwinEngine {
     if (!this.alertMesh || !this.theme || !this.alerting.length) return;
     const { m, q, sc, c, base } = this.paintTmp;
     beaconColor(this.theme, "alert", base);
-    this.alerting.forEach((a, i) => {
+    const mesh = this.alertMesh;
+    for (let i = 0; i < this.alerting.length; i++) {
+      const a = this.alerting[i];
       const k = ambient ? (t * 0.9 + a.phase) % 1 : -1;
       sc.setScalar(k < 0 ? 1.8 : 1 + k * 2.6);
-      this.alertMesh!.setMatrixAt(i, m.compose(a.at, q, sc));
-      this.alertMesh!.setColorAt(i, c.copy(base).multiplyScalar(k < 0 ? 0.6 : 0.85 * (1 - k)));
-    });
+      mesh.setMatrixAt(i, m.compose(a.at, q, sc));
+      mesh.setColorAt(i, c.copy(base).multiplyScalar(k < 0 ? 0.6 : 0.85 * (1 - k)));
+    }
     this.alertMesh.instanceMatrix.needsUpdate = true;
     if (this.alertMesh.instanceColor) this.alertMesh.instanceColor.needsUpdate = true;
   }
@@ -1034,23 +1037,31 @@ export class TwinEngine {
       // figure and walks into the next zone.
       const named = state.presence.mode === "named";
       const specs: WalkerSpec[] = [];
+      // Which person (token) each figure stands for, so exactly the drawn ones lose their token.
+      const entryOf = new Map<string, string>();
       for (const [z, list] of byZone) {
-        const keyed: { key: string; sos: boolean }[] = [];
+        // Only floors on screen (isolate hides the others; their people are neither figures nor tokens).
+        if (!this.floors.find((f) => f.id === z.floorId)?.frame.visible) continue;
+        const keyed: { key: string; sos: boolean; entry: string }[] = [];
         const byGateway = new Map<string, typeof list>();
         for (const e of list) byGateway.set(e.gateway, [...(byGateway.get(e.gateway) ?? []), e]);
         for (const [gw, group] of byGateway) {
           group.sort((a, b) => Number(b.sos) - Number(a.sos) || (named ? a.id.localeCompare(b.id) : 0));
-          group.forEach((e, i) => keyed.push({ key: named ? `tag:${e.id}` : `${gw}#${i}`, sos: e.sos }));
+          group.forEach((e, i) => keyed.push({ key: named ? `tag:${e.id}` : `${gw}#${String(i).padStart(3, "0")}`, sos: e.sos, entry: e.id }));
         }
         // Slots by key too, so a figure's place (with motion reduced) stays put across refreshes.
         const slots = assignSlots(keyed.map((k) => k.key), z.slots);
-        for (const k of keyed) specs.push({ id: k.key, floorId: z.floorId, zoneKey: `${z.floorId}:${z.index}`, poly: z.zone.points as P[], slot: slots.get(k.key)!, sos: k.sos });
+        for (const k of keyed) {
+          entryOf.set(k.key, k.entry);
+          specs.push({ id: k.key, floorId: z.floorId, zoneKey: `${z.floorId}:${z.index}`, poly: z.zone.points as P[], slot: slots.get(k.key)!, sos: k.sos });
+        }
       }
+      // An SOS first, so a crowd over MAX_FIGURES never leaves the person in need as a plain token.
+      specs.sort((a, b) => Number(b.sos) - Number(a.sos));
       const figures = specs.slice(0, MAX_FIGURES);
       this.lifelike.setPeople(figures, this.tier === "high" ? "figure" : "capsule", now);
-      // The tokens of the people drawn as figures go (the first MAX_FIGURES; the rest stay tokens).
-      let n = 0;
-      for (const id of [...next.keys()]) if (n++ < figures.length) next.delete(id);
+      // Exactly the people drawn as figures lose their token; the rest (past MAX_FIGURES) stay tokens.
+      for (const f of figures) next.delete(entryOf.get(f.id) ?? "");
     }
     this.tokens = next;
     const low = this.tier === "low";

@@ -126,6 +126,11 @@ function softTexture(): THREE.CanvasTexture {
 
 type Status = "ok" | "alert" | "stale" | "offline";
 
+/** One step of a part towards its target (a snap without motion, or once close enough). */
+function ease(cur: number, target: number, k: number, motion: boolean): number {
+  return !motion || Math.abs(target - cur) < 0.002 ? target : cur + (target - cur) * Math.min(1, k);
+}
+
 /**
  * The fixtures of the visible floors: instanced and rebuilt only when the device set changes. Matrices are written
  * once at build; a poll only recolours; a frame touches only what is moving (a rocker or a blind on its way, airflow).
@@ -325,32 +330,32 @@ export class Fixtures {
 
   /** A frame: only parts on their way move (a rocker flipping, a louver, a blind); airflow drifts while units run. */
   step(t: number, dt: number, motion: boolean) {
-    const ease = (cur: number, target: number, rate: number) => (!motion || Math.abs(target - cur) < 0.002 ? target : cur + (target - cur) * Math.min(1, dt * rate));
     let rockers = false, vents = false, blinds = false;
-    (this.byKind.get("switch") ?? []).forEach((f, i) => {
-      const target = this.on(f.id) ? 0.25 : -0.25, cur = this.rocker.get(f.id) ?? target;
-      if (cur === target) return;
-      const a = ease(cur, target, 12);
+    const sw = this.byKind.get("switch"), ac = this.byKind.get("ac"), bl = this.byKind.get("blind");
+    if (sw) for (let i = 0; i < sw.length; i++) {
+      const f = sw[i], target = this.on(f.id) ? 0.25 : -0.25, cur = this.rocker.get(f.id) ?? target;
+      if (cur === target) continue;
+      const a = ease(cur, target, dt * 12, motion);
       this.rocker.set(f.id, a);
       this.rockerAt(f, i, a);
       rockers = true;
-    });
-    (this.byKind.get("ac") ?? []).forEach((f, i) => {
-      const target = this.on(f.id) ? 0.6 : 0.05, cur = this.louver.get(f.id) ?? target;
-      if (cur === target) return;
-      const a = ease(cur, target, 3);
+    }
+    if (ac) for (let i = 0; i < ac.length; i++) {
+      const f = ac[i], target = this.on(f.id) ? 0.6 : 0.05, cur = this.louver.get(f.id) ?? target;
+      if (cur === target) continue;
+      const a = ease(cur, target, dt * 3, motion);
       this.louver.set(f.id, a);
       this.louverAt(f, i, a);
       vents = true;
-    });
-    (this.byKind.get("blind") ?? []).forEach((f, i) => {
-      const target = this.states[f.id]?.open ?? 0.5, cur = this.blindAt.get(f.id) ?? target;
-      if (cur === target) return;
-      const o = ease(cur, target, 2);
+    }
+    if (bl) for (let i = 0; i < bl.length; i++) {
+      const f = bl[i], target = this.states[f.id]?.open ?? 0.5, cur = this.blindAt.get(f.id) ?? target;
+      if (cur === target) continue;
+      const o = ease(cur, target, dt * 2, motion);
       this.blindAt.set(f.id, o);
       this.blindAtHeight(f, i, o);
       blinds = true;
-    });
+    }
     if (rockers && this.meshes.rocker) this.meshes.rocker.instanceMatrix.needsUpdate = true;
     if (vents && this.meshes.vent) this.meshes.vent.instanceMatrix.needsUpdate = true;
     if (blinds && this.meshes.blind) { this.meshes.blind.instanceMatrix.needsUpdate = true; this.meshes.blind.computeBoundingSphere(); }
@@ -371,8 +376,10 @@ export class Fixtures {
     if (!motion) return;
     const pos = a.points.geometry.getAttribute("position") as THREE.BufferAttribute;
     const per = pos.count / a.units.length;
-    a.units.forEach((u, ui) => {
-      const running = this.on(u.id) && (this.status(u.id) === "ok" || this.status(u.id) === "alert");
+    for (let ui = 0; ui < a.units.length; ui++) {
+      const u = a.units[ui];
+      const st = this.status(u.id);
+      const running = this.on(u.id) && (st === "ok" || st === "alert");
       for (let j = 0; j < per; j++) {
         const i = ui * per + j;
         if (!running) { pos.setXYZ(i, 0, -1000, 0); continue; }
@@ -386,7 +393,7 @@ export class Fixtures {
           pos.setXYZ(i, u.pos.x + spread * 0.4 * life, u.pos.y + 0.8 + life * 1.0, u.pos.z + (a.seeds[(i * 3) % a.seeds.length] - 0.5) * 0.4 * life);
         }
       }
-    });
+    }
     pos.needsUpdate = true;
   }
 

@@ -64,6 +64,7 @@ const EYE_L: [number, number, number] = [-0.036, 0.012, 0.098], EYE_R: [number, 
 const LOD_DISTANCE = 25;
 
 type Part = "leg" | "shoe" | "torso" | "shoulders" | "skirt" | "neck" | "head" | "hair" | "eye" | "arm" | "hand" | "capsule";
+const PARTS: readonly Part[] = ["leg", "shoe", "torso", "shoulders", "skirt", "neck", "head", "hair", "eye", "arm", "hand", "capsule"];
 /** Instances per figure of each part. */
 const PER: Record<Part, number> = { leg: 2, shoe: 2, torso: 1, shoulders: 1, skirt: 1, neck: 1, head: 1, hair: 1, eye: 2, arm: 2, hand: 2, capsule: 1 };
 
@@ -83,7 +84,11 @@ export class Crowd {
   constructor(private theme: TwinTheme) { this.group.name = "crowd"; this.sosColor = new THREE.Color(theme.danger); }
 
   /** Where people may pause and what they must walk around, per zone key. */
-  setObstacles(map: Map<string, Obstacles>) { this.obstacles = map; }
+  setObstacles(map: Map<string, Obstacles>) {
+    this.obstacles = map;
+    // Furniture shown or hidden, a floor furnished: slots may now be covered or free again.
+    for (const w of this.walkers.values()) w.home = this.freeSpot(w.spec);
+  }
 
   get size() { return this.walkers.size; }
 
@@ -113,7 +118,7 @@ export class Crowd {
           w.transit = Math.max(w.speed, walk.length / 3);
         } else {
           w.pos[0] = home[0]; w.pos[1] = home[1];
-          w.path = [];
+          w.path.length = 0;
           w.transit = 0;
         }
         w.home = home;
@@ -243,7 +248,7 @@ export class Crowd {
       if (!motion || w.spec.sos) {
         w.pos[0] = w.home[0]; w.pos[1] = w.home[1];
         w.moving = false;
-        w.path = [];
+        w.path.length = 0;
         w.target = null;
         w.transit = 0;
         continue;
@@ -282,22 +287,12 @@ export class Crowd {
   }
 
   private draw(now: number, motion: boolean, camera?: THREE.Vector3) {
-    const { m, base, child, local, q, q2, v, s, e, e2 } = this.tmp;
+    const { base, q, s, e } = this.tmp;
     const t = now / 1000;
     const count = this.count;
-    for (const k of Object.keys(count) as Part[]) count[k] = 0;
+    for (let k = 0; k < PARTS.length; k++) count[PARTS[k]] = 0;
     const eyeColor = this.eyeColor;
-    /** Writes one part: base · T(x, y, z) · R(rx, 0, rz) · S, then an optional child offset (a hand on an arm). */
-    const put = (name: Part, x: number, y: number, z: number, rx: number, rz: number, color: THREE.Color, sy = 1, offset?: [number, number, number]) => {
-      const mesh = this.meshes[name];
-      if (!mesh) return;
-      local.compose(v.set(x, y, z), q2.setFromEuler(e2.set(rx, 0, rz)), s.set(1, sy, 1));
-      m.multiplyMatrices(base, local);
-      if (offset) m.multiply(child.makeTranslation(offset[0], offset[1], offset[2]));
-      const i = count[name]++;
-      mesh.setMatrixAt(i, m);
-      mesh.setColorAt(i, color);
-    };
+    const put = this.put;
     for (const w of this.walkers.values()) {
       const o = this.origin?.(w.spec.floorId);
       if (!o) continue;
@@ -339,13 +334,28 @@ export class Crowd {
       put("hand", -0.205, hip + 0.53, 0, armA, kneel ? -wave : 0.05, L.skin, 1, HAND);
       put("hand", 0.205, hip + 0.53, 0, armB, -0.05, L.skin, 1, HAND);
     }
-    for (const [name, mesh] of Object.entries(this.meshes) as [Part, THREE.InstancedMesh][]) {
+    for (let k = 0; k < PARTS.length; k++) {
+      const name = PARTS[k], mesh = this.meshes[name];
+      if (!mesh) continue;
       mesh.count = count[name];
       mesh.visible = mesh.count > 0;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
   }
+
+  /** Writes one part: base · T(x, y, z) · R(rx, 0, rz) · S, then an optional child offset (a hand on an arm). */
+  private put = (name: Part, x: number, y: number, z: number, rx: number, rz: number, color: THREE.Color, sy = 1, offset?: [number, number, number]) => {
+    const mesh = this.meshes[name];
+    if (!mesh) return;
+    const { m, base, child, local, q2, v, s, e2 } = this.tmp;
+    local.compose(v.set(x, y, z), q2.setFromEuler(e2.set(rx, 0, rz)), s.set(1, sy, 1));
+    m.multiplyMatrices(base, local);
+    if (offset) m.multiply(child.makeTranslation(offset[0], offset[1], offset[2]));
+    const i = this.count[name]++;
+    mesh.setMatrixAt(i, m);
+    mesh.setColorAt(i, color);
+  };
 
   private disposeMeshes() {
     for (const mesh of Object.values(this.meshes)) {

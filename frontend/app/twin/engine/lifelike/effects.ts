@@ -145,11 +145,17 @@ export class Effects {
   private night: boolean | null = null;
   private nightCheckedAt = -Infinity;
   private openingsVisible = true;
+  private mistStill = false;
   private tmp = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), s: new THREE.Vector3(), c: new THREE.Color(), up: new THREE.Vector3(0, 1, 0) };
   private doorColors = { closed: new THREE.Color(0xd7dfde), open: new THREE.Color(), amber: new THREE.Color() };
   private flash = new THREE.Color();
+  /** Gas and CO keep a yellow-green tint from the tokens (warning towards accent). */
+  private gas: THREE.Color;
 
-  constructor(private theme: TwinTheme) { this.group.name = "effects"; }
+  constructor(private theme: TwinTheme) {
+    this.group.name = "effects";
+    this.gas = new THREE.Color(theme.warning).lerp(new THREE.Color(theme.accent), 0.45);
+  }
 
   /** Doors, windows, room glows and cold-store mist for the visible floors (rebuilt with the building). */
   build(floors: EffectFloor[], world: World, low: boolean, doorSensors: { id: string; floorId: string; x: number; y: number }[]) {
@@ -242,6 +248,7 @@ export class Effects {
       this.mist = new THREE.Points(geo, new THREE.PointsMaterial({ map: this.tex, size: 1.6, color: new THREE.Color(this.theme.blue).lerp(new THREE.Color(0xffffff), 0.7), transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false }));
       this.mist.frustumCulled = false;
       this.mistSeeds = mist;
+      this.mistStill = false;
       this.group.add(this.mist);
     }
   }
@@ -359,8 +366,7 @@ export class Effects {
   /** A frame: plumes rise and spread, alarms flash, puddles ripple, doors swing, mist drifts. */
   step(t: number, dt: number, motion: boolean, now: number) {
     for (const u of this.uniforms) { u.uTime.value = t; u.uMotion.value = motion ? 1 : 0; }
-    // Gas and CO keep a yellow-green tint from the tokens (warning towards accent).
-    const gas = new THREE.Color(this.theme.warning).lerp(new THREE.Color(this.theme.accent), 0.45);
+    const gas = this.gas;
     for (const u of this.smokeUniforms) u.uScale.value = this.pixelScale;
     for (const p of this.plumes.values()) {
       const g = p.points.geometry;
@@ -389,13 +395,14 @@ export class Effects {
         if (gasTint) col.setXYZ(i, gas.r * (0.55 + life * 0.4), gas.g * (0.55 + life * 0.4), gas.b * (0.55 + life * 0.4));
         else col.setXYZ(i, shade, shade * 1.03, shade * 1.06);
       }
-      for (const a of [pos, size, alpha, rot, col]) a.needsUpdate = true;
+      pos.needsUpdate = true; size.needsUpdate = true; alpha.needsUpdate = true; rot.needsUpdate = true; col.needsUpdate = true;
       const flash = motion ? (Math.sin(t * 9) > 0 ? 1.4 : 0.35) : 1;
       (p.alarm.material as THREE.MeshBasicMaterial).color.copy(this.flash.setHex(this.theme.danger).multiplyScalar(flash));
     }
     if (this.doorMesh) {
       let moved = false, recoloured = false;
-      this.doors.forEach((d, i) => {
+      for (let i = 0; i < this.doors.length; i++) {
+        const d = this.doors[i];
         const isOpen = (d.sensor ? this.devices.get(d.sensor)?.door : undefined) === 1;
         if (isOpen && !d.openSince) d.openSince = now;
         if (!isOpen) d.openSince = 0;
@@ -408,8 +415,8 @@ export class Effects {
         }
         // Left open for more than a minute: amber, like the door's beacon.
         const tone: Door["tone"] = !isOpen ? "closed" : now - d.openSince > 60000 ? "amber" : "open";
-        if (tone !== d.tone) { d.tone = tone; this.doorMesh!.setColorAt(i, this.doorColors[tone]); recoloured = true; }
-      });
+        if (tone !== d.tone) { d.tone = tone; this.doorMesh.setColorAt(i, this.doorColors[tone]); recoloured = true; }
+      }
       if (moved) { this.doorMesh.instanceMatrix.needsUpdate = true; this.doorMesh.computeBoundingSphere(); }
       if (recoloured && this.doorMesh.instanceColor) this.doorMesh.instanceColor.needsUpdate = true;
     }
@@ -424,13 +431,15 @@ export class Effects {
         if (this.windowMesh.instanceColor) this.windowMesh.instanceColor.needsUpdate = true;
       }
     }
-    if (this.mist) {
+    // Mist drifts with motion; without it, it is written once and left.
+    if (this.mist && (motion || !this.mistStill)) {
       const pos = this.mist.geometry.getAttribute("position") as THREE.BufferAttribute;
-      this.mistSeeds.forEach((s, i) => {
-        const a = (motion ? t * 0.2 : 0) + s.seed * 6.28;
-        pos.setXYZ(i, s.base.x + Math.cos(a) * s.r * 0.4, s.base.y + 0.15 + Math.sin(a * 0.7) * 0.1, s.base.z + Math.sin(a) * s.r * 0.4);
-      });
+      for (let i = 0; i < this.mistSeeds.length; i++) {
+        const m = this.mistSeeds[i], a = (motion ? t * 0.2 : 0) + m.seed * 6.28;
+        pos.setXYZ(i, m.base.x + Math.cos(a) * m.r * 0.4, m.base.y + 0.15 + Math.sin(a * 0.7) * 0.1, m.base.z + Math.sin(a) * m.r * 0.4);
+      }
       pos.needsUpdate = true;
+      this.mistStill = !motion;
     }
   }
 

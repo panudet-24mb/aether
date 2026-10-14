@@ -44,7 +44,7 @@ The legend adds "ท่าทางเดินและชุดเป็นภ
 
 What a figure is keyed by, and so what moves on a refresh:
 
-- `counts` and `tracks`: a figure belongs to a **slot** (`gateway#index`, an SOS taking the first index), never to a
+- `counts` and `tracks`: a figure belongs to a **slot** (`gateway#007`, an SOS taking the first index), never to a
   person or a pseudonym (a pseudonym changes with every response). A refresh moves nobody and re-dresses nobody; a
   headcount going up adds a figure at its slot, going down removes the last one. A person moving between zones shows
   as one figure leaving one zone and another appearing in the other: there is no walk, because nothing links them.
@@ -288,17 +288,21 @@ fit).
   unit with a dark outlet and a louver that opens and breathes soft airflow while it runs, a purifier puffs upwards, a
   cover is a blind that hangs down as far as it is closed. The live view carries no state for climate and cover
   devices, so in this style the page reads the controls of at most 12 of them (the active floor first) when it opens
-  and every minute (an AC's `switch`, a thermostat's `system_mode`, a cover's `position`): two requests at a time, none
-  while the tab is hidden or the scene's idle pause is on, a device that fails backed off (1, 2, 4 minutes) and dropped
-  after 3 failures in a row, everything aborted when the view closes. Each read is a `device_controls` row in the access
+  and every minute (an AC's `switch`, a thermostat's `system_mode`, a cover's `position`): two requests at a time, 10 s
+  each at most, none while the tab is hidden or the scene's idle pause is on, never two loads at once (a tick that
+  finds one running is skipped), a device that fails backed off (1, 2, 4 minutes) and dropped after 3 failures in a
+  row, everything aborted when the view closes. Each load replaces the states it read (a device that failed or was
+  dropped goes back to its default look), and an older load never lands over a newer one. Each read is a `device_controls` row in the access
   log, deduplicated per member and device for 10 minutes. Without that a blind hangs half down and an AC stays still. Lights are ceiling panels that glow with a pool of light on the floor when on; their glow is kept under the
   bloom threshold and bloom fades in with camera distance, so a close look does not turn them into white blobs. Sensors keep a small
   status dot where they really hang: environment sensors on the wall at 1.6 m, PIR and smoke, gas and CO detectors on
   the ceiling, door sensors on the frame of the nearest door. A fixture shows its status like a beacon would: an
   alert tints it coral under the pulsing ring, stale data amber, no contact grey, and a light in doubt is neither lit
   nor dark. **Clicking a fixture** (primary button only) first selects the device: its card opens and its badge takes
-  keyboard focus. A second click on the selected switch, light or purifier runs the same command flow as the badge's
-  power button (pending, sent, confirmed or a Thai reason, the same permissions, nothing in replay). A socket never
+  keyboard focus. A second, deliberate click (400 ms or more after the selecting one) on that switch, light or purifier
+  runs the same command flow as the badge's power button (pending, sent, confirmed or a Thai reason, the same
+  permissions, nothing in replay); a fast double-click, or a fixture selected from its card or the list rather than by
+  a click on it, only selects. A socket never
   switches from the canvas (a fridge or a monitor may be plugged in): only from its badge or card. Where a sensor and a
   light panel are both under the pointer, the sensor wins. The badges stay as the accessible control and float above
   the fixture.

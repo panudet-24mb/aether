@@ -8,7 +8,7 @@ import type { TwinAlert, TwinDevice, TwinState } from "../../api";
 import type { TwinTheme } from "../../theme";
 import { Crowd, type Obstacles, type WalkerSpec } from "./crowd";
 import { Effects } from "./effects";
-import { Fixtures, REPLACES_BEACON, TOGGLES, floorSegments, mountFor, type FixtureState, type Mount } from "./fixtures";
+import { Fixtures, REPLACES_BEACON, TOGGLES, fixtureKind, floorSegments, mountFor, type FixtureState, type Mount } from "./fixtures";
 import { buildInterior, type ZoneInterior } from "./interior";
 import type { P, Segment } from "./geo";
 
@@ -78,11 +78,14 @@ export class Lifelike {
     if (!world) return;
     this.mounts.clear();
     const list: { d: TwinDevice; m: Mount }[] = [];
+    // The cache keeps only the devices of this layout pass (a removed or changed device's entry goes).
+    const used = new Set<string>();
     for (const d of devices) {
       const f = this.floors.find((x) => x.id === d.floor_id);
       if (!f || !f.visible || f.above) continue;
       // Only a device that moved, changed class or name (or a redrawn floor) is mounted again.
-      const ck = `${f.id}|${d.id}|${d.x}|${d.y}|${d.class ?? ""}|${d.name}|${d.door !== undefined}`;
+      const ck = `${f.id}|${d.id}|${d.x}|${d.y}|${fixtureKind(d) ?? ""}|${d.class ?? ""}|${d.name}`;
+      used.add(ck);
       let m = this.mountCache.get(ck) ?? null;
       if (!m) {
         m = mountFor(d, f.draft, this.segments.get(f.id) ?? []);
@@ -92,6 +95,7 @@ export class Lifelike {
       this.mounts.set(d.id, { ...m, floorId: d.floor_id });
       list.push({ d, m });
     }
+    for (const k of [...this.mountCache.keys()]) if (!used.has(k)) this.mountCache.delete(k);
     this.fixtures.build(list, world, this.low);
     const active = this.floors.find((f) => f.active && f.visible);
     const onFloor = active ? devices.filter((d) => d.floor_id === active.id).map((d) => [d.x, d.y] as P) : [];

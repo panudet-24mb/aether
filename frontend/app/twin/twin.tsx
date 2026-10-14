@@ -16,7 +16,7 @@ import type { EngineStats, Preset, TwinStyle } from "./engine/engine";
 import TwinView, { type ModelStatus, type TwinControls, type TwinSource, type TwinViewHandle } from "./twin-view";
 import { TwinMinimap, zoneSummaries } from "./twin-plan";
 import TwinModelPanel from "./twin-model";
-import { fetchModel, fetchModelFile, modelSender, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
+import { fetchModel, fetchModelFile, modelSender, withTimeout, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
 import { quickToggle, type QuickResult } from "./quick-toggle";
 import { fixtureStateOf, type FixtureState } from "./engine/lifelike/fixtures";
 import "../topology/topology.css";
@@ -162,9 +162,11 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const controls: TwinControls | undefined = useMemo(() => (canCommand === false ? undefined : { pending: pendingCmd, onToggle, disabled: mode !== "live" }), [canCommand, pendingCmd, onToggle, mode]);
   const fitModel = useCallback((t: ModelTransform) => handle.current?.fitModel(t) ?? null, []);
   // Immersive: an AC's switch or a blind's position is not in the live view, so the controls of the climate and cover
-  // devices (at most 12, the active floor first) are read when the view opens and every minute: two at a time,
-  // never while the tab is hidden or the scene's idle pause is on, a failing device backed off (1, 2, 4 min) and
-  // dropped after 3 failures in a row; leaving the view aborts what is in flight.
+  // devices (at most 12, the active floor first) are read when the view opens and every minute: two at a time, 10 s
+  // each at most, never while the tab is hidden or the scene's idle pause is on, and never two loads at once. A device
+  // that fails is backed off (1, 2, 4 min) and dropped after 3 failures in a row; each load replaces the states (a
+  // failed or dropped device goes back to its default look) and a load older than the last applied one is discarded;
+  // leaving the view aborts what is in flight.
   const hasState = !!state;
   const stateNow = useLatest(state);
   const floorNow = useLatest(floorId);
@@ -172,33 +174,40 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
     if (style !== "immersive" || mode !== "live" || !hasState) return;
     const abort = new AbortController();
     const failures = new Map<string, { n: number; until: number }>();
+    let running = false, issued = 0, applied = 0;
     const load = async () => {
-      if (document.hidden || handle.current?.engine()?.idle()) return;
-      const now = Date.now();
-      const list = (stateNow.current?.devices ?? [])
-        .filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover"))
-        .filter((d) => { const f = failures.get(d.id); return !f || (f.n < 3 && now >= f.until); })
-        .sort((a, b) => Number(b.floor_id === floorNow.current) - Number(a.floor_id === floorNow.current))
-        .slice(0, 12);
-      const out: Record<string, FixtureState> = {};
-      const queue = [...list];
-      const worker = async () => {
-        for (let d = queue.shift(); d && !abort.signal.aborted; d = queue.shift()) {
-          try {
-            const r = await modelClient.send("GET", `/devices/${d.id}/controls`, undefined, { signal: abort.signal });
-            if (!r.ok) throw new Error(String(r.status));
-            out[d.id] = fixtureStateOf(((await r.json()) as { state?: Record<string, unknown> }).state ?? {}, d.class);
-            failures.delete(d.id);
-          } catch {
-            if (abort.signal.aborted) return;
-            // Unreadable: the fixture keeps its default look; try again later, then give up on this device.
-            const n = (failures.get(d.id)?.n ?? 0) + 1;
-            failures.set(d.id, { n, until: Date.now() + 60000 * 2 ** (n - 1) });
+      if (running || document.hidden || handle.current?.engine()?.idle()) return;
+      running = true;
+      const seq = ++issued;
+      try {
+        const now = Date.now();
+        const list = (stateNow.current?.devices ?? [])
+          .filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover"))
+          .filter((d) => { const f = failures.get(d.id); return !f || (f.n < 3 && now >= f.until); })
+          .sort((a, b) => Number(b.floor_id === floorNow.current) - Number(a.floor_id === floorNow.current))
+          .slice(0, 12);
+        const out: Record<string, FixtureState> = {};
+        const queue = [...list];
+        const worker = async () => {
+          for (let d = queue.shift(); d && !abort.signal.aborted; d = queue.shift()) {
+            try {
+              const r = await modelClient.send("GET", `/devices/${d.id}/controls`, undefined, { signal: withTimeout(abort.signal, 10000) });
+              if (!r.ok) throw new Error(String(r.status));
+              out[d.id] = fixtureStateOf(((await r.json()) as { state?: Record<string, unknown> }).state ?? {}, d.class);
+              failures.delete(d.id);
+            } catch {
+              if (abort.signal.aborted) return;
+              // Unreadable or too slow: back off, then give up on this device; its fixture keeps the default look.
+              const n = (failures.get(d.id)?.n ?? 0) + 1;
+              failures.set(d.id, { n, until: Date.now() + 60000 * 2 ** (n - 1) });
+            }
           }
-        }
-      };
-      await Promise.all([worker(), worker()]);
-      if (!abort.signal.aborted) setFixtureStates((prev) => ({ ...prev, ...out }));
+        };
+        await Promise.all([worker(), worker()]);
+        if (!abort.signal.aborted && seq > applied) { applied = seq; setFixtureStates(out); }
+      } finally {
+        running = false;
+      }
     };
     void load();
     const id = setInterval(load, 60000);

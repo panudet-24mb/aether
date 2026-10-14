@@ -47,8 +47,7 @@ const API = import.meta.env.VITE_AETHER_API_ORIGIN ?? "";
 export function modelSender(handlers: { readonly current: { getToken: () => string; refresh: () => Promise<boolean> } }): ModelSend {
   return async (method, path, body, opts = {}) => {
     // A 32 MiB download on a slow link takes a while; a chunk is 160 KiB.
-    const timeout = AbortSignal.timeout(method === "GET" ? 600000 : 30000);
-    const signal = opts.signal && "any" in AbortSignal ? AbortSignal.any([timeout, opts.signal]) : timeout;
+    const signal = withTimeout(opts.signal, method === "GET" ? 600000 : 30000);
     const go = () => fetch(`${API}/api/v1${path}`, {
       method,
       headers: { Authorization: `Bearer ${handlers.current.getToken()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
@@ -64,6 +63,22 @@ export function modelSender(handlers: { readonly current: { getToken: () => stri
 }
 
 const aborted = () => new DOMException("cancelled", "AbortError");
+
+/**
+ * A signal that aborts with `signal` or after `ms`. Uses AbortSignal.any where the browser has it, else wires the two
+ * by hand (an older browser must still honour a cancel and a timeout).
+ */
+export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  if ("any" in AbortSignal) return AbortSignal.any([signal, timeout]);
+  const c = new AbortController();
+  const stop = () => c.abort();
+  if (signal.aborted || timeout.aborted) c.abort();
+  signal.addEventListener("abort", stop, { once: true });
+  timeout.addEventListener("abort", stop, { once: true });
+  return c.signal;
+}
 
 /** A pause that ends early (rejecting) when `signal` aborts. */
 function wait(ms: number, signal?: AbortSignal): Promise<void> {

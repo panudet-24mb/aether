@@ -129,3 +129,28 @@ export function pickLabels(items: { key: string; tier: number; dist: number }[],
 export function newSos(prev: Set<string>, cards: StageCard[]): StageCard[] {
   return cards.filter((c) => c.sos && !prev.has(c.key));
 }
+
+/** A panel's place on screen at the default view, in stage pixels (centre, size). */
+export type ScreenRect = { x: number; y: number; w: number; h: number };
+/** CSS pixel size of the fixed-size panels (stage.css uses the same numbers). */
+export const KPI_PX = { w: 200, h: 90 };
+export const LIST_PX_W = 280;
+
+/**
+ * The default view's screen layout: the KPI tiles in one row under the HUD, the four lists in two columns (two
+ * stacked per side), nothing overlapping, all inside the stage. `top` is the first free pixel row below the HUD;
+ * `bottom` the last one above the bottom-corner controls. `centre` is the width fraction left for the platform.
+ */
+export function wallSlots(W: number, H: number, kpis: number, top: number, bottom: number): { kpi: ScreenRect[]; lists: Record<"left-0" | "left-1" | "right-0" | "right-1", ScreenRect>; centre: number } {
+  const m = 16, g = 12, n = Math.max(1, kpis);
+  const tileW = Math.min(KPI_PX.w * 1.25, (W - 2 * m - (n - 1) * g) / n), tileH = tileW * (KPI_PX.h / KPI_PX.w);
+  const rowW = n * tileW + (n - 1) * g, rowX = (W - rowW) / 2;
+  const kpi = Array.from({ length: kpis }, (_, i) => ({ x: rowX + i * (tileW + g) + tileW / 2, y: top + tileH / 2, w: tileW, h: tileH }));
+  const listTop = top + tileH + g + 4, listBottom = Math.max(listTop + 120, bottom);
+  const listW = Math.max(220, Math.min(360, W * 0.21)), listH = (listBottom - listTop - g) / 2;
+  const col = (side: "left" | "right", i: number): ScreenRect => ({ x: side === "left" ? m + listW / 2 : W - m - listW / 2, y: listTop + i * (listH + g) + listH / 2, w: listW, h: listH });
+  return { kpi, lists: { "left-0": col("left", 0), "left-1": col("left", 1), "right-0": col("right", 0), "right-1": col("right", 1) }, centre: Math.max(0.3, (W - 2 * (m + listW + 16)) / W) };
+}
+
+/** Whether two screen rects overlap (touching edges do not count). */
+export const rectsOverlap = (a: ScreenRect, b: ScreenRect) => Math.abs(a.x - b.x) * 2 < a.w + b.w - 0.01 && Math.abs(a.y - b.y) * 2 < a.h + b.h - 0.01;

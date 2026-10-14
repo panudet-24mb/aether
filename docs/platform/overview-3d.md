@@ -127,9 +127,17 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 
 - **How they are drawn:** `CSS3DRenderer` over the WebGL canvas, sharing its camera. The CSS scene runs at 40× the WebGL scale, so panels sit near CSS scale 1 and the browser rasterises Thai text crisply. Panels are real DOM, so their text can be selected, their buttons clicked, and they can be tabbed into.
 - **Readable from any angle:** panels face the viewer squarely (screen-aligned).
-- **Fading:** panels fade with distance. A panel steps aside (opacity 0.12, no pointer) when it would cover the middle of the view in front of the camera's target, when it sits nearer than an open detail panel, or when it is very close to the camera. The SOS banner stays bright except over an open detail.
+- **Fading:** panels fade with distance. A panel steps aside (opacity 0.12, no pointer) when it would cover the middle of the view in front of the camera's target, or when it is very close to the camera.
+- **An open detail wins:** the detail card is opaque glass (background alpha 0.96). Every other panel whose screen rect overlaps it drops to opacity 0.06 and stops taking the pointer, whether it is in front or behind. That includes the SOS banner. The detail body scrolls inside the card, and the header with ✕ stays fixed. The engine caps the card at about 70% of the stage height at its framed distance.
 - **Occlusion:** not attempted. CSS3D always draws over WebGL.
-- **Placement:** sized and placed from the constellation's radius. KPIs sit on an arc behind the platform, the lists at ±50° and ±128° on the wall, the SOS banner above its device, the detail panel beside its device on the camera's right.
+- **Placement (no overlaps at the default view):** `layout.ts` `wallSlots` lays out the default view in screen pixels.
+  - The six KPI tiles sit in one row under the HUD, all the same height.
+  - The four lists sit in two columns, two stacked per side.
+  - Nothing overlaps, and everything stays inside the visible part of the stage. The self-test checks this from 900 to 2400 px wide.
+  - The engine turns each slot into a world position and width: from the overview preset's camera pose, at a depth behind the target (KPIs) or just before it (lists). So at the default view every panel lands exactly on its slot, and when orbiting the panels move with the scene. The preset distance makes the platform fit the gap between the list columns.
+  - Slots are recomputed on resize, when the constellation changes, and when the visible area changes.
+  - The SOS banner hangs above its device. The detail panel sits beside its device on the camera's right.
+- **Visible area:** the stage measures what the viewer cannot see: the app shell's fixed bars over its top (for example the global SOS bar on a scrolled page), the part scrolled off, and the part below the window. The HUD, the KPI row, the lists and the legend stay inside the rest.
 - **Budget:** at most 12 panels (6 KPIs, 4 lists, the SOS banner, the detail). Lists are capped, with ดูทั้งหมด.
 
 ## Accessibility

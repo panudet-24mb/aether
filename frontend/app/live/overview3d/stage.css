@@ -71,7 +71,7 @@
 .ov3d-toolbar kbd { font: inherit; font-size: 10px; color: var(--color-dim); border: 1px solid var(--color-border); border-radius: 4px; padding: 0 4px; line-height: 15px; }
 .ov3d-toolbar button.is-sos kbd { color: inherit; border-color: currentColor; }
 
-.ov3d-legend { position: absolute; right: 10px; bottom: 10px; z-index: 2100; max-width: min(340px, calc(100% - 20px)); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 86%, transparent); backdrop-filter: blur(6px); color: var(--color-muted); font-size: 11px; }
+.ov3d-legend { position: absolute; right: 10px; bottom: calc(10px + var(--ov3d-safe-bottom, 0px)); z-index: 2100; max-width: min(340px, calc(100% - 20px)); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 86%, transparent); backdrop-filter: blur(6px); color: var(--color-muted); font-size: 11px; }
 .ov3d-legend summary { display: flex; align-items: center; gap: 5px; cursor: pointer; list-style: none; }
 .ov3d-legend summary::-webkit-details-marker { display: none; }
 .ov3d-legend ul { list-style: none; margin: 7px 0 4px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
@@ -105,16 +105,17 @@
 .ov3d-panel button { min-height: 0; }
 .ov3d-panel :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
-.ov3d-panel.is-kpi { width: 232px; padding: 0; border: 0; background: none; box-shadow: none; }
-.ov3d-panel.is-kpi .ov-kpi { width: 100%; padding: 12px 14px; border-radius: 12px; background: linear-gradient(160deg, color-mix(in oklab, var(--color-panel) 86%, transparent), color-mix(in oklab, var(--color-paper) 70%, transparent)); box-shadow: 0 0 24px color-mix(in oklab, var(--color-accent) 14%, transparent); border-color: color-mix(in oklab, var(--color-accent) 30%, transparent); }
-.ov3d-panel.is-kpi .ov-kpi strong { font-size: 34px; }
-.ov3d-panel.is-kpi .ov-kpi span { font-size: 13.5px; white-space: normal; color: var(--color-ink); }
+.ov3d-panel.is-kpi { width: 200px; height: 90px; padding: 0; border: 0; background: none; box-shadow: none; }
+.ov3d-panel.is-kpi .ov-kpi { width: 100%; height: 100%; align-content: center; overflow: hidden; padding: 8px 12px; border-radius: 12px; background: linear-gradient(160deg, color-mix(in oklab, var(--color-panel) 86%, transparent), color-mix(in oklab, var(--color-paper) 70%, transparent)); box-shadow: 0 0 24px color-mix(in oklab, var(--color-accent) 14%, transparent); border-color: color-mix(in oklab, var(--color-accent) 30%, transparent); }
+.ov3d-panel.is-kpi .ov-kpi strong { font-size: 28px; }
+.ov3d-panel.is-kpi .ov-kpi span { font-size: 12px; white-space: normal; color: var(--color-ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
 
-.ov3d-panel.is-list { width: 340px; padding: 12px 12px 10px; }
+.ov3d-panel.is-list { width: 280px; padding: 12px 12px 10px; display: flex; flex-direction: column; overflow: hidden; }
+.ov3d-panel.is-list > section { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .ov3d-panel.is-list section { border: 0; background: none; padding: 0; }
 .ov3d-panel.is-list h2 { display: flex; align-items: center; gap: 6px; font-size: 12px; letter-spacing: 1.1px; text-transform: uppercase; color: var(--color-muted); margin: 0 0 8px; font-weight: 500; }
 .ov3d-panel.is-list h2 small { color: var(--color-dim); letter-spacing: 0; }
-.ov3d-panel.is-list .ov-list { max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+.ov3d-panel.is-list .ov-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .ov3d-panel.is-list .ov-list li > button { background: color-mix(in oklab, var(--color-panel-raised) 80%, transparent); }
 .ov3d-panel .ov-events li { animation: ov3d-in .45s var(--ease-out) both; }
 @keyframes ov3d-in { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
@@ -124,8 +125,12 @@
 .ov3d-panel .ov3d-sos strong { font-size: 20px; }
 .ov3d-panel .ov3d-sos small { white-space: normal; font-size: 13.5px; }
 
-.ov3d-panel.is-detail { width: 460px; max-height: 640px; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 6px; }
-.ov3d-detail-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 10px 20px; background: color-mix(in oklab, var(--color-panel) 96%, transparent); border-bottom: 1px solid var(--color-border); }
+/* The detail: an opaque glass card (nothing behind it bleeds through); its body scrolls, the header and ✕ stay put.
+   The engine sets max-height so the card is at most ~70% of the stage tall at its framed distance. */
+.ov3d-panel.is-detail { width: 460px; max-height: 640px; display: flex; flex-direction: column; overflow: hidden; padding: 0; background: color-mix(in oklab, var(--color-panel) 96%, transparent); }
+.ov3d-panel.is-detail > [role="region"] { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.ov3d-detail-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 6px; }
+.ov3d-detail-head { flex: none; display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 10px 20px; background: color-mix(in oklab, var(--color-panel) 96%, transparent); border-bottom: 1px solid var(--color-border); }
 .ov3d-detail-head > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .ov3d-detail-head strong { font-size: 17px; font-weight: 600; }
 .ov3d-detail-head small { color: var(--color-muted); font-size: 12px; }
@@ -135,7 +140,7 @@
 .ov3d-panel.is-detail .ov-sheet-body { padding: 12px 20px 16px; }
 
 /* The HUD: the only flat control, small and collapsible. */
-.ov3d-hud { position: absolute; top: 12px; left: 12px; z-index: 2100; display: flex; flex-direction: column; gap: 8px; max-width: min(620px, calc(100% - 24px)); padding: 6px 8px 6px 12px; border-radius: 12px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 88%, transparent); backdrop-filter: blur(8px); }
+.ov3d-hud { position: absolute; top: calc(12px + var(--ov3d-safe-top, 0px)); left: 12px; z-index: 2100; display: flex; flex-direction: column; gap: 8px; max-width: min(620px, calc(100% - 24px)); padding: 6px 8px 6px 12px; border-radius: 12px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 88%, transparent); backdrop-filter: blur(8px); }
 .ov3d-hud-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ov3d-hud-head > strong { font-size: 13.5px; font-weight: 600; color: var(--color-ink); }
 .ov3d-hud-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

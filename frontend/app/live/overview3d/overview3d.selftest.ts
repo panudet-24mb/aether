@@ -8,7 +8,7 @@
  *     --target es2020 --skipLibCheck --strict
  *   node -e "const f=require('/tmp/ov3dtest/live/overview3d/overview3d.selftest.js').runOverview3dSelfTest(); console.log(f.length ? f.join('\n') : 'PASS'); process.exit(f.length ? 1 : 0)"
  */
-import { buildHubs, footprint, layoutConstellation, newSos, pickLabels, UNKNOWN_HUB } from "./layout";
+import { buildHubs, footprint, layoutConstellation, newSos, pickLabels, rectsOverlap, UNKNOWN_HUB, wallSlots } from "./layout";
 import { syntheticSite } from "./synthetic";
 import { controllable, labelTier, poweredOn, shapeOf, type StageCard } from "./types";
 
@@ -91,5 +91,18 @@ export function runOverview3dSelfTest(): string[] {
   check(shapeOf("door") === "slab" && shapeOf("sos") === "diamond" && shapeOf("whatever") === "sphere", "shapes by kind");
   check(poweredOn({ ...base, reading: { received_at: "", metrics: { sw1: 0, sw2: 1 } } }) === true && poweredOn({ ...base, reading: { received_at: "", metrics: { state: 0 } } }) === false && poweredOn({ ...base, reading: null }) === null, "power state from readings");
   check(footprint(0) > 0 && footprint(200) > footprint(10), "footprint grows with devices");
+
+  // The default view's panels never overlap each other, stay inside the stage and below the HUD.
+  for (const [W, H] of [[1208, 760], [1688, 940], [1208, 900], [900, 640], [2400, 1300]]) {
+    const top = 64, bottom = H - 48;
+    const sl = wallSlots(W, H, 6, top, bottom);
+    const all = [...sl.kpi, ...Object.values(sl.lists)];
+    for (let i = 0; i < all.length; i++) {
+      const r = all[i];
+      check(r.x - r.w / 2 >= 0 && r.x + r.w / 2 <= W && r.y - r.h / 2 >= top - 0.01 && r.y + r.h / 2 <= H, `${W}x${H}: slot ${i} inside the stage`);
+      for (let j = i + 1; j < all.length; j++) check(!rectsOverlap(r, all[j]), `${W}x${H}: slots ${i} and ${j} overlap`);
+    }
+    check(sl.centre > 0.3 && sl.centre < 1, `${W}x${H}: room left for the platform`);
+  }
   return fail;
 }

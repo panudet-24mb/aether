@@ -111,10 +111,8 @@ function Panel3D({ registry, id, kind, place, width, label, children }: { regist
   return createPortal(label ? <div role="region" aria-label={label}>{children}</div> : children, el);
 }
 
-/** A point on the panel wall: `deg` from straight behind the platform (−z), clockwise seen from above. */
-const polar = (deg: number, r: number, y: number): [number, number, number] => [Math.sin((deg * Math.PI) / 180) * r, y, -Math.cos((deg * Math.PI) / 180) * r];
-/** Side lists: two on the left wall, two on the right. */
-const LIST_DEG: Record<string, number> = { alerts: -50, wearables: -128, gateways: 50, events: 128 };
+/** Side lists: two stacked on the left, two on the right (the engine computes the slots, layout.ts wallSlots). */
+const LIST_SLOT: Record<string, string> = { alerts: "left-0", wearables: "left-1", gateways: "right-0", events: "right-1" };
 
 export default function OverviewStage(props: StageProps) {
   const { client, kindLabel, renderValue, onOpen } = props;
@@ -189,10 +187,47 @@ export default function OverviewStage(props: StageProps) {
   }, [onOpenRef, onUnavailableRef, canControlRef, registry]);
   useImperativeHandle(props.api, () => ({ focusHub: (id: string) => engineRef.current?.focusHub(id) }), []);
 
-  // The panel wall: KPIs on an arc behind the platform, the lists left and right, sized to the constellation.
+  // The SOS banner scales with the constellation; the wall panels take their slots from the engine.
   const wall = stable.layout.radius * 1.0 + 6;
-  useEffect(() => { engineRef.current?.setExtent(wall * 1.3); }, [wall]);
-  const kpiAt = (i: number, n: number) => polar((n > 1 ? -56 + (112 * i) / (n - 1) : 0) + 8, wall * 1.15, wall * 0.46 + 3);
+  // What of the stage the viewer cannot see (the shell's fixed bars, the part scrolled off or below the window):
+  // the HUD and the panels stay inside the visible part.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const r = root.getBoundingClientRect();
+      // Scrolled off at the top counts as covered, and so does whatever the shell lays over the stage there.
+      let cover = Math.max(0, -r.top);
+      if (!document.fullscreenElement && r.height > 0) {
+        for (let pass = 0; pass < 4; pass++) {
+          let more = 0;
+          for (const x of [r.left + 40, r.left + r.width / 2, r.right - 40]) {
+            for (const el of document.elementsFromPoint(x, r.top + cover + 2)) {
+              if (root.contains(el)) break;
+              if (el.contains(root)) continue;
+              more = Math.max(more, el.getBoundingClientRect().bottom - r.top - cover);
+            }
+          }
+          if (more <= 0.5) break;
+          cover += more;
+        }
+      }
+      cover = Math.min(Math.max(0, Math.round(cover)), r.height / 2);
+      const below = document.fullscreenElement ? 0 : Math.min(Math.max(0, Math.round(r.bottom - window.innerHeight)), r.height / 2);
+      root.style.setProperty("--ov3d-safe-top", `${cover}px`);
+      root.style.setProperty("--ov3d-safe-bottom", `${below}px`);
+      engineRef.current?.setSafeArea(cover, below);
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(measure); };
+    schedule();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    const ro = new ResizeObserver(schedule);
+    ro.observe(document.body);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener("scroll", schedule, true); window.removeEventListener("resize", schedule); ro.disconnect(); };
+  }, []);
   // Keyboard users land on the detail's close button when it opens.
   const detailKey = props.detail?.key;
   useEffect(() => {
@@ -280,8 +315,8 @@ export default function OverviewStage(props: StageProps) {
       </div>
 
       <div ref={cssHostRef} className="ov3d-css-host" />
-      {props.kpis.map((k, i) => <Panel3D key={k.key} registry={registry} id={`kpi-${k.key}`} kind="kpi" place={{ at: kpiAt(i, props.kpis.length) }} width={wall * 0.42}>{k.node}</Panel3D>)}
-      {props.panels.filter((p) => p.node).map((p) => <Panel3D key={p.key} registry={registry} id={`list-${p.key}`} kind="list" place={{ at: polar(LIST_DEG[p.key] ?? 0, wall * 1.1, wall * 0.12 + 2) }} width={wall * 0.62}>{p.node}</Panel3D>)}
+      {props.kpis.map((k, i) => <Panel3D key={k.key} registry={registry} id={`kpi-${k.key}`} kind="kpi" place={{ slot: `kpi-${i}` }} width={1}>{k.node}</Panel3D>)}
+      {props.panels.filter((p) => p.node).map((p) => <Panel3D key={p.key} registry={registry} id={`list-${p.key}`} kind="list" place={{ slot: LIST_SLOT[p.key] ?? "left-0" }} width={1}>{p.node}</Panel3D>)}
       {props.sos && <Panel3D registry={registry} id="sos" kind="sos" place={{ above: props.sos.key }} width={Math.max(10, wall * 0.5)}>{props.sos.node}</Panel3D>}
       {props.detail && (
         <Panel3D registry={registry} id="detail" kind="detail" place={{ beside: props.detail.key }} width={9.5} label={`รายละเอียด ${props.detail.title}`}>
@@ -289,7 +324,7 @@ export default function OverviewStage(props: StageProps) {
             <div><strong>{props.detail.title}</strong><small>{props.detail.subtitle}</small></div>
             <button ref={closeRef} type="button" className="ov3d-close" aria-label="ปิดรายละเอียด (Esc)" title="ปิด (Esc)" onClick={props.onCloseDetail}><X size={16} aria-hidden="true" /></button>
           </div>
-          {props.detail.body}
+          <div className="ov3d-detail-body">{props.detail.body}</div>
         </Panel3D>
       )}
 

@@ -14,18 +14,22 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
-import { pickLabels } from "./layout";
+import { KPI_PX, LIST_PX_W, pickLabels, wallSlots, type ScreenRect } from "./layout";
 import { labelTier, poweredOn, SHAPES, shapeOf, type HubPlace, type NodePlace, type Shape } from "./types";
 
 export type Quality = "high" | "med" | "low";
 
 /** Where an in-scene panel sits: a world point, beside a device (the detail), or above one (the SOS banner). */
-export type PanelPlace = { at: [number, number, number] } | { beside: string } | { above: string };
+export type PanelPlace = { at: [number, number, number] } | { beside: string } | { above: string } | { slot: string };
 export type PanelKind = "kpi" | "list" | "sos" | "detail";
 /** One CSS3D panel: React renders into `el` (a portal); the engine places, turns and fades it. `width` is in world units. */
 export type PanelSpec = { el: HTMLElement; place: PanelPlace; width: number; kind: PanelKind };
 /** CSS pixel width of each panel kind (stage.css sets the same widths). */
-const PANEL_PX: Record<PanelKind, number> = { kpi: 232, list: 340, sos: 600, detail: 460 };
+const PANEL_PX: Record<PanelKind, number> = { kpi: KPI_PX.w, list: LIST_PX_W, sos: 600, detail: 460 };
+/** Wall slots sit behind (KPIs) or a little in front of (lists) the default view's target. */
+const SLOT_DEPTH: Partial<Record<PanelKind, number>> = { kpi: 1.2, list: 0.95 };
+/** Pixels the HUD row takes at the top of the stage, and the bottom-corner controls at the bottom. */
+const HUD_ROW = 60, BOTTOM_ROW = 48;
 /** The CSS3D scene runs at K× the WebGL scale, so panels sit near scale 1 and the browser rasterises text crisply. */
 const CSS_K = 40;
 
@@ -188,12 +192,13 @@ export class ConstellationEngine {
   private cssHost: HTMLElement | null;
   private cssScene = new THREE.Scene();
   private cssCamera = new THREE.PerspectiveCamera();
-  private panels = new Map<string, { obj: CSS3DObject; spec: PanelSpec; at: THREE.Vector3 }>();
+  private panels = new Map<string, { obj: CSS3DObject; spec: PanelSpec; at: THREE.Vector3; width: number }>();
+  private safeTop = 0;
+  private safeBottom = 0;
   private registry: PanelRegistry | null = null;
   private cssDirty = true;
   private lastCam = new THREE.Matrix4();
   private lastProj = new THREE.Matrix4();
-  private extent = 0;
 
   constructor(host: HTMLElement, palette: Palette, hooks: EngineHooks, opts: { quality?: Quality | "auto"; reducedMotion?: boolean; cssHost?: HTMLElement | null } = {}) {
     this.host = host;
@@ -312,6 +317,7 @@ export class ConstellationEngine {
     this.renderer.domElement.style.height = "100%";
     this.composer?.setSize(w, h);
     this.css.setSize(w, h);
+    this.relayoutSlots();
     this.cssDirty = true;
     this.bloom?.setSize(w, h);
     this.camera.aspect = w / h;
@@ -687,7 +693,7 @@ export class ConstellationEngine {
     if (this.hovered && !this.refs.has(this.hovered)) this.setHovered(null);
     this.step(performance.now());
     if (!this.framed && this.nodes.length + this.hubs.length > 0) { this.framed = true; this.intro(); }
-    for (const [key, p] of this.panels) if ("above" in p.spec.place) this.placePanel(key, p.spec, false);
+    for (const [key, p] of this.panels) if ("above" in p.spec.place || "slot" in p.spec.place) this.placePanel(key, p.spec, false);
     this.lastLabelPick = 0;
     this.repickLabels();
     this.invalidate();
@@ -742,11 +748,14 @@ export class ConstellationEngine {
   bindPanels(registry: PanelRegistry) {
     this.registry = registry;
     registry.bind((key, spec) => {
+      const wasSlot = !!this.panels.get(key) && "slot" in this.panels.get(key)!.spec.place;
       if (spec) this.placePanel(key, spec, true);
       else {
         const p = this.panels.get(key);
         if (p) { this.cssScene.remove(p.obj); this.panels.delete(key); }
       }
+      // The slot layout depends on how many KPI tiles there are: a tile coming or going re-places the wall.
+      if (wasSlot || (spec && "slot" in spec.place)) this.relayoutSlots();
       this.cssDirty = true;
       this.invalidate();
     });
@@ -757,17 +766,20 @@ export class ConstellationEngine {
     let p = this.panels.get(key);
     if (p && p.obj.element !== spec.el) { this.cssScene.remove(p.obj); p = undefined; }
     const keepBeside = !!p && "beside" in spec.place && "beside" in p.spec.place && p.spec.place.beside === spec.place.beside;
-    const at = keepBeside ? p!.at : this.resolve(spec);
+    const resolved = keepBeside ? { at: p!.at, width: spec.width } : this.resolve(spec);
+    const at = resolved.at;
     if (!p) {
       const obj = new CSS3DObject(spec.el);
       this.cssScene.add(obj);
-      p = { obj, spec, at };
+      p = { obj, spec, at, width: spec.width };
       this.panels.set(key, p);
     }
     p.spec = spec;
     p.at.copy(at);
     p.obj.position.copy(at).multiplyScalar(CSS_K);
-    p.obj.scale.setScalar((spec.width * CSS_K) / PANEL_PX[spec.kind]);
+    p.width = resolved.width;
+    p.obj.scale.setScalar((resolved.width * CSS_K) / PANEL_PX[spec.kind]);
+    if (spec.kind === "detail") this.fitDetail(spec);
     if (fresh && !keepBeside && "beside" in spec.place) {
       const node = this.refs.get(spec.place.beside)?.place.at;
       const mid = node ? new THREE.Vector3(...node).lerp(at, 0.5) : at.clone();
@@ -776,9 +788,15 @@ export class ConstellationEngine {
     this.cssDirty = true;
   }
 
-  /** World position of a panel's centre. */
-  private resolve(spec: PanelSpec): THREE.Vector3 {
+  /** World position of a panel's centre, and its width in world units. */
+  private resolve(spec: PanelSpec): { at: THREE.Vector3; width: number } {
     const place = spec.place;
+    if ("slot" in place) return this.resolveSlot(spec, place.slot);
+    return { at: this.resolvePoint(spec), width: spec.width };
+  }
+
+  private resolvePoint(spec: PanelSpec): THREE.Vector3 {
+    const place = spec.place as Exclude<PanelPlace, { slot: string }>;
     if ("at" in place) return new THREE.Vector3(...place.at);
     const key = "beside" in place ? place.beside : place.above;
     const node = this.refs.get(key)?.place.at;
@@ -794,10 +812,72 @@ export class ConstellationEngine {
     return at.add(right.multiplyScalar(spec.width / 2 + 2.2)).add(new THREE.Vector3(0, 1.5, 0));
   }
 
+  /** The default view's screen layout for the current stage size (pure: layout.ts wallSlots). */
+  private slots() {
+    const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1;
+    const kpis = [...this.panels.values()].filter((p) => "slot" in p.spec.place && p.spec.place.slot.startsWith("kpi-")).length || 6;
+    return { W, H, ...wallSlots(W, H, kpis, this.safeTop + HUD_ROW, H - BOTTOM_ROW - this.safeBottom) };
+  }
+
+  /**
+   * A wall slot: where a panel must sit in the world to land exactly on its screen rect in the default view, at a
+   * depth behind (KPIs) or before (lists) the target. Panels are screen-aligned, so from that view none overlap;
+   * from any other angle they move like the rest of the scene.
+   */
+  private resolveSlot(spec: PanelSpec, slot: string): { at: THREE.Vector3; width: number } {
+    const sl = this.slots(), pose = this.defaultPose();
+    const rect: ScreenRect | undefined = slot.startsWith("kpi-") ? sl.kpi[Number(slot.slice(4))] : sl.lists[slot as keyof typeof sl.lists];
+    if (!rect) return { at: pose.target.clone(), width: spec.width };
+    const cam = new THREE.PerspectiveCamera(this.camera.fov, sl.W / sl.H, 0.1, 4000);
+    cam.position.copy(pose.pos);
+    cam.lookAt(pose.target);
+    cam.updateMatrixWorld();
+    const tan = Math.tan((cam.fov * Math.PI) / 360), z = pose.pos.distanceTo(pose.target) * (SLOT_DEPTH[spec.kind] ?? 1);
+    const xn = (rect.x / sl.W) * 2 - 1, yn = 1 - (rect.y / sl.H) * 2;
+    const at = new THREE.Vector3(xn * z * tan * cam.aspect, yn * z * tan, -z).applyMatrix4(cam.matrixWorld);
+    const pxPerWorld = sl.H / 2 / (z * tan);
+    // A list fills its slot's height and scrolls inside; a KPI tile has a fixed height that matches its slot.
+    if (spec.kind === "list") spec.el.style.height = `${Math.round(rect.h * (LIST_PX_W / rect.w))}px`;
+    return { at, width: rect.w / pxPerWorld };
+  }
+
+  /** Where the overview preset puts the camera: the platform fits the gap between the list columns. */
+  private defaultPose(): { pos: THREE.Vector3; target: THREE.Vector3 } {
+    const sl = this.slots(), tan = Math.tan((this.camera.fov * Math.PI) / 360), aspect = sl.W / sl.H;
+    const rp = this.radius * 1.18 + 6;
+    const band = Math.max(0.35, (sl.H - (sl.kpi[0] ? sl.kpi[0].y + sl.kpi[0].h / 2 : 0)) / sl.H);
+    const d = Math.max(rp / (sl.centre * tan * aspect), (rp * 0.7 + 3) / (band * tan));
+    return { pos: new THREE.Vector3(0, 0.62, 0.78).normalize().multiplyScalar(d), target: new THREE.Vector3() };
+  }
+
+  /** Re-places every wall-slot panel (stage resized, constellation changed, HUD moved). */
+  private relayoutSlots() {
+    for (const [key, p] of this.panels) if ("slot" in p.spec.place || p.spec.kind === "detail") this.placePanel(key, p.spec, false);
+  }
+
+  /**
+   * Pixels of the stage the viewer cannot see: under the app shell's fixed bars or scrolled off at the top, and
+   * below the window's bottom edge. The HUD, the KPI row and the lists stay inside what is visible.
+   */
+  setSafeArea(top: number, bottom: number) {
+    if (Math.abs(top - this.safeTop) < 1 && Math.abs(bottom - this.safeBottom) < 1) return;
+    this.safeTop = top;
+    this.safeBottom = bottom;
+    this.relayoutSlots();
+    this.invalidate();
+  }
+
+  /** The detail scrolls inside: at its framed distance it is at most ~70% of the stage height. */
+  private fitDetail(spec: PanelSpec) {
+    const H = this.host.clientHeight || 1, tan = Math.tan((this.camera.fov * Math.PI) / 360), dist = spec.width * 1.7 + 6;
+    const screenW = spec.width * (H / 2 / (dist * tan));
+    spec.el.style.maxHeight = `${Math.round((0.7 * H) / (screenW / PANEL_PX.detail))}px`;
+  }
+
   /**
    * Re-renders the CSS3D layer only when the camera moved or a panel changed (not on ambient pulses). Panels face
-   * the camera, fade with distance, and step aside (fade, no pointer) when one would cover the middle of the view in
-   * front of what the camera looks at.
+   * the camera and fade with distance. A panel steps aside (fade, no pointer) when it would cover the middle of the
+   * view in front of what the camera looks at, and drops to 0.06 wherever it overlaps an open device detail.
    */
   private renderPanels() {
     if (!this.cssHost) return;
@@ -807,10 +887,20 @@ export class ConstellationEngine {
     this.lastCam.copy(this.camera.matrixWorld);
     this.lastProj.copy(this.camera.projectionMatrix);
     this.cssDirty = false;
-    const cam = this.camera.position, targetDist = cam.distanceTo(this.controls.target), fitD = this.fit(), v = new THREE.Vector3();
-    // With a device detail open, nothing nearer the camera than the detail may cover it.
-    let detailDist = Infinity;
-    for (const p of this.panels.values()) if (p.spec.kind === "detail") detailDist = cam.distanceTo(p.at);
+    const cam = this.camera.position, targetDist = cam.distanceTo(this.controls.target), homeDist = this.defaultPose().pos.length(), v = new THREE.Vector3();
+    const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1, tan = Math.tan((this.camera.fov * Math.PI) / 360);
+    /** A screen-aligned panel's rect on screen (px), or null when it is behind the camera. */
+    const rectOf = (p: { at: THREE.Vector3; width: number; spec: PanelSpec; obj: CSS3DObject }): ScreenRect | null => {
+      v.copy(p.at).applyMatrix4(this.camera.matrixWorldInverse);
+      const z = -v.z;
+      if (z <= 0.01) return null;
+      const ppw = H / 2 / (z * tan), w = p.width * ppw, ratio = w / PANEL_PX[p.spec.kind];
+      v.copy(p.at).project(this.camera);
+      return { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, w, h: (p.obj.element.offsetHeight || PANEL_PX[p.spec.kind] * 0.6) * ratio };
+    };
+    // An open device detail wins: every other panel that overlaps it on screen steps right back.
+    let detailRect: ScreenRect | null = null;
+    for (const p of this.panels.values()) if (p.spec.kind === "detail") detailRect = rectOf(p);
     for (const p of this.panels.values()) {
       // Screen-aligned: a panel always faces the viewer squarely, so its text stays readable from any orbit angle.
       p.obj.quaternion.copy(this.camera.quaternion);
@@ -818,13 +908,13 @@ export class ConstellationEngine {
       const el = p.obj.element, behind = v.z > 1;
       if (el.style.display !== (behind ? "none" : "")) el.style.display = behind ? "none" : "";
       if (behind) continue;
-      const d = cam.distanceTo(p.at);
-      const blocking = p.spec.kind !== "detail" && p.spec.kind !== "sos" && ((d < targetDist * 0.85 && Math.abs(v.x) < 0.45 && Math.abs(v.y) < 0.45) || (detailDist < Infinity && d < detailDist * 1.15) || d < targetDist * 0.55);
-      // The SOS banner stays bright, except when it would sit over an open device detail.
-      const sosAside = p.spec.kind === "sos" && detailDist < Infinity && d < detailDist * 1.3;
-      const opacity = p.spec.kind === "detail" ? 1 : p.spec.kind === "sos" ? (sosAside ? 0.25 : 1) : blocking ? 0.12 : Math.max(0.5, Math.min(1, 1.35 - d / (fitD * 1.7)));
+      if (p.spec.kind === "detail") { el.style.opacity = "1"; el.style.pointerEvents = "auto"; continue; }
+      const d = cam.distanceTo(p.at), r = detailRect ? rectOf(p) : null;
+      const underDetail = !!(detailRect && r && Math.abs(r.x - detailRect.x) * 2 < r.w + detailRect.w && Math.abs(r.y - detailRect.y) * 2 < r.h + detailRect.h);
+      const blocking = p.spec.kind !== "sos" && ((d < targetDist * 0.85 && Math.abs(v.x) < 0.45 && Math.abs(v.y) < 0.45) || d < targetDist * 0.55);
+      const opacity = underDetail ? 0.06 : p.spec.kind === "sos" ? 1 : blocking ? 0.12 : Math.max(0.5, Math.min(1, 1 - (d - homeDist * 1.3) / (homeDist * 1.5)));
       el.style.opacity = opacity.toFixed(2);
-      el.style.pointerEvents = blocking || sosAside ? "none" : "auto";
+      el.style.pointerEvents = underDetail || blocking ? "none" : "auto";
     }
     this.cssCamera.copy(this.camera);
     this.cssCamera.position.multiplyScalar(CSS_K);
@@ -835,26 +925,19 @@ export class ConstellationEngine {
   /** The first view: a short fly-in from high above (a cut with reduced motion). */
   private intro() {
     if (this.reducedMotion) { this.preset("overview", 0); return; }
-    const d = this.fit();
-    this.camera.position.set(d * 0.25, d * 1.9, d * 1.25);
+    const d = this.defaultPose().pos.length();
+    this.camera.position.set(d * 0.3, d * 2.2, d * 1.4);
     this.controls.target.set(0, 0, 0);
     this.preset("overview", 2600);
   }
 
   // ---- camera ------------------------------------------------------------------------------------------------
 
-  private fit(): number {
-    const half = (this.camera.fov * Math.PI) / 360;
-    return ((Math.max(this.radius + 4, this.extent)) / Math.sin(half)) / Math.min(1, this.camera.aspect * 0.9);
-  }
 
-  /** The radius the overview preset frames (the panel wall around the platform, when there is one). */
-  setExtent(r: number) { this.extent = r; }
 
   /** Moves the camera to a preset; "alert" goes to the first SOS (else the first alert) and reports whether one exists. */
   preset(p: Preset, ms = 1400): boolean {
     this.touring = false;
-    const d = this.fit();
     // Top: the whole platform inside the frame's shorter side.
     if (p === "top") { this.flyTo(new THREE.Vector3(0, ((this.radius * 1.18 + 6) / Math.tan((this.camera.fov * Math.PI) / 360)) / Math.min(1, this.camera.aspect) * 1.02, 0.01), new THREE.Vector3(0, 0, 0), ms); return true; }
     if (p === "alert") {
@@ -865,7 +948,8 @@ export class ConstellationEngine {
       else this.focusPoint(np.at, 16);
       return true;
     }
-    this.flyTo(new THREE.Vector3(0, 0.62, 0.78).normalize().multiplyScalar(d * 0.78), new THREE.Vector3(0, 0, 0), ms);
+    const pose = this.defaultPose();
+    this.flyTo(pose.pos, pose.target, ms);
     return true;
   }
 

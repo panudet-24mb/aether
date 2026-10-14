@@ -268,7 +268,8 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
   const filterProps = { projects, project, onProject: setProject, only, onOnly: setOnly, kinds, kind, onKind: setKind, query, onQuery: setQuery };
   const liveChip = <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบทุก 5 วินาที"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>;
   const shadowChip = shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ยกเว้นปุ่มฉุกเฉิน SOS และเครื่องตรวจควัน / แก๊ส / CO ที่แจ้งเตือนเสมอ · ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · แจ้งเตือนเฉพาะ SOS และควัน / แก๊ส</span>;
-  const detailBody = opened && <DeviceDetail opened={opened} now={now} events={deviceEvents} history={drawerHistory} range={range} onRange={setRange} client={client} getToken={getToken} onNavigate={onNavigate} />;
+  // Keyed by device: a different device never inherits the previous one's controls or command state.
+  const detailBody = opened && <DeviceDetail key={opened.key} opened={opened} now={now} events={deviceEvents} history={drawerHistory} range={range} onRange={setRange} client={client} getToken={getToken} onNavigate={onNavigate} />;
 
   if (mode === "3d") {
     // 3D: the whole page is one scene; KPIs, SOS, the side lists and the device detail live inside it.
@@ -279,7 +280,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
           <StageBoundary key={stage.attempt} onFail={stageFailed}>
             <Suspense fallback={<p className="ov-empty ov-3d-wait">กำลังเตรียมภาพ 3 มิติ…</p>}>
               <OverviewStage api={stageApi} cards={visible} gateways={scopedGateways} projects={projects} colors={PROJECT_COLORS} showEmptyHubs={kind === "all" && only === "all" && !query.trim()}
-                client={client} kindLabel={KIND_LABEL} renderValue={value} onOpen={setOpenKey} onUnavailable={fallBackToCards} onShowCards={() => setViewMode("cards")}
+                client={client} kindLabel={KIND_LABEL} renderValue={value} onOpen={setOpenKey} onUnavailable={fallBackToCards} onShowCards={() => { setOpenKey(""); setViewMode("cards"); }}
                 filters={<OverviewFilters {...filterProps} />}
                 status={<>{liveChip}{shadowChip}{error && <span className="ov3d-error" role="alert">{error} · ระบบจะลองใหม่อัตโนมัติ</span>}</>}
                 kpis={kpiTiles(kpi)}

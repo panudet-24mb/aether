@@ -93,16 +93,23 @@ export function runOverview3dSelfTest(): string[] {
   check(footprint(0) > 0 && footprint(200) > footprint(10), "footprint grows with devices");
 
   // The default view's panels never overlap each other, stay inside the stage and below the HUD.
-  for (const [W, H] of [[1208, 760], [1688, 940], [1208, 900], [900, 640], [2400, 1300]]) {
+  for (const [W, H] of [[1208, 760], [1688, 940], [1208, 900], [900, 640], [2400, 1300], [700, 700], [375, 760]]) {
     const top = 64, bottom = H - 48;
     const sl = wallSlots(W, H, 6, top, bottom);
     const all = [...sl.kpi, ...Object.values(sl.lists)];
+    check(sl.kpi.length === 6 && all.every((r) => r.w > 0 && r.h > 0), `${W}x${H}: six positive-size KPI slots`);
+    check(sl.compact === W < 720 && (sl.compact ? Object.keys(sl.lists).length === 0 : Object.keys(sl.lists).length === 4), `${W}x${H}: compact wall below 720 px (lists go to the HUD)`);
+    if (sl.compact) check(new Set(sl.kpi.map((r) => Math.round(r.y))).size === 2, `${W}x${H}: compact KPIs in two rows`);
     for (let i = 0; i < all.length; i++) {
       const r = all[i];
       check(r.x - r.w / 2 >= 0 && r.x + r.w / 2 <= W && r.y - r.h / 2 >= top - 0.01 && r.y + r.h / 2 <= H, `${W}x${H}: slot ${i} inside the stage`);
       for (let j = i + 1; j < all.length; j++) check(!rectsOverlap(r, all[j]), `${W}x${H}: slots ${i} and ${j} overlap`);
     }
     check(sl.centre > 0.3 && sl.centre < 1, `${W}x${H}: room left for the platform`);
+  }
+  for (const [W, H] of [[0, 0], [120, 900], [375, 100]]) {
+    const sl = wallSlots(W, H, 6, 64, H - 48);
+    check(sl.kpi.length === 0 && Object.keys(sl.lists).length === 0, `${W}x${H}: no wall on a tiny stage`);
   }
   return fail;
 }

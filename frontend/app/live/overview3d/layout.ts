@@ -136,20 +136,32 @@ export type ScreenRect = { x: number; y: number; w: number; h: number };
 export const KPI_PX = { w: 200, h: 90 };
 export const LIST_PX_W = 280;
 
+/** Below this stage width the wall is compact: KPIs in a 3×2 grid, the lists in a HUD drawer instead of the scene. */
+export const COMPACT_W = 720;
+/** Below this the stage is too small for a wall at all (panels are hidden until it grows). */
+const MIN_W = 240, MIN_H = 240;
+
+export type ListSlot = "left-0" | "left-1" | "right-0" | "right-1";
+export type Wall = { kpi: ScreenRect[]; lists: Partial<Record<ListSlot, ScreenRect>>; centre: number; compact: boolean };
+
 /**
  * The default view's screen layout: the KPI tiles in one row under the HUD, the four lists in two columns (two
  * stacked per side), nothing overlapping, all inside the stage. `top` is the first free pixel row below the HUD;
  * `bottom` the last one above the bottom-corner controls. `centre` is the width fraction left for the platform.
+ * A narrow stage gets the compact wall (KPIs 3×2, no lists); a tiny one gets none. Sizes are never negative.
  */
-export function wallSlots(W: number, H: number, kpis: number, top: number, bottom: number): { kpi: ScreenRect[]; lists: Record<"left-0" | "left-1" | "right-0" | "right-1", ScreenRect>; centre: number } {
-  const m = 16, g = 12, n = Math.max(1, kpis);
-  const tileW = Math.min(KPI_PX.w * 1.25, (W - 2 * m - (n - 1) * g) / n), tileH = tileW * (KPI_PX.h / KPI_PX.w);
-  const rowW = n * tileW + (n - 1) * g, rowX = (W - rowW) / 2;
-  const kpi = Array.from({ length: kpis }, (_, i) => ({ x: rowX + i * (tileW + g) + tileW / 2, y: top + tileH / 2, w: tileW, h: tileH }));
-  const listTop = top + tileH + g + 4, listBottom = Math.max(listTop + 120, bottom);
-  const listW = Math.max(220, Math.min(360, W * 0.21)), listH = (listBottom - listTop - g) / 2;
+export function wallSlots(W: number, H: number, kpis: number, top: number, bottom: number): Wall {
+  const compact = W < COMPACT_W;
+  if (W < MIN_W || H < MIN_H || kpis <= 0 || bottom - top < 80) return { kpi: [], lists: {}, centre: 1, compact };
+  const m = compact ? 10 : 16, g = compact ? 8 : 12, cols = compact ? Math.min(3, kpis) : kpis, rows = Math.ceil(kpis / cols);
+  const tileW = Math.max(0, Math.min(KPI_PX.w * 1.25, (W - 2 * m - (cols - 1) * g) / cols)), tileH = tileW * (KPI_PX.h / KPI_PX.w);
+  const rowW = cols * tileW + (cols - 1) * g, rowX = (W - rowW) / 2;
+  const kpi = Array.from({ length: kpis }, (_, i) => ({ x: rowX + (i % cols) * (tileW + g) + tileW / 2, y: top + Math.floor(i / cols) * (tileH + g) + tileH / 2, w: tileW, h: tileH }));
+  if (compact) return { kpi, lists: {}, centre: 0.92, compact };
+  const listTop = top + rows * (tileH + g) + 4, listBottom = Math.max(listTop + 120, bottom);
+  const listW = Math.max(220, Math.min(360, W * 0.21)), listH = Math.max(0, (listBottom - listTop - g) / 2);
   const col = (side: "left" | "right", i: number): ScreenRect => ({ x: side === "left" ? m + listW / 2 : W - m - listW / 2, y: listTop + i * (listH + g) + listH / 2, w: listW, h: listH });
-  return { kpi, lists: { "left-0": col("left", 0), "left-1": col("left", 1), "right-0": col("right", 0), "right-1": col("right", 1) }, centre: Math.max(0.3, (W - 2 * (m + listW + 16)) / W) };
+  return { kpi, lists: { "left-0": col("left", 0), "left-1": col("left", 1), "right-0": col("right", 0), "right-1": col("right", 1) }, centre: Math.max(0.3, (W - 2 * (m + listW + 16)) / W), compact };
 }
 
 /** Whether two screen rects overlap (touching edges do not count). */

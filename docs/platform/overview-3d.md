@@ -10,24 +10,24 @@ flat header, KPI row, SOS strip, side panel or drawer. Their content lives insid
 
 | Card page | 3D scene |
 |---|---|
-| KPI row (6 tiles) | six KPI tiles on an arc above and behind the platform; same values, colour states and click actions |
+| KPI row (6 tiles) | six KPI tiles in one row under the HUD (3×2 on a phone), placed behind the platform; same values, colour states and click actions |
 | SOS strip | a large pulsing banner above the SOS device, with รับทราบ / ดูรายละเอียด and ดูบนผังอาคาร; ไปที่เหตุ frames it |
-| ต้องดูตอนนี้ | a panel on the left wall; an alert flies the camera to its device and opens the detail; ดูทั้งหมด opens the alerts page |
-| ใครอยู่ที่ไหน | a panel on the left wall (8 rows, then "และอีก n คน"); a person opens the detail; ดูบนผัง opens the floor plan |
-| Gateway | a panel on the right wall (8 rows); a gateway flies the camera to its hub; ดูทั้งหมด opens the connect page |
-| เหตุการณ์ล่าสุด | a panel on the right wall (10 rows, new rows slide in); an event opens its device's detail |
-| device drawer (Sheet) | a detail panel beside the device (the camera flies to frame both): the same status, reasons, facts, history, full DeviceControlsPanel and action links; ✕ or Esc closes it |
-| header filters, view switch | the HUD (top left): presets, tour, fullscreen, ตัวกรอง (project / show / kind / search) and การ์ด |
+| ต้องดูตอนนี้ | a panel in the left column; an alert flies the camera to its device and opens the detail; ดูทั้งหมด opens the alerts page |
+| ใครอยู่ที่ไหน | a panel in the left column (8 rows, then "และอีก n คน"); a person opens the detail; ดูบนผัง opens the floor plan |
+| Gateway | a panel in the right column (8 rows); a gateway flies the camera to its hub; ดูทั้งหมด opens the connect page |
+| เหตุการณ์ล่าสุด | a panel in the right column (10 rows, new rows slide in); an event opens its device's detail |
+| device drawer (Sheet) | a detail card beside the device. The camera flies so that the device, ringed in the accent colour, sits on the left third (on top on a phone) and the card beside it (below it on a phone). The card has the same status, reasons, facts, history, full DeviceControlsPanel and action links. ✕ or Esc closes it, and focus returns where it was |
+| header filters, view switch | the HUD (top left): presets, tour, fullscreen (when the browser allows it), ตัวกรอง (project / show / kind / search), รายการ (the four lists, on a phone) and การ์ด |
 
 The page renders this content once, in shared components (`frontend/app/live/overview-parts.tsx`: `OverviewFilters`,
 `kpiTiles`/`KpiRow`, `SosBanner`, the four list sections and `DeviceDetail`). The card page lays them out flat. The
-stage places the same React elements into CSS3D panels with portals. There is no second copy of the business
+stage places the same React elements into in-scene panels with portals. There is no second copy of the business
 logic: `overview.tsx` computes the model, the filters and every action once. The "จัดกลุ่ม" select only exists in
 card mode, because 3D always groups by gateway.
 
 Code: `frontend/app/live/overview3d/`
 - `stage.tsx`: the React stage. It is lazy-loaded with `React.lazy`, so card mode never downloads it. It handles the HUD, the device labels, the tooltip, the legend, aria-live and the in-scene panels (`Panel3D`: a portal into an element the engine places).
-- `engine.ts`: the three.js renderer. It is imperative and renders on demand. It positions the label elements React renders, and runs the CSS3D layer (`PanelRegistry`, `CSS3DRenderer`) that places, turns and fades the panels.
+- `engine.ts`: the three.js renderer. It is imperative and renders on demand. It positions the label elements React renders and the panel layer (`PanelRegistry`): it places, scales and fades the panels.
 - `layout.ts`: pure layout (hubs, rings, label priority, SOS diff). `types.ts` holds shapes, tiers and the controllable rule.
 - `power.tsx`: the on/off toggle on a label. It uses the same command flow as `DeviceControlsPanel`.
 - `synthetic.ts`: a seeded synthetic site, used by the self-test and the dev-only scale toggle.
@@ -115,7 +115,9 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 - **Hover:** a highlight ring on the node and a tooltip with name, kind, gateway, value, status and first reason.
 - **Click:** clicking a node or its label flies the camera to it and opens the detail panel beside it. Clicking a hub flies the camera to it.
 - **Intro:** entering 3D starts with a short fly-in from above (a cut with reduced motion).
-- **Fullscreen:** the HUD's เต็มจอ button puts the stage in fullscreen (`requestFullscreen` on the stage); Esc leaves it.
+- **Fullscreen:** the HUD's เต็มจอ button (shown only when `document.fullscreenEnabled`) puts the stage in fullscreen; Esc leaves it. A dialog that portals to `<body>` (for example a device's threshold settings) would be hidden by fullscreen, so opening one leaves fullscreen first.
+- **Esc:** closes the detail, unless a nested dialog already handled it (its Esc closes only the dialog), or the focus is in a field (HUD search or selects, a control input).
+- **Staying home:** after a resize, a data change, a visible-area change or fullscreen, a camera that is at the overview pose (or flying to it) moves to the new pose. That way the panels land on their slots again. Any camera move of the operator's ends that.
 - **Presets (toolbar, or keys 1 / 2 / 3 while focus is inside the stage, never page-wide):**
   - ภาพรวม frames everything.
   - มุมบน is a top-down view.
@@ -125,25 +127,27 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 
 ### In-scene panels
 
-- **How they are drawn:** `CSS3DRenderer` over the WebGL canvas, sharing its camera. The CSS scene runs at 40× the WebGL scale, so panels sit near CSS scale 1 and the browser rasterises Thai text crisply. Panels are real DOM, so their text can be selected, their buttons clicked, and they can be tabbed into.
-- **Readable from any angle:** panels face the viewer squarely (screen-aligned).
+- **How they are drawn:** a DOM layer over the WebGL canvas. Every panel is screen-aligned (it faces the viewer squarely, so it stays readable from any orbit angle). That makes its perspective image an exact 2D similarity, so the engine places each one with a translate and a uniform scale computed from its world position and the camera, and nearer panels stack on top. There is no CSS 3D (an earlier `CSS3DRenderer` version lost hit testing when the camera moved far from the origin), so clicks, Tab and screen readers work exactly as on a flat page.
 - **Fading:** panels fade with distance. A panel steps aside (opacity 0.12, no pointer) when it would cover the middle of the view in front of the camera's target, or when it is very close to the camera.
 - **An open detail wins:** the detail card is opaque glass (background alpha 0.96). Every other panel whose screen rect overlaps it drops to opacity 0.06 and stops taking the pointer, whether it is in front or behind. That includes the SOS banner. The detail body scrolls inside the card, and the header with ✕ stays fixed. The engine caps the card at about 70% of the stage height at its framed distance.
-- **Occlusion:** not attempted. CSS3D always draws over WebGL.
+- **Occlusion:** not attempted; panels always draw over the WebGL scene.
 - **Placement (no overlaps at the default view):** `layout.ts` `wallSlots` lays out the default view in screen pixels.
   - The six KPI tiles sit in one row under the HUD, all the same height.
   - The four lists sit in two columns, two stacked per side.
   - Nothing overlaps, and everything stays inside the visible part of the stage. The self-test checks this from 900 to 2400 px wide.
   - The engine turns each slot into a world position and width: from the overview preset's camera pose, at a depth behind the target (KPIs) or just before it (lists). So at the default view every panel lands exactly on its slot, and when orbiting the panels move with the scene. The preset distance makes the platform fit the gap between the list columns.
   - Slots are recomputed on resize, when the constellation changes, and when the visible area changes.
-  - The SOS banner hangs above its device. The detail panel sits beside its device on the camera's right.
+  - On a stage narrower than 720 px the wall is compact: KPIs 3×2, and the lists move to a HUD drawer. A stage smaller than 240 px gets no wall, and its panels are hidden.
+  - The SOS banner hangs above its device. The detail card is framed with its device; it keeps the camera's orientation.
+  - The KPI row starts under the HUD's measured height.
 - **Visible area:** the stage measures what the viewer cannot see: the app shell's fixed bars over its top (for example the global SOS bar on a scrolled page), the part scrolled off, and the part below the window. The HUD, the KPI row, the lists and the legend stay inside the rest.
 - **Budget:** at most 12 panels (6 KPIs, 4 lists, the SOS banner, the detail). Lists are capped, with ดูทั้งหมด.
 
 ## Accessibility
 
 - The canvas wrapper has `role="application"` and a Thai `aria-label` that says what is shown and how to use it.
-- Labels, hub chips, HUD buttons, panel buttons and toggles are real buttons in tab order. Opening a detail moves focus to its close button; Esc closes it.
+- Labels, hub chips, HUD buttons, panel buttons and toggles are real buttons in tab order. Opening a detail moves focus to its close button; closing it returns focus to where it was (or the canvas).
+- A faded panel (stepped aside, or under the open detail) is `inert` and `aria-hidden`: Tab and screen readers skip it until it is restored. A panel behind the camera is hidden.
 - Toggles carry Thai `aria-label`s, `role="switch"`, `aria-checked` and `aria-busy`.
 - An `aria-live="assertive"` region announces each **new** SOS once ("SOS ใหม่ · <name> ที่ <gateway> · ปุ่ม ไปที่เหตุ พาไปจุดนั้น"). The SOS banner above stays the visual cue.
 - `prefers-reduced-motion` affects the stage in four ways:
@@ -157,7 +161,7 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 
 - **Lazy chunk:** card mode does not load the stage (`stage-*.js` is its own chunk).
 - **Render on demand:** a frame is drawn only for a data change, a camera move or damping, a tween, the tour, hover, or an ambient pulse.
-  - The CSS3D layer re-renders only when the camera moved or a panel was added, moved or removed, never on ambient pulses.
+  - The panel layer is re-placed only when the camera moved or a panel was added, moved, removed or resized, never on ambient pulses.
   - With reduced motion, or while the tab is hidden, an idle stage draws **0 frames**.
   - Otherwise ambient pulses are throttled: 30 fps while an alert or SOS pulses, 20 fps for hub breathing alone.
 - **Rebuilds:** the scene is rebuilt only when what it draws changes (a signature of hubs, positions, status, SOS, occupancy, door and power). The overview's 5 s clock tick does not rebuild it.

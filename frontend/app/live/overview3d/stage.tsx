@@ -1,22 +1,24 @@
 "use client";
 // The overview's 3D mode (docs/platform/overview-3d.md): the whole page as one scene. The board's own cards, filters
 // included, form a constellation of gateway hubs with their devices in rings; the KPIs, the SOS banner, the side
-// lists and the device detail are CSS3D panels in the same scene (the page renders their content, the stage places
+// lists and the device detail are panels in the same scene (the page renders their content, the stage places
 // it). One small HUD holds the filters and the camera. Loaded lazily, so the card mode never pays for three.js.
 
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ChevronUp, Crosshair, Info, LayoutGrid, Maximize, Minimize, Orbit, Pause, ScanEye, SlidersHorizontal, View, X } from "lucide-react";
+import { ChevronUp, Crosshair, Info, LayoutGrid, List as ListIcon, Maximize, Minimize, Orbit, Pause, ScanEye, SlidersHorizontal, View, X } from "lucide-react";
 import * as THREE from "three";
 import type { CommandClient } from "../../topology/device-controls";
 import { useLatest } from "../../topology/use-latest";
 import { ConstellationEngine, PanelRegistry, type PanelKind, type PanelPlace, type Palette, type Preset } from "./engine";
-import { buildHubs, layoutConstellation, newSos } from "./layout";
+import { buildHubs, COMPACT_W, layoutConstellation, newSos, type ListSlot } from "./layout";
 import { useOutputs } from "./outputs";
 import { PowerStore, PowerToggle } from "./power";
 import { syntheticSite } from "./synthetic";
 import { controllable, poweredOn, type HubPlace, type NodePlace, type StageCard, type StageGateway, type StageProject } from "./types";
 import "./stage.css";
+
+export type StageListKey = "alerts" | "wearables" | "gateways" | "events";
 
 /** What the page's own lists can ask of the stage (a gateway row flies to its hub). */
 export type StageApi = { focusHub: (id: string) => void };
@@ -27,12 +29,12 @@ export type StageProps = {
   filters: ReactNode;
   /** Live / polling, shadow mode and load errors, shown in the HUD head. */
   status: ReactNode;
-  /** The six KPI tiles (the page's own buttons and actions), on an arc behind the platform. */
+  /** The six KPI tiles (the page's own buttons and actions), in one row under the HUD (3×2 on a phone). */
   kpis: { key: string; node: ReactNode }[];
   /** The SOS banner and the device it hangs above. */
   sos: { key: string; node: ReactNode } | null;
-  /** The side lists (ต้องดูตอนนี้, ใครอยู่ที่ไหน, Gateway, เหตุการณ์ล่าสุด), on walls left and right; a null node is skipped. */
-  panels: { key: string; node: ReactNode }[];
+  /** The side lists (ต้องดูตอนนี้, ใครอยู่ที่ไหน, Gateway, เหตุการณ์ล่าสุด), in two columns; a null node is skipped. */
+  panels: { key: StageListKey; node: ReactNode }[];
   /** The open device's detail, shown beside it (replaces the card page's drawer). */
   detail: { key: string; title: string; subtitle: string; sos: boolean; body: ReactNode } | null;
   onCloseDetail: () => void;
@@ -99,11 +101,20 @@ function signature(hubs: HubPlace[], nodes: NodePlace[]): string {
   ]);
 }
 
+/** The nearest ancestor (or the element) the shell pins on screen: position fixed or sticky. */
+function pinnedAncestor(el: Element | null): Element | null {
+  for (let e = el; e && e !== document.body; e = e.parentElement) {
+    const pos = getComputedStyle(e).position;
+    if (pos === "fixed" || pos === "sticky") return e;
+  }
+  return null;
+}
+
 const typing = (el: Element | null) => !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el as HTMLElement).isContentEditable);
 
-/** A CSS3D panel: React renders `children` into its own element (a portal); the engine places, turns and fades it. */
-function Panel3D({ registry, id, kind, place, width, label, children }: { registry: PanelRegistry; id: string; kind: PanelKind; place: PanelPlace; width: number; label?: string; children: ReactNode }) {
-  // The element CSS3D moves around; its kind never changes for a given panel.
+/** An in-scene panel: React renders `children` into its own element (a portal); the engine places, scales and fades it. */
+function Panel3D({ registry, id, kind, place, width = 0, label, children }: { registry: PanelRegistry; id: string; kind: PanelKind; place: PanelPlace; width?: number; label?: string; children: ReactNode }) {
+  // The element the engine moves around; its kind never changes for a given panel.
   const [el] = useState(() => Object.assign(document.createElement("div"), { className: `ov3d-panel is-${kind}` }));
   const placeKey = JSON.stringify(place);
   useEffect(() => { registry.set(id, { el, place: JSON.parse(placeKey) as PanelPlace, width, kind }); }, [registry, id, el, placeKey, width, kind]);
@@ -112,7 +123,8 @@ function Panel3D({ registry, id, kind, place, width, label, children }: { regist
 }
 
 /** Side lists: two stacked on the left, two on the right (the engine computes the slots, layout.ts wallSlots). */
-const LIST_SLOT: Record<string, string> = { alerts: "left-0", wearables: "left-1", gateways: "right-0", events: "right-1" };
+const LIST_SLOT: Record<StageListKey, ListSlot> = { alerts: "left-0", wearables: "left-1", gateways: "right-0", events: "right-1" };
+const hasFullscreen = () => typeof document !== "undefined" && !!document.fullscreenEnabled;
 
 export default function OverviewStage(props: StageProps) {
   const { client, kindLabel, renderValue, onOpen } = props;
@@ -188,7 +200,11 @@ export default function OverviewStage(props: StageProps) {
   useImperativeHandle(props.api, () => ({ focusHub: (id: string) => engineRef.current?.focusHub(id) }), []);
 
   // The SOS banner scales with the constellation; the wall panels take their slots from the engine.
-  const wall = stable.layout.radius * 1.0 + 6;
+  const wall = stable.layout.radius + 6;
+  // A narrow stage (a phone) gets the compact wall: KPIs 3×2 in the scene, the lists in a HUD drawer.
+  const [compact, setCompact] = useState(false);
+  const [listsOpen, setListsOpen] = useState(false);
+  const hudRef = useRef<HTMLDivElement>(null);
   // What of the stage the viewer cannot see (the shell's fixed bars, the part scrolled off or below the window):
   // the HUD and the panels stay inside the visible part.
   useEffect(() => {
@@ -207,7 +223,8 @@ export default function OverviewStage(props: StageProps) {
             for (const el of document.elementsFromPoint(x, r.top + cover + 2)) {
               if (root.contains(el)) break;
               if (el.contains(root)) continue;
-              more = Math.max(more, el.getBoundingClientRect().bottom - r.top - cover);
+              const bar = pinnedAncestor(el);
+              if (bar) more = Math.max(more, bar.getBoundingClientRect().bottom - r.top - cover);
             }
           }
           if (more <= 0.5) break;
@@ -218,20 +235,42 @@ export default function OverviewStage(props: StageProps) {
       const below = document.fullscreenElement ? 0 : Math.min(Math.max(0, Math.round(r.bottom - window.innerHeight)), r.height / 2);
       root.style.setProperty("--ov3d-safe-top", `${cover}px`);
       root.style.setProperty("--ov3d-safe-bottom", `${below}px`);
-      engineRef.current?.setSafeArea(cover, below);
+      engineRef.current?.setSafeArea(cover, below, hudRef.current?.offsetHeight ?? 44);
+      setCompact(r.width > 0 && r.width < COMPACT_W);
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(measure); };
+    // A list or the detail scrolling inside the stage does not move the stage.
+    const onScroll = (e: Event) => { if (!(e.target instanceof Node && root.contains(e.target))) schedule(); };
     schedule();
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", schedule);
     const ro = new ResizeObserver(schedule);
     ro.observe(document.body);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener("scroll", schedule, true); window.removeEventListener("resize", schedule); ro.disconnect(); };
+    ro.observe(root);
+    if (hudRef.current) ro.observe(hudRef.current);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", schedule); ro.disconnect(); };
   }, []);
-  // Keyboard users land on the detail's close button when it opens.
+  // Keyboard users land on the detail's close button when it opens, and go back where they were when it closes.
   const detailKey = props.detail?.key;
+  const returnTo = useRef<HTMLElement | null>(null);
+  const hadDetail = useRef(false);
   useEffect(() => {
-    if (!detailKey) return;
+    const root = rootRef.current;
+    if (!detailKey) {
+      if (hadDetail.current) {
+        hadDetail.current = false;
+        const back = returnTo.current;
+        returnTo.current = null;
+        if (back?.isConnected && !back.closest("[inert]")) back.focus({ preventScroll: true });
+        else hostRef.current?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (!hadDetail.current) {
+      const active = document.activeElement;
+      returnTo.current = active instanceof HTMLElement && root?.contains(active) && !active.closest(".ov3d-panel.is-detail") ? active : null;
+    }
+    hadDetail.current = true;
     // The panel joins the document on the scene's next render; focus it once it is there.
     let raf = 0, tries = 0;
     const tryFocus = () => {
@@ -248,9 +287,41 @@ export default function OverviewStage(props: StageProps) {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
   const toggleFull = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
+    if (!hasFullscreen()) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     else void rootRef.current?.requestFullscreen().catch(() => {});
   };
+  // Esc closes the open detail while focus is in the stage or nowhere (a pressed button that turned disabled drops
+  // focus to <body>). A nested dialog that handled its own Esc, or a field being typed in, keeps it open.
+  const hasDetail = !!props.detail;
+  const onCloseDetailRef = useLatest(props.onCloseDetail);
+  useEffect(() => {
+    if (!hasDetail) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const active = document.activeElement;
+      if (typing(active) || !(active === document.body || active === null || rootRef.current?.contains(active))) return;
+      e.preventDefault();
+      onCloseDetailRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasDetail, onCloseDetailRef]);
+  // Dialogs (e.g. a device's threshold settings) portal to <body>, which fullscreen would hide: leave fullscreen
+  // when one opens, so it is always visible.
+  useEffect(() => {
+    if (!full) return;
+    const mo = new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) {
+        if (n instanceof HTMLElement && !rootRef.current?.contains(n) && (n.matches("[role=dialog], [role=alertdialog]") || n.querySelector("[role=dialog], [role=alertdialog]"))) {
+          void document.exitFullscreen().catch(() => {});
+          return;
+        }
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [full]);
 
   useEffect(() => { engineRef.current?.setData(stable.layout); }, [stable]);
   useEffect(() => { engineRef.current?.setReducedMotion(reduced); }, [reduced]);
@@ -276,8 +347,7 @@ export default function OverviewStage(props: StageProps) {
   const go = (p: Preset) => { setTour(false); engineRef.current?.preset(p); };
   // 1 / 2 / 3 only while focus is inside the stage (WCAG 2.1.4: no page-wide single-key shortcuts).
   const onKey = (e: ReactKeyboardEvent) => {
-    if (e.key === "Escape" && props.detail) { e.preventDefault(); props.onCloseDetail(); return; }
-    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || typing(e.target as Element)) return;
+    if (e.defaultPrevented || typing(e.target as Element) || e.altKey || e.ctrlKey || e.metaKey) return;
     const preset = ({ "1": "overview", "2": "top", "3": "alert" } as Record<string, Preset>)[e.key];
     if (preset) { e.preventDefault(); go(preset); }
   };
@@ -292,12 +362,13 @@ export default function OverviewStage(props: StageProps) {
 
   const hoveredCard = hovered ? byKey.get(hovered) : undefined;
   const empty = stable.layout.nodes.length === 0;
+  const lists = props.panels.filter((p): p is { key: StageListKey; node: ReactNode } => !!p.node);
   const shownKeys = labelKeys.filter((k) => byKey.has(k));
 
   return (
-    <div ref={rootRef} className={`ov3d${reduced ? " is-still" : ""}${full ? " is-full" : ""}`} onKeyDown={onKey}>
+    <div ref={rootRef} className={`ov3d${reduced ? " is-still" : ""}${full ? " is-full" : ""}${compact ? " is-compact" : ""}`} onKeyDown={onKey}>
       {/* Tab order: the HUD, then the in-scene panels (KPIs, lists, SOS, detail), then the scene and its labels. */}
-      <div className="ov3d-hud" role="region" aria-label="ตัวควบคุมภาพรวม 3D">
+      <div ref={hudRef} className="ov3d-hud" role="region" aria-label="ตัวควบคุมภาพรวม 3D">
         <div className="ov3d-hud-head">
           <strong>ภาพรวม 3D</strong>
           {props.status}
@@ -306,20 +377,24 @@ export default function OverviewStage(props: StageProps) {
             <button type="button" onClick={() => go("top")} title="มุมบน (2)"><ScanEye size={15} aria-hidden="true" /><span className="ov3d-sr">มุมบน</span><kbd>2</kbd></button>
             <button type="button" className={target?.sos ? "is-sos" : target ? "is-alert" : ""} disabled={!target} onClick={() => go("alert")} title={target ? `ไปที่เหตุ: ${target.name} (3)` : "ไม่มีเหตุที่ต้องดูในตัวกรองนี้"}><Crosshair size={15} aria-hidden="true" /><span className="ov3d-sr">ไปที่เหตุ</span><kbd>3</kbd></button>
             <button type="button" aria-pressed={tour} disabled={reduced} title={reduced ? "ทัวร์ปิดอยู่ เพราะตั้งค่าลดการเคลื่อนไหวไว้" : "ทัวร์ · หมุนกล้องรอบช้า ๆ · ลากเมื่อไรก็หยุด"} onClick={() => setTour(engineRef.current?.setTour(!tour) ?? false)}>{tour ? <Pause size={15} aria-hidden="true" /> : <Orbit size={15} aria-hidden="true" />}<span className="ov3d-sr">ทัวร์</span></button>
-            <button type="button" aria-pressed={full} onClick={toggleFull} title={full ? "ออกจากเต็มจอ (Esc)" : "เต็มจอ"}>{full ? <Minimize size={15} aria-hidden="true" /> : <Maximize size={15} aria-hidden="true" />}<span className="ov3d-sr">เต็มจอ</span></button>
+            {hasFullscreen() && <button type="button" aria-pressed={full} onClick={toggleFull} title={full ? "ออกจากเต็มจอ (Esc)" : "เต็มจอ"}>{full ? <Minimize size={15} aria-hidden="true" /> : <Maximize size={15} aria-hidden="true" />}<span className="ov3d-sr">เต็มจอ</span></button>}
             <button type="button" className={`ov3d-filter-btn${hudOpen ? " is-on" : ""}`} aria-expanded={hudOpen} onClick={() => setHudOpen(!hudOpen)} title="ตัวกรอง: โปรเจค ชนิด ต้องดู ค้นหา">{hudOpen ? <ChevronUp size={15} aria-hidden="true" /> : <SlidersHorizontal size={15} aria-hidden="true" />}ตัวกรอง</button>
+            {compact && <button type="button" className={`ov3d-filter-btn${listsOpen ? " is-on" : ""}`} aria-expanded={listsOpen} onClick={() => setListsOpen(!listsOpen)} title="รายการ: ต้องดูตอนนี้ ใครอยู่ที่ไหน Gateway เหตุการณ์ล่าสุด"><ListIcon size={15} aria-hidden="true" />รายการ</button>}
             <button type="button" onClick={props.onShowCards} title="กลับไปมุมมองการ์ด"><LayoutGrid size={15} aria-hidden="true" />การ์ด</button>
           </div>
         </div>
         {hudOpen && <div className="ov3d-hud-filters">{props.filters}</div>}
+        {/* Compact stage: the side lists live in this drawer instead of the scene. */}
+        {compact && listsOpen && <div className="ov3d-hud-lists">{lists.map((p) => <div key={p.key} className="ov3d-hud-list">{p.node}</div>)}</div>}
       </div>
 
       <div ref={cssHostRef} className="ov3d-css-host" />
-      {props.kpis.map((k, i) => <Panel3D key={k.key} registry={registry} id={`kpi-${k.key}`} kind="kpi" place={{ slot: `kpi-${i}` }} width={1}>{k.node}</Panel3D>)}
-      {props.panels.filter((p) => p.node).map((p) => <Panel3D key={p.key} registry={registry} id={`list-${p.key}`} kind="list" place={{ slot: LIST_SLOT[p.key] ?? "left-0" }} width={1}>{p.node}</Panel3D>)}
+      {props.kpis.map((k, i) => <Panel3D key={k.key} registry={registry} id={`kpi-${k.key}`} kind="kpi" place={{ slot: `kpi-${i}` }}>{k.node}</Panel3D>)}
+      {!compact && lists.map((p) => <Panel3D key={p.key} registry={registry} id={`list-${p.key}`} kind="list" place={{ slot: LIST_SLOT[p.key] }}>{p.node}</Panel3D>)}
       {props.sos && <Panel3D registry={registry} id="sos" kind="sos" place={{ above: props.sos.key }} width={Math.max(10, wall * 0.5)}>{props.sos.node}</Panel3D>}
       {props.detail && (
-        <Panel3D registry={registry} id="detail" kind="detail" place={{ beside: props.detail.key }} width={9.5} label={`รายละเอียด ${props.detail.title}`}>
+        // Keyed by device: switching device remounts the card and its controls (no command can reach the previous one).
+        <Panel3D key={props.detail.key} registry={registry} id="detail" kind="detail" place={{ beside: props.detail.key }} width={9.5} label={`รายละเอียด ${props.detail.title}`}>
           <div className={`ov3d-detail-head${props.detail.sos ? " is-sos" : ""}`}>
             <div><strong>{props.detail.title}</strong><small>{props.detail.subtitle}</small></div>
             <button ref={closeRef} type="button" className="ov3d-close" aria-label="ปิดรายละเอียด (Esc)" title="ปิด (Esc)" onClick={props.onCloseDetail}><X size={16} aria-hidden="true" /></button>

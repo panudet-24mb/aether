@@ -13,25 +13,25 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
-import { KPI_PX, LIST_PX_W, pickLabels, wallSlots, type ScreenRect } from "./layout";
+import { KPI_PX, LIST_PX_W, pickLabels, rectsOverlap, wallSlots, type ListSlot, type ScreenRect } from "./layout";
 import { labelTier, poweredOn, SHAPES, shapeOf, type HubPlace, type NodePlace, type Shape } from "./types";
 
 export type Quality = "high" | "med" | "low";
 
-/** Where an in-scene panel sits: a world point, beside a device (the detail), or above one (the SOS banner). */
-export type PanelPlace = { at: [number, number, number] } | { beside: string } | { above: string } | { slot: string };
+/** Where an in-scene panel sits: a wall slot (KPIs, lists), beside a device (the detail) or above one (the SOS banner). */
+export type PanelPlace = { slot: string } | { beside: string } | { above: string };
 export type PanelKind = "kpi" | "list" | "sos" | "detail";
-/** One CSS3D panel: React renders into `el` (a portal); the engine places, turns and fades it. `width` is in world units. */
+/** One in-scene panel: React renders into `el` (a portal); the engine places, scales and fades it. `width` (world units)
+ *  is used by the SOS banner and the detail; a wall slot's width comes from its slot. */
 export type PanelSpec = { el: HTMLElement; place: PanelPlace; width: number; kind: PanelKind };
 /** CSS pixel width of each panel kind (stage.css sets the same widths). */
 const PANEL_PX: Record<PanelKind, number> = { kpi: KPI_PX.w, list: LIST_PX_W, sos: 600, detail: 460 };
 /** Wall slots sit behind (KPIs) or a little in front of (lists) the default view's target. */
 const SLOT_DEPTH: Partial<Record<PanelKind, number>> = { kpi: 1.2, list: 0.95 };
-/** Pixels the HUD row takes at the top of the stage, and the bottom-corner controls at the bottom. */
-const HUD_ROW = 60, BOTTOM_ROW = 48;
-/** The CSS3D scene runs at K× the WebGL scale, so panels sit near scale 1 and the browser rasterises text crisply. */
-const CSS_K = 40;
+/** Pixels the bottom-corner controls take at the bottom of the stage. */
+const BOTTOM_ROW = 48;
+
+type Panel = { el: HTMLElement; spec: PanelSpec; at: THREE.Vector3; width: number };
 
 /** Panels React has mounted, by key; the engine binds to it once it exists (panels can mount before the engine). */
 export class PanelRegistry {
@@ -188,13 +188,20 @@ export class ConstellationEngine {
   private raycaster = new THREE.Raycaster();
   private disposed = false;
 
-  private css: CSS3DRenderer;
   private cssHost: HTMLElement | null;
-  private cssScene = new THREE.Scene();
-  private cssCamera = new THREE.PerspectiveCamera();
-  private panels = new Map<string, { obj: CSS3DObject; spec: PanelSpec; at: THREE.Vector3; width: number }>();
+  private panels = new Map<string, Panel>();
   private safeTop = 0;
   private safeBottom = 0;
+  private hudHeight = 44;
+  /** The camera is at (or flying to) the overview pose: a reflow keeps it there so the panels stay on their slots. */
+  private atHome = false;
+  private tweenHome = false;
+  private detailFrame = { f: 0.46, h: 0.7 };
+  private detailRO: ResizeObserver | null = null;
+  /** The device whose detail is open: its label always shows (above every tier) beside its ring. */
+  private selected: string | null = null;
+  private selectedAt: number[] | null = null;
+  private selectRing: THREE.Mesh;
   private registry: PanelRegistry | null = null;
   private cssDirty = true;
   private lastCam = new THREE.Matrix4();
@@ -214,11 +221,8 @@ export class ConstellationEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
-    // In-scene panels: a CSS3D layer over the canvas sharing the camera (crisp, clickable, accessible Thai text).
-    this.css = new CSS3DRenderer();
-    this.css.domElement.className = "ov3d-css";
+    // In-scene panels live in a DOM layer over the canvas (crisp, clickable, accessible Thai text), placed from the camera.
     this.cssHost = opts.cssHost ?? null;
-    this.cssHost?.appendChild(this.css.domElement);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const room = new RoomEnvironment();
@@ -241,6 +245,10 @@ export class ConstellationEngine {
     this.hoverRing.rotation.x = -Math.PI / 2;
     this.hoverRing.visible = false;
     this.fx.add(this.hoverRing);
+    this.selectRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.08, 64), new THREE.MeshBasicMaterial({ color: palette.accent, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    this.selectRing.rotation.x = -Math.PI / 2;
+    this.selectRing.visible = false;
+    this.fx.add(this.selectRing);
 
     this.camera.position.set(0, 30, 50);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -252,7 +260,7 @@ export class ConstellationEngine {
     this.controls.screenSpacePanning = false;
     this.controls.listenToKeyEvents(host);
     this.controls.addEventListener("change", () => this.invalidate());
-    this.controls.addEventListener("start", () => { this.tween = null; if (this.touring) { this.touring = false; this.hooks.onTourEnd(); } });
+    this.controls.addEventListener("start", () => { this.tween = null; this.atHome = false; if (this.touring) { this.touring = false; this.hooks.onTourEnd(); } });
 
     this.applyTier();
     this.ro = new ResizeObserver(() => this.resize());
@@ -283,9 +291,7 @@ export class ConstellationEngine {
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.controls.dispose();
     this.registry?.bind(null);
-    for (const p of this.panels.values()) this.cssScene.remove(p.obj); // CSS3DObject detaches its element on removal
-    this.panels.clear();
-    this.css.domElement.remove();
+    for (const key of [...this.panels.keys()]) this.removePanel(key);
     this.clearData();
     disposeTree(this.platform);
     disposeTree(this.fx);
@@ -316,8 +322,7 @@ export class ConstellationEngine {
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
     this.composer?.setSize(w, h);
-    this.css.setSize(w, h);
-    this.relayoutSlots();
+    this.reflowPanels();
     this.cssDirty = true;
     this.bloom?.setSize(w, h);
     this.camera.aspect = w / h;
@@ -475,12 +480,14 @@ export class ConstellationEngine {
     this.repickLabels();
   }
 
+  private tierOf(card: NodePlace["card"]) { return card.key === this.selected ? -1 : labelTier(card, this.hooks.controllable); }
+
   private repickLabels() {
     const cam = this.camera.position;
     // The label holding keyboard focus stays in the set, so moving the camera never drops focus.
     const focused = typeof document !== "undefined" ? document.activeElement : null;
     const keep = focused ? this.labelKeys.find((k) => this.hooks.labelEl(k)?.contains(focused)) : undefined;
-    const keys = pickLabels(this.nodes.map((n) => ({ key: n.card.key, tier: labelTier(n.card, this.hooks.controllable), dist: Math.hypot(n.at[0] - cam.x, n.at[1] - cam.y, n.at[2] - cam.z) })), MAX_LABELS, keep);
+    const keys = pickLabels(this.nodes.map((n) => ({ key: n.card.key, tier: this.tierOf(n.card), dist: Math.hypot(n.at[0] - cam.x, n.at[1] - cam.y, n.at[2] - cam.z) })), MAX_LABELS, keep);
     const same = keys.length === this.labelKeys.length && keys.every((k, i) => k === this.labelKeys[i]);
     if (same) return;
     this.labelKeys = keys;
@@ -502,7 +509,7 @@ export class ConstellationEngine {
     };
     for (const key of this.labelKeys) {
       const r = this.refs.get(key);
-      if (r) project(this.hooks.labelEl(key), r.place.at, 0.55, labelTier(r.place.card, this.hooks.controllable));
+      if (r) project(this.hooks.labelEl(key), r.place.at, 0.55, this.tierOf(r.place.card));
     }
     for (const hp of this.hubs) project(this.hooks.hubLabelEl(hp.hub.id), hp.at, 0, 1.5, true);
     items.sort((a, b) => a.tier - b.tier || a.z - b.z);
@@ -553,6 +560,7 @@ export class ConstellationEngine {
 
   /** Rebuilds the constellation from a layout (cheap: a handful of instanced meshes). The camera stays where it is. */
   setData(layout: { hubs: HubPlace[]; nodes: NodePlace[]; radius: number }) {
+    const selectedWas = this.selectedAt;
     this.layout = layout;
     this.clearData();
     const P = this.palette, low = this.tier === "low";
@@ -693,7 +701,15 @@ export class ConstellationEngine {
     if (this.hovered && !this.refs.has(this.hovered)) this.setHovered(null);
     this.step(performance.now());
     if (!this.framed && this.nodes.length + this.hubs.length > 0) { this.framed = true; this.intro(); }
-    for (const [key, p] of this.panels) if ("above" in p.spec.place || "slot" in p.spec.place) this.placePanel(key, p.spec, false);
+    for (const [key, p] of this.panels) if ("above" in p.spec.place) this.placePanel(key, p.spec, false);
+    this.reflowPanels();
+    // The open detail follows its device when a filter change moves it (data refreshes never move devices).
+    for (const [key, p] of this.panels) {
+      if (p.spec.kind !== "detail" || !("beside" in p.spec.place)) continue;
+      const at = this.refs.get(p.spec.place.beside)?.place.at;
+      if (at && selectedWas && (at[0] !== selectedWas[0] || at[1] !== selectedWas[1] || at[2] !== selectedWas[2])) this.placePanel(key, p.spec, true, true);
+      this.markSelected(p.spec.place.beside);
+    }
     this.lastLabelPick = 0;
     this.repickLabels();
     this.invalidate();
@@ -736,6 +752,7 @@ export class ConstellationEngine {
     this.hemi.color.copy(palette.ink);
     this.hemi.groundColor.copy(palette.paper);
     (this.hoverRing.material as THREE.MeshBasicMaterial).color.copy(palette.ink);
+    (this.selectRing.material as THREE.MeshBasicMaterial).color.copy(palette.accent);
     this.applyFog();
     disposeTree(this.platform);
     this.platform.clear();
@@ -743,48 +760,55 @@ export class ConstellationEngine {
     else this.invalidate();
   }
 
-  // ---- in-scene panels (CSS3D) ------------------------------------------------------------------------------
+  // ---- in-scene panels -------------------------------------------------------------------------------------
 
   bindPanels(registry: PanelRegistry) {
     this.registry = registry;
     registry.bind((key, spec) => {
       const wasSlot = !!this.panels.get(key) && "slot" in this.panels.get(key)!.spec.place;
       if (spec) this.placePanel(key, spec, true);
-      else {
-        const p = this.panels.get(key);
-        if (p) { this.cssScene.remove(p.obj); this.panels.delete(key); }
-      }
+      else this.removePanel(key);
       // The slot layout depends on how many KPI tiles there are: a tile coming or going re-places the wall.
-      if (wasSlot || (spec && "slot" in spec.place)) this.relayoutSlots();
+      if (wasSlot || (spec && "slot" in spec.place)) this.reflowPanels();
       this.cssDirty = true;
       this.invalidate();
     });
   }
 
-  /** Creates or moves a panel. A newly placed detail panel flies the camera to frame it with its device. */
-  private placePanel(key: string, spec: PanelSpec, fresh: boolean) {
+  private removePanel(key: string) {
+    const p = this.panels.get(key);
+    if (!p) return;
+    p.el.remove();
+    this.panels.delete(key);
+    if (p.spec.kind === "detail") { this.detailRO?.disconnect(); this.detailRO = null; this.markSelected(null); }
+  }
+
+  /** Creates or moves a panel. A new device detail flies the camera to frame the device and the card together. */
+  private placePanel(key: string, spec: PanelSpec, fresh: boolean, replan = false) {
     let p = this.panels.get(key);
-    if (p && p.obj.element !== spec.el) { this.cssScene.remove(p.obj); p = undefined; }
-    const keepBeside = !!p && "beside" in spec.place && "beside" in p.spec.place && p.spec.place.beside === spec.place.beside;
-    const resolved = keepBeside ? { at: p!.at, width: spec.width } : this.resolve(spec);
-    const at = resolved.at;
+    if (p && p.el !== spec.el) { this.removePanel(key); p = undefined; }
+    const keepBeside = !replan && !!p && "beside" in spec.place && "beside" in p.spec.place && p.spec.place.beside === spec.place.beside;
+    const plan = !keepBeside && "beside" in spec.place ? this.detailPlan(spec) : null;
+    const resolved = keepBeside ? { at: p!.at, width: spec.width } : plan ? { at: plan.at, width: spec.width } : this.resolve(spec);
     if (!p) {
-      const obj = new CSS3DObject(spec.el);
-      this.cssScene.add(obj);
-      p = { obj, spec, at, width: spec.width };
+      this.cssHost?.appendChild(spec.el);
+      p = { el: spec.el, spec, at: resolved.at.clone(), width: spec.width };
       this.panels.set(key, p);
+      if (spec.kind === "detail") {
+        // Its height changes as its content loads: the overlap fade must follow.
+        this.detailRO = new ResizeObserver(() => { this.cssDirty = true; this.invalidate(); });
+        this.detailRO.observe(spec.el);
+      }
     }
     p.spec = spec;
-    p.at.copy(at);
-    p.obj.position.copy(at).multiplyScalar(CSS_K);
+    p.at.copy(resolved.at);
     p.width = resolved.width;
-    p.obj.scale.setScalar((resolved.width * CSS_K) / PANEL_PX[spec.kind]);
-    if (spec.kind === "detail") this.fitDetail(spec);
-    if (fresh && !keepBeside && "beside" in spec.place) {
-      const node = this.refs.get(spec.place.beside)?.place.at;
-      const mid = node ? new THREE.Vector3(...node).lerp(at, 0.5) : at.clone();
-      this.focusPoint([mid.x, mid.y, mid.z], spec.width * 1.7 + 6, true);
+    if (spec.kind === "detail") {
+      if (plan) this.detailFrame = plan.frame;
+      this.fitDetail(spec);
+      this.markSelected("beside" in spec.place ? spec.place.beside : null);
     }
+    if (fresh && plan?.camPos) { this.atHome = false; this.touring = false; this.flyTo(plan.camPos, plan.target, 1300); }
     this.cssDirty = true;
   }
 
@@ -792,42 +816,74 @@ export class ConstellationEngine {
   private resolve(spec: PanelSpec): { at: THREE.Vector3; width: number } {
     const place = spec.place;
     if ("slot" in place) return this.resolveSlot(spec, place.slot);
-    return { at: this.resolvePoint(spec), width: spec.width };
-  }
-
-  private resolvePoint(spec: PanelSpec): THREE.Vector3 {
-    const place = spec.place as Exclude<PanelPlace, { slot: string }>;
-    if ("at" in place) return new THREE.Vector3(...place.at);
     const key = "beside" in place ? place.beside : place.above;
     const node = this.refs.get(key)?.place.at;
+    if (!node) return { at: this.inFront(spec.width), width: spec.width };
+    return { at: new THREE.Vector3(node[0], node[1] + 5 + spec.width * 0.18, node[2]), width: spec.width };
+  }
+
+  /** A point in front of the camera where a panel of `width` takes about half the stage width. */
+  private inFront(width: number): THREE.Vector3 {
     const fwd = new THREE.Vector3();
     this.camera.getWorldDirection(fwd);
-    if (!node) {
-      // The device is filtered out of the scene: the panel opens in front of the camera.
-      return this.camera.position.clone().add(fwd.multiplyScalar(spec.width * 1.6 + 4));
-    }
-    const at = new THREE.Vector3(...node);
-    if ("above" in place) return at.add(new THREE.Vector3(0, 5 + spec.width * 0.18, 0));
-    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-    return at.add(right.multiplyScalar(spec.width / 2 + 2.2)).add(new THREE.Vector3(0, 1.5, 0));
+    const tan = Math.tan((this.camera.fov * Math.PI) / 360);
+    return this.camera.position.clone().add(fwd.multiplyScalar(width / (tan * this.camera.aspect)));
+  }
+
+  /**
+   * Framing for a device detail, keeping the camera's current orientation: the device lands on the left third
+   * (landscape) or the top of the frame (portrait), the card beside / below it, both at the same depth.
+   */
+  private detailPlan(spec: PanelSpec): { at: THREE.Vector3; camPos: THREE.Vector3 | null; target: THREE.Vector3; frame: { f: number; h: number } } {
+    const key = (spec.place as { beside: string }).beside;
+    const node = this.refs.get(key)?.place.at;
+    const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1, aspect = W / H, tan = Math.tan((this.camera.fov * Math.PI) / 360);
+    const portrait = aspect < 0.9;
+    // The visible band (NDC y) below the HUD and above the window's bottom edge.
+    const t = 1 - (2 * (this.safeTop + 12 + this.hudHeight + 12)) / H, b = -1 + (2 * (this.safeBottom + 12)) / H, band = Math.max(0.4, t - b);
+    // Portrait: the device near the top of the band, the card filling most of the rest below it. Landscape: the
+    // device on the left third, the card beside it, both centred in the band, the card at most ~70% tall.
+    const cardH = portrait ? 0.55 * band : Math.min(1.4, 0.9 * band);
+    const frame = portrait
+      ? { dev: [0, t - 0.28 * band], card: [0, b + cardH / 2 + 0.02], f: 0.92, h: cardH / 2 }
+      : { dev: [-0.5, (t + b) / 2 - 0.04], card: [0.4, (t + b) / 2], f: 0.46, h: cardH / 2 };
+    if (!node) return { at: this.inFront(spec.width), camPos: null, target: this.controls.target.clone(), frame };
+    const D = spec.width / (frame.f * 2 * tan * aspect);
+    const q = this.camera.quaternion;
+    const R = new THREE.Vector3(1, 0, 0).applyQuaternion(q), U = new THREE.Vector3(0, 1, 0).applyQuaternion(q), F = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+    const off = (x: number, y: number) => R.clone().multiplyScalar(x * D * tan * aspect).add(U.clone().multiplyScalar(y * D * tan));
+    const camPos = new THREE.Vector3(...node).sub(off(frame.dev[0], frame.dev[1])).sub(F.clone().multiplyScalar(D));
+    const target = camPos.clone().add(F.clone().multiplyScalar(D));
+    const at = target.clone().add(off(frame.card[0], frame.card[1]));
+    return { at, camPos, target, frame };
+  }
+
+  /** The selected device wears a ring while its detail is open. */
+  private markSelected(key: string | null) {
+    const at = key ? this.refs.get(key)?.place.at : undefined;
+    this.selectedAt = at ? [...at] : null;
+    if (this.selected !== (at ? key : null)) { this.selected = at ? key : null; this.lastLabelPick = 0; if (!this.disposed) this.repickLabels(); }
+    this.selectRing.visible = !!at;
+    if (at) this.selectRing.position.set(at[0], at[1] - 0.05, at[2]);
+    this.invalidate();
   }
 
   /** The default view's screen layout for the current stage size (pure: layout.ts wallSlots). */
   private slots() {
     const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1;
     const kpis = [...this.panels.values()].filter((p) => "slot" in p.spec.place && p.spec.place.slot.startsWith("kpi-")).length || 6;
-    return { W, H, ...wallSlots(W, H, kpis, this.safeTop + HUD_ROW, H - BOTTOM_ROW - this.safeBottom) };
+    return { W, H, ...wallSlots(W, H, kpis, this.safeTop + 12 + this.hudHeight + 8, H - BOTTOM_ROW - this.safeBottom) };
   }
 
   /**
    * A wall slot: where a panel must sit in the world to land exactly on its screen rect in the default view, at a
    * depth behind (KPIs) or before (lists) the target. Panels are screen-aligned, so from that view none overlap;
-   * from any other angle they move like the rest of the scene.
+   * from any other angle they move like the rest of the scene. A slot the wall has no room for hides its panel.
    */
   private resolveSlot(spec: PanelSpec, slot: string): { at: THREE.Vector3; width: number } {
     const sl = this.slots(), pose = this.defaultPose();
-    const rect: ScreenRect | undefined = slot.startsWith("kpi-") ? sl.kpi[Number(slot.slice(4))] : sl.lists[slot as keyof typeof sl.lists];
-    if (!rect) return { at: pose.target.clone(), width: spec.width };
+    const rect: ScreenRect | undefined = slot.startsWith("kpi-") ? sl.kpi[Number(slot.slice(4))] : sl.lists[slot as ListSlot];
+    if (!rect || rect.w <= 0 || rect.h <= 0) return { at: pose.target.clone(), width: 0 };
     const cam = new THREE.PerspectiveCamera(this.camera.fov, sl.W / sl.H, 0.1, 4000);
     cam.position.copy(pose.pos);
     cam.lookAt(pose.target);
@@ -845,39 +901,58 @@ export class ConstellationEngine {
   private defaultPose(): { pos: THREE.Vector3; target: THREE.Vector3 } {
     const sl = this.slots(), tan = Math.tan((this.camera.fov * Math.PI) / 360), aspect = sl.W / sl.H;
     const rp = this.radius * 1.18 + 6;
-    const band = Math.max(0.35, (sl.H - (sl.kpi[0] ? sl.kpi[0].y + sl.kpi[0].h / 2 : 0)) / sl.H);
+    const kpiBottom = sl.kpi.reduce((b, r) => Math.max(b, r.y + r.h / 2), 0);
+    const band = Math.max(0.35, (sl.H - kpiBottom) / sl.H);
     const d = Math.max(rp / (sl.centre * tan * aspect), (rp * 0.7 + 3) / (band * tan));
     return { pos: new THREE.Vector3(0, 0.62, 0.78).normalize().multiplyScalar(d), target: new THREE.Vector3() };
   }
 
-  /** Re-places every wall-slot panel (stage resized, constellation changed, HUD moved). */
-  private relayoutSlots() {
+  /**
+   * After the stage, the constellation or the visible area changed: re-places the wall slots and re-fits the
+   * detail, and if the camera is at the overview pose, moves it to the new pose so the panels land on their slots.
+   */
+  private reflowPanels() {
     for (const [key, p] of this.panels) if ("slot" in p.spec.place || p.spec.kind === "detail") this.placePanel(key, p.spec, false);
+    if (!this.atHome) return;
+    const pose = this.defaultPose();
+    if (this.tween && this.tweenHome) { this.tween.toPos = pose.pos; this.tween.toTarget = pose.target; }
+    else if (!this.tween) { this.camera.position.copy(pose.pos); this.controls.target.copy(pose.target); }
+    this.invalidate();
   }
 
   /**
    * Pixels of the stage the viewer cannot see: under the app shell's fixed bars or scrolled off at the top, and
-   * below the window's bottom edge. The HUD, the KPI row and the lists stay inside what is visible.
+   * below the window's bottom edge; and the HUD's height. The HUD, the KPI row and the lists stay inside what is left.
    */
-  setSafeArea(top: number, bottom: number) {
-    if (Math.abs(top - this.safeTop) < 1 && Math.abs(bottom - this.safeBottom) < 1) return;
+  setSafeArea(top: number, bottom: number, hud: number) {
+    if (Math.abs(top - this.safeTop) < 1 && Math.abs(bottom - this.safeBottom) < 1 && Math.abs(hud - this.hudHeight) < 1) return;
     this.safeTop = top;
     this.safeBottom = bottom;
-    this.relayoutSlots();
+    this.hudHeight = hud;
+    this.reflowPanels();
     this.invalidate();
   }
 
-  /** The detail scrolls inside: at its framed distance it is at most ~70% of the stage height. */
+  /** The detail scrolls inside: in its framing it is at most ~70% (portrait ~50%) of the stage height. */
   private fitDetail(spec: PanelSpec) {
-    const H = this.host.clientHeight || 1, tan = Math.tan((this.camera.fov * Math.PI) / 360), dist = spec.width * 1.7 + 6;
-    const screenW = spec.width * (H / 2 / (dist * tan));
-    spec.el.style.maxHeight = `${Math.round((0.7 * H) / (screenW / PANEL_PX.detail))}px`;
+    const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1, { f, h } = this.detailFrame;
+    spec.el.style.maxHeight = `${Math.round((h * H * PANEL_PX.detail) / (f * W))}px`;
+  }
+
+  /** A faded panel is out of the way for the pointer, the keyboard and screen readers too. */
+  private setReachable(el: HTMLElement, on: boolean) {
+    if (el.inert === !on) return;
+    el.inert = !on;
+    if (on) el.removeAttribute("aria-hidden");
+    else el.setAttribute("aria-hidden", "true");
   }
 
   /**
-   * Re-renders the CSS3D layer only when the camera moved or a panel changed (not on ambient pulses). Panels face
-   * the camera and fade with distance. A panel steps aside (fade, no pointer) when it would cover the middle of the
-   * view in front of what the camera looks at, and drops to 0.06 wherever it overlaps an open device detail.
+   * Re-places the panel layer only when the camera moved or a panel changed (not on ambient pulses). Every panel is
+   * screen-aligned, so its perspective image is an exact 2D similarity: a translate and a uniform scale from its
+   * depth (no CSS 3D, so hit testing and text rendering stay exact). Nearer panels stack on top; panels fade with
+   * distance; a panel steps aside (faded, inert) when it would cover the middle of the view in front of the target,
+   * and drops to 0.06 wherever it overlaps an open device detail.
    */
   private renderPanels() {
     if (!this.cssHost) return;
@@ -889,37 +964,36 @@ export class ConstellationEngine {
     this.cssDirty = false;
     const cam = this.camera.position, targetDist = cam.distanceTo(this.controls.target), homeDist = this.defaultPose().pos.length(), v = new THREE.Vector3();
     const W = this.host.clientWidth || 1, H = this.host.clientHeight || 1, tan = Math.tan((this.camera.fov * Math.PI) / 360);
-    /** A screen-aligned panel's rect on screen (px), or null when it is behind the camera. */
-    const rectOf = (p: { at: THREE.Vector3; width: number; spec: PanelSpec; obj: CSS3DObject }): ScreenRect | null => {
+    // Screen rect (px) and scale of each panel; null when it is behind the camera or has no room.
+    const placed = new Map<Panel, { rect: ScreenRect; scale: number; depth: number } | null>();
+    for (const p of this.panels.values()) {
       v.copy(p.at).applyMatrix4(this.camera.matrixWorldInverse);
-      const z = -v.z;
-      if (z <= 0.01) return null;
-      const ppw = H / 2 / (z * tan), w = p.width * ppw, ratio = w / PANEL_PX[p.spec.kind];
+      const depth = -v.z;
+      if (depth <= this.camera.near || p.width <= 0) { placed.set(p, null); continue; }
+      const scale = (p.width * (H / 2 / (depth * tan))) / PANEL_PX[p.spec.kind];
       v.copy(p.at).project(this.camera);
-      return { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, w, h: (p.obj.element.offsetHeight || PANEL_PX[p.spec.kind] * 0.6) * ratio };
-    };
+      const rect = { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, w: PANEL_PX[p.spec.kind] * scale, h: (p.el.offsetHeight || PANEL_PX[p.spec.kind] * 0.6) * scale };
+      placed.set(p, { rect, scale, depth });
+    }
     // An open device detail wins: every other panel that overlaps it on screen steps right back.
     let detailRect: ScreenRect | null = null;
-    for (const p of this.panels.values()) if (p.spec.kind === "detail") detailRect = rectOf(p);
+    for (const p of this.panels.values()) if (p.spec.kind === "detail") detailRect = placed.get(p)?.rect ?? null;
     for (const p of this.panels.values()) {
-      // Screen-aligned: a panel always faces the viewer squarely, so its text stays readable from any orbit angle.
-      p.obj.quaternion.copy(this.camera.quaternion);
+      const el = p.el, at = placed.get(p);
+      if (!at) { if (el.style.display !== "none") el.style.display = "none"; this.setReachable(el, false); continue; }
+      if (el.style.display === "none") el.style.display = "";
+      el.style.transform = `translate(${at.rect.x.toFixed(1)}px, ${at.rect.y.toFixed(1)}px) scale(${at.scale.toFixed(4)}) translate(-50%, -50%)`;
+      el.style.zIndex = String(Math.max(1, 100000 - Math.round(at.depth * 100)));
+      if (p.spec.kind === "detail") { el.style.opacity = "1"; el.style.pointerEvents = "auto"; this.setReachable(el, true); continue; }
       v.copy(p.at).project(this.camera);
-      const el = p.obj.element, behind = v.z > 1;
-      if (el.style.display !== (behind ? "none" : "")) el.style.display = behind ? "none" : "";
-      if (behind) continue;
-      if (p.spec.kind === "detail") { el.style.opacity = "1"; el.style.pointerEvents = "auto"; continue; }
-      const d = cam.distanceTo(p.at), r = detailRect ? rectOf(p) : null;
-      const underDetail = !!(detailRect && r && Math.abs(r.x - detailRect.x) * 2 < r.w + detailRect.w && Math.abs(r.y - detailRect.y) * 2 < r.h + detailRect.h);
+      const d = cam.distanceTo(p.at);
+      const underDetail = !!(detailRect && rectsOverlap(at.rect, detailRect));
       const blocking = p.spec.kind !== "sos" && ((d < targetDist * 0.85 && Math.abs(v.x) < 0.45 && Math.abs(v.y) < 0.45) || d < targetDist * 0.55);
       const opacity = underDetail ? 0.06 : p.spec.kind === "sos" ? 1 : blocking ? 0.12 : Math.max(0.5, Math.min(1, 1 - (d - homeDist * 1.3) / (homeDist * 1.5)));
       el.style.opacity = opacity.toFixed(2);
       el.style.pointerEvents = underDetail || blocking ? "none" : "auto";
+      this.setReachable(el, !(underDetail || blocking));
     }
-    this.cssCamera.copy(this.camera);
-    this.cssCamera.position.multiplyScalar(CSS_K);
-    this.cssCamera.updateMatrixWorld();
-    this.css.render(this.cssScene, this.cssCamera);
   }
 
   /** The first view: a short fly-in from high above (a cut with reduced motion). */
@@ -933,11 +1007,10 @@ export class ConstellationEngine {
 
   // ---- camera ------------------------------------------------------------------------------------------------
 
-
-
   /** Moves the camera to a preset; "alert" goes to the first SOS (else the first alert) and reports whether one exists. */
   preset(p: Preset, ms = 1400): boolean {
     this.touring = false;
+    this.atHome = false;
     // Top: the whole platform inside the frame's shorter side.
     if (p === "top") { this.flyTo(new THREE.Vector3(0, ((this.radius * 1.18 + 6) / Math.tan((this.camera.fov * Math.PI) / 360)) / Math.min(1, this.camera.aspect) * 1.02, 0.01), new THREE.Vector3(0, 0, 0), ms); return true; }
     if (p === "alert") {
@@ -950,6 +1023,8 @@ export class ConstellationEngine {
     }
     const pose = this.defaultPose();
     this.flyTo(pose.pos, pose.target, ms);
+    this.atHome = true;
+    this.tweenHome = !!this.tween;
     return true;
   }
 
@@ -958,17 +1033,12 @@ export class ConstellationEngine {
     if (hp) this.focusPoint([hp.at[0], 1, hp.at[2]], Math.max(10, hp.radius * 2.6));
   }
 
-  focusNode(key: string) {
-    const r = this.refs.get(key);
-    if (r) this.focusPoint(r.place.at, 16);
-  }
-
-  /** Flies to a point, approaching from the platform's outside edge (keeps the constellation behind it). */
-  private focusPoint(at: [number, number, number], dist: number, keepHeading = false) {
+  /** Flies to a point from the platform's outside edge (keeps the constellation behind it). */
+  private focusPoint(at: [number, number, number], dist: number) {
     this.touring = false;
+    this.atHome = false;
     const target = new THREE.Vector3(...at);
-    // Normally from the platform's outside edge; a detail panel keeps the current heading, so it stays beside its device.
-    const out = keepHeading ? this.camera.position.clone().sub(this.controls.target).setY(0) : new THREE.Vector3(at[0], 0, at[2]);
+    const out = new THREE.Vector3(at[0], 0, at[2]);
     if (out.lengthSq() < 1) out.copy(this.camera.position).setY(0);
     out.normalize();
     const pos = target.clone().add(out.multiplyScalar(dist * 0.75)).add(new THREE.Vector3(0, dist * 0.7, 0));
@@ -977,12 +1047,13 @@ export class ConstellationEngine {
 
   setTour(on: boolean) {
     this.touring = on && !this.reducedMotion;
-    if (this.touring) this.tween = null;
+    if (this.touring) { this.tween = null; this.atHome = false; }
     this.invalidate();
     return this.touring;
   }
 
   private flyTo(pos: THREE.Vector3, target: THREE.Vector3, ms: number) {
+    this.tweenHome = false;
     if (this.reducedMotion || ms <= 0) {
       this.tween = null;
       this.camera.position.copy(pos);
@@ -992,6 +1063,7 @@ export class ConstellationEngine {
     }
     this.invalidate();
   }
+
 
   // ---- picking --------------------------------------------------------------------------------------------------
 

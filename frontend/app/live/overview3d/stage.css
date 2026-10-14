@@ -1,0 +1,93 @@
+/* Overview 3D mode (docs/platform/overview-3d.md): a dark holographic stage in the Aether accent. Loaded with the
+   stage chunk only. Labels are DOM elements positioned by the engine every frame. */
+.ov3d { position: relative; height: clamp(440px, calc(100dvh - 300px), 1100px); min-width: 0; border: 1px solid var(--color-border); border-radius: 12px; overflow: hidden; background: var(--color-paper); isolation: isolate; }
+.ov3d-canvas { position: absolute; inset: 0; outline: none; touch-action: none; }
+.ov3d-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.ov3d-canvas canvas { display: block; }
+.ov3d-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 46%, transparent 55%, color-mix(in oklab, var(--color-paper) 88%, transparent) 100%); }
+
+.ov3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.ov3d-label, .ov3d-hub { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: auto; will-change: transform; }
+.ov3d-label { display: flex; flex-direction: column; gap: 4px; max-width: 210px; padding: 5px 8px 6px; border-radius: 8px; border: 1px solid color-mix(in oklab, var(--color-accent) 22%, transparent); background: color-mix(in oklab, var(--color-paper) 84%, transparent); backdrop-filter: blur(6px); box-shadow: 0 6px 18px var(--color-shadow); margin-top: -6px; }
+.ov3d-label::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 1px; height: 7px; background: color-mix(in oklab, var(--color-accent) 45%, transparent); }
+.ov3d-label-main { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--color-ink); text-align: left; cursor: pointer; font: inherit; }
+.ov3d-label-main:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 4px; }
+.ov3d-label-head { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; font-size: 11.5px; }
+.ov3d-label-head .ov-dot { width: 7px; height: 7px; }
+.ov3d-label-head .ov-sos-tag { font-size: 9.5px; padding: 1px 4px; }
+.ov3d-label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-weight: 500; }
+.ov3d-label .ov-value { font-size: 14px; max-width: 100%; }
+.ov3d-label .ov-value small { font-size: 10px; }
+.ov3d-label .ov-value em { font-size: 11.5px; margin-left: 4px; }
+.ov3d-label .ov-value.is-muted { font-size: 11.5px; }
+.ov3d-label .ov-comfort { font-size: 9.5px; margin-left: 5px; padding: 0 5px; }
+.ov3d-label.is-offline { opacity: .7; border-color: var(--color-border); }
+.ov3d-label.is-offline::after { background: var(--color-border); }
+.ov3d-label.is-stale { border-color: color-mix(in oklab, var(--color-warning) 35%, transparent); }
+.ov3d-label.is-alert { border-color: color-mix(in oklab, var(--color-danger) 65%, transparent); background: color-mix(in oklab, var(--color-danger) 14%, color-mix(in oklab, var(--color-paper) 86%, transparent)); }
+.ov3d-label.is-alert::after { background: var(--color-danger); }
+.ov3d-label.is-sos { border: 2px solid var(--color-danger); background: color-mix(in oklab, var(--color-danger) 24%, var(--color-paper)); animation: ov3d-sos 1.4s ease-in-out infinite; }
+.ov3d-label.is-occupied { border-color: color-mix(in oklab, var(--color-accent) 60%, transparent); }
+.ov3d-label.is-door-long { border-color: var(--color-warning); background: color-mix(in oklab, var(--color-warning) 12%, color-mix(in oklab, var(--color-paper) 86%, transparent)); }
+@keyframes ov3d-sos { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-danger) 55%, transparent); } 50% { box-shadow: 0 0 0 7px transparent; } }
+
+.ov3d-hub { --ov3d-hub: var(--color-accent); display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--ov3d-hub) 45%, transparent); background: color-mix(in oklab, var(--color-paper) 78%, transparent); color: var(--color-ink); font-size: 11.5px; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; cursor: pointer; backdrop-filter: blur(4px); }
+.ov3d-hub i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-dim); }
+.ov3d-hub.is-online i { background: var(--ov3d-hub); box-shadow: 0 0 8px var(--ov3d-hub); }
+.ov3d-hub:not(.is-online) { color: var(--color-muted); }
+.ov3d-hub small { color: var(--color-muted); font-size: 10.5px; letter-spacing: 0; }
+.ov3d-hub:hover { border-color: var(--ov3d-hub); }
+.ov3d-hub:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.ov3d-power-wrap { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.ov3d-power { display: inline-flex; align-items: center; gap: 5px; height: 22px; min-height: 0; padding: 0 8px 0 6px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-panel-raised); color: var(--color-muted); font-size: 11px; line-height: 1; cursor: pointer; }
+.ov3d-power.is-on { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-faint); }
+.ov3d-power.is-pending { opacity: .8; cursor: progress; }
+.ov3d-power.is-confirmed { border-color: var(--color-accent); }
+.ov3d-power.is-failed { border-color: var(--color-warning); color: var(--color-warning); }
+.ov3d-power.is-readonly { cursor: default; }
+.ov3d-power:disabled:not(.is-pending) { opacity: .55; cursor: not-allowed; }
+.ov3d-power:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ov3d-power-error { max-width: 190px; font-size: 10.5px; line-height: 1.35; color: var(--color-warning); white-space: normal; }
+
+.ov3d-tooltip { position: absolute; left: 0; top: 0; z-index: 2000; display: flex; flex-direction: column; gap: 3px; max-width: 260px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 94%, transparent); color: var(--color-muted); font-size: 11px; pointer-events: none; box-shadow: 0 10px 28px var(--color-shadow); }
+.ov3d-tooltip[hidden] { display: none; }
+.ov3d-tooltip strong { color: var(--color-ink); font-size: 12.5px; font-weight: 500; }
+.ov3d-tooltip .ov-value { font-size: 18px; }
+.ov3d-tip-status { color: var(--color-accent); }
+.ov3d-tip-status.is-stale { color: var(--color-warning); }
+.ov3d-tip-status.is-alert, .ov3d-tip-status.is-sos { color: var(--color-danger); }
+.ov3d-tip-status.is-offline { color: var(--color-dim); }
+
+.ov3d-toolbar { position: absolute; top: 10px; left: 10px; z-index: 2100; display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 10px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 86%, transparent); backdrop-filter: blur(6px); max-width: calc(100% - 20px); }
+.ov3d-toolbar button { display: inline-flex; align-items: center; gap: 5px; height: 28px; min-height: 0; padding: 0 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-muted); font-size: 12px; cursor: pointer; }
+.ov3d-toolbar button:hover:not(:disabled) { color: var(--color-ink); background: var(--color-panel-raised); }
+.ov3d-toolbar button[aria-pressed="true"] { color: var(--color-accent); background: var(--color-accent-faint); border-color: color-mix(in oklab, var(--color-accent) 35%, transparent); }
+.ov3d-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+.ov3d-toolbar button.is-alert { color: var(--color-danger); }
+.ov3d-toolbar button.is-sos { color: var(--color-paper); background: var(--color-danger); }
+.ov3d-toolbar button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.ov3d-toolbar kbd { font: inherit; font-size: 10px; color: var(--color-dim); border: 1px solid var(--color-border); border-radius: 4px; padding: 0 4px; line-height: 15px; }
+.ov3d-toolbar button.is-sos kbd { color: inherit; border-color: currentColor; }
+
+.ov3d-legend { position: absolute; left: 10px; bottom: 10px; z-index: 2100; max-width: min(340px, calc(100% - 20px)); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: color-mix(in oklab, var(--color-panel) 86%, transparent); backdrop-filter: blur(6px); color: var(--color-muted); font-size: 11px; }
+.ov3d-legend summary { display: flex; align-items: center; gap: 5px; cursor: pointer; list-style: none; }
+.ov3d-legend summary::-webkit-details-marker { display: none; }
+.ov3d-legend ul { list-style: none; margin: 7px 0 4px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+.ov3d-legend li { display: flex; align-items: center; gap: 6px; }
+.ov3d-legend p { margin: 4px 0 2px; line-height: 1.5; }
+.ov3d-legend .sw { width: 9px; height: 9px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 6px currentColor; color: var(--color-accent); }
+.ov3d-legend .sw.is-stale { background: var(--color-warning); color: var(--color-warning); }
+.ov3d-legend .sw.is-alert { background: var(--color-danger); color: var(--color-danger); }
+.ov3d-legend .sw.is-offline { background: var(--color-dim); color: transparent; opacity: .6; }
+.ov3d-legend .sw.is-sos { width: 4px; height: 13px; border-radius: 2px; background: var(--color-danger); color: var(--color-danger); }
+.ov3d-legend .ring { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--color-accent); }
+
+.ov3d-demo { position: absolute; right: 10px; bottom: 10px; z-index: 2100; padding: 4px 9px; border-radius: 8px; border: 1px dashed var(--color-warning); color: var(--color-warning); background: color-mix(in oklab, var(--color-panel) 90%, transparent); font-size: 11px; font-family: var(--font-mono); }
+.ov3d-empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); margin: 0; padding: 12px 18px; border: 1px dashed var(--color-border); border-radius: 10px; color: var(--color-muted); background: color-mix(in oklab, var(--color-panel) 80%, transparent); pointer-events: none; }
+.ov3d-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) { .ov3d-label.is-sos { animation: none; } }
+@media (max-width: 700px) { .ov3d { height: clamp(380px, 70dvh, 640px); } .ov3d-toolbar kbd { display: none; } .ov3d-legend ul { grid-template-columns: 1fr; } }
+/* The app shell gives every button a 40 px touch height; with a fine pointer the stage's chips and switches stay compact. */
+@media (pointer: fine) { .ov3d .ov3d-labels button, .ov3d .ov3d-toolbar button { min-height: 0; } }

@@ -1,6 +1,6 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, BatteryLow, Bell, Blinds, Bluetooth, ClipboardList, Cpu, DoorOpen, Droplets, ExternalLink, Fan, Flame, Footprints, Gamepad2, Heater, Lightbulb, Lock, Move, PersonStanding, Radio, Router, Search, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Wrench, Zap } from "lucide-react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
+import { Activity, AlertTriangle, BatteryLow, Bell, Blinds, Bluetooth, Box, ClipboardList, Cpu, DoorOpen, Droplets, ExternalLink, Fan, Flame, Footprints, Gamepad2, Heater, LayoutGrid, Lightbulb, Lock, Move, PersonStanding, Radio, Router, Search, ShieldAlert, Siren, Sun, Thermometer, ToggleRight, Wrench, Zap } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import "../topology/topology.css";
 import "./overview.css";
@@ -14,6 +14,9 @@ import { environmentReading, latestMeasurements, normalizeReading } from "./meas
 import { COMFORT_NOTE, DOOR_LEFT_OPEN_MS, OCCUPIED_WINDOW_MS, activityStrip, comfortOf, doorStateOf, doorText, duration, isDoorSensor, isOccupancySensor, lastMotionText, occupancyOf, type DoorState, type Occupancy, type StripCell } from "./office";
 import TemplateSettings from "../template-settings";
 import { useShowSimulated } from "../demo-mode";
+import type { StageProps } from "./overview3d/stage";
+import { useOutputs } from "./overview3d/outputs";
+import { CONTROL_KINDS } from "./overview3d/types";
 
 // `sos` comes from the API (a critical alert raised by a `button` event); the board never re-derives it.
 type Alert = { id: string; title: string; severity: string; device_name: string; external_id: string; gateway_id: string; opened_at: string; status: string; sos?: boolean };
@@ -21,7 +24,7 @@ type AssetRow = { asset_kind: string; asset_id: string; name: string; external_i
 type Thresholds = { temperature_high: number | null; humidity_high: number | null };
 type Sensor = LiveSensor & { thresholds?: Thresholds };
 type Status = "alert" | "online" | "stale" | "offline";
-type Card = {
+export type Card = {
   /** The registration id (core.devices), when the card is a registered device: commands target it. */
   deviceId?: string;
   profileId?: string; key: string; external: string; name: string; kind: string; model: string; image: string | null; registered: boolean; wearable: boolean;
@@ -39,8 +42,6 @@ type Card = {
 };
 export type OverviewTarget = "alerts" | "connect" | "assets" | "floorplan" | "studio";
 
-/** Card kinds that can be commanded (Zigbee2MQTT and Tuya): their cards carry compact on/off controls. */
-const CONTROL_KINDS = new Set(["switch", "lighting", "cover", "climate", "fan"]);
 const FRESH_MS = 60000, STALE_MS = 15 * 60000, LOW_BATTERY = 20;
 const KIND_LABEL: Record<string, string> = { occupancy: "การใช้ห้อง (PIR)", door: "ประตู", environment: "อุณหภูมิ / ความชื้น", motion: "การเคลื่อนไหว", tamper: "กันถอด", beacon: "Beacon / ปุ่ม", leak: "น้ำรั่ว", light: "แสง", info: "ข้อมูลอุปกรณ์", switch: "สวิตช์ไฟ",
   lighting: "หลอดไฟ", cover: "ม่าน / มู่ลี่", lock: "กลอนประตู", climate: "ควบคุมอุณหภูมิ", fan: "พัดลม", remote: "รีโมต / ปุ่ม", sos: "ปุ่มฉุกเฉิน", hazard: "ควัน / แก๊ส / CO", metering: "มิเตอร์ไฟฟ้า", zigbee: "อุปกรณ์ Zigbee" };
@@ -51,6 +52,38 @@ const METRIC_UNIT: Record<string, string> = { temperature: "°C", local_temperat
 const HAZARD_LABEL: Record<string, string> = { smoke: "ตรวจพบควัน", gas: "ตรวจพบแก๊สรั่ว", carbon_monoxide: "ตรวจพบ CO" };
 const activeHazards = (m: Record<string, number>) => Object.keys(HAZARD_LABEL).filter((h) => m[h] === 1);
 const EVENT_LABEL: Record<string, string> = { tamper: "ป้ายถูกถอด", tamper_cleared: "tamper กลับสู่ปกติ", button: "กดปุ่ม", leak: "พบน้ำรั่ว", leak_cleared: "น้ำรั่วหาย", motion: "เริ่มเคลื่อนไหว", motion_stopped: "หยุดเคลื่อนไหว", offline: "ขาดการติดต่อ", online: "กลับมาออนไลน์", threshold: "ค่าเกินเกณฑ์", threshold_cleared: "ค่ากลับเข้าเกณฑ์", zone: "เข้าโซนใหม่", automation: "ออโตเมชันทำงาน", door_open: "เปิดประตู", door_closed: "ปิดประตู", occupied: "มีคนในพื้นที่", vacant: "ไม่มีคนแล้ว", hazard: "ตรวจพบควัน / แก๊ส / CO", hazard_cleared: "ควัน / แก๊ส / CO หายแล้ว", action: "กดปุ่ม / รีโมต", switch_on: "สวิตช์เปิด", switch_off: "สวิตช์ปิด" };
+/** Card board or the 3D constellation (docs/platform/overview-3d.md), remembered per browser. */
+type ViewMode = "cards" | "3d";
+const MODE_KEY = "aether.overview.mode";
+let viewMode: ViewMode | null = null;
+const modeListeners = new Set<() => void>();
+function getViewMode(): ViewMode {
+  if (viewMode === null) {
+    viewMode = "cards";
+    try { if (window.localStorage.getItem(MODE_KEY) === "3d") viewMode = "3d"; } catch { /* storage blocked: cards */ }
+  }
+  return viewMode;
+}
+function setViewMode(mode: ViewMode) {
+  viewMode = mode;
+  try { window.localStorage.setItem(MODE_KEY, mode); } catch { /* still switches for this visit */ }
+  for (const fn of modeListeners) fn();
+}
+const subscribeViewMode = (fn: () => void) => { modeListeners.add(fn); return () => { modeListeners.delete(fn); }; };
+
+// Lazy: three.js and the stage load only when someone opens the 3D mode; the card bundle does not grow. A fresh
+// lazy() per attempt, so a failed chunk load is retried the next time someone presses 3D. Browsers may keep a failed
+// dynamic import in their module map, so if the retry fails too the notice offers a page reload.
+const loadStage = () => lazy<ComponentType<StageProps>>(() => import("./overview3d/stage"));
+
+/** A failed 3D chunk (or a render error inside the stage) falls back to the cards, like a missing WebGL does. */
+class StageBoundary extends Component<{ onFail: (notice: string) => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch() { this.props.onFail("โหลดมุมมอง 3D ไม่สำเร็จ · แสดงแบบการ์ดแทน · กด 3D เพื่อลองใหม่"); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
 const EVENT_TONE: Record<string, string> = { tamper: "bad", button: "bad", leak: "bad", offline: "bad", threshold: "warn", motion: "warn", zone: "info", door_open: "info", occupied: "info" };
 
 /** Small cell strip: occupancy (motion) or door-open over time; 24 h in the drawer, the last hour on a card. */
@@ -99,6 +132,51 @@ function Chart({ readings: rawReadings, metric, limit }: { readings: Reading[]; 
   );
 }
 
+/** A card's main value, as the board shows it (the 3D stage's labels and tooltip render this same element). */
+export function cardValue(c: Card, now: number) {
+  const r = c.reading, m = (r?.metrics ?? {}) as Record<string, number>;
+  if (c.occupancy) return <span className={`ov-value ${c.status === "offline" ? "is-muted" : c.occupancy.occupied ? "is-occupied" : "is-vacant"}`}>{c.status === "offline" ? "ไม่มีข้อมูล" : c.occupancy.occupied ? "มีคน" : "ว่าง"}{Number.isFinite(r?.temperature) && <em>{number(r?.temperature, 1)}<small>°C</small></em>}</span>;
+  if (c.door) return <span className={`ov-value ${c.door.open === null ? "is-muted" : c.door.leftOpen ? "is-warn" : c.door.open ? "is-open" : ""}`}>{c.door.open === null ? "รอสถานะ" : c.door.open ? "เปิดอยู่" : "ปิดอยู่"}{c.door.since && <em className="is-plain">{c.door.sinceExact ? "" : "≥ "}{duration(now - Date.parse(c.door.since))}</em>}</span>;
+  if (c.kind === "environment") {
+    const comfort = comfortOf(r?.temperature, r?.humidity);
+    return <span className="ov-value">{number(r?.temperature, 1)}<small>°C</small> <em>{number(r?.humidity)}<small>%</small></em>{comfort && c.status !== "offline" && <b className={`ov-comfort ${comfort.ok ? "is-ok" : "is-off"}`} title={COMFORT_NOTE}>{comfort.label}</b>}</span>;
+  }
+  if (c.kind === "switch") {
+    const gangs = switchGangs(m);
+    if (c.status === "offline" || !gangs.length) return <span className="ov-value is-muted">{c.status === "offline" ? "ขาดการติดต่อ" : "รอสถานะ"}</span>;
+    return <span className="ov-value">{gangs.filter(([, on]) => on).length}<small>/{gangs.length} ช่องเปิด</small> <em className="is-plain">{gangs.map(([gang, on]) => `${gang}:${on ? "เปิด" : "ปิด"}`).join(" ")}</em></span>;
+  }
+  if (c.kind === "tamper") return <span className={`ov-value ${m.tamper === 1 ? "is-bad" : ""}`}>{m.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</span>;
+  if (c.kind === "leak") return <span className={`ov-value ${m.leak === 1 ? "is-bad" : ""}`}>{m.leak === 1 ? "น้ำรั่ว" : "แห้ง"}</span>;
+  if (c.kind === "motion") return <span className={`ov-value ${m.vibration === 1 || m.motion === 1 ? "is-warn" : ""}`}>{m.vibration === 1 || m.motion === 1 ? "เคลื่อนไหว" : "นิ่ง"}{m.accel_g != null && <em>{Number(m.accel_g).toFixed(2)}<small>g</small></em>}</span>;
+  if (c.kind === "hazard") {
+    const active = activeHazards(m);
+    return <span className={`ov-value ${active.length ? "is-bad" : ""}`}>{active.length ? active.map((h) => HAZARD_LABEL[h]).join(" · ") : r ? "ปกติ" : "รอสถานะ"}</span>;
+  }
+  if (c.kind === "lighting") return <span className={`ov-value ${m.state == null ? "is-muted" : ""}`}>{m.state == null ? "รอสถานะ" : m.state === 1 ? "เปิด" : "ปิด"}{m.brightness != null && <em>{Math.round((m.brightness / 254) * 100)}<small>%</small></em>}</span>;
+  if (c.kind === "cover") return <span className="ov-value">{number(m.position)}<small>% เปิด</small>{r?.values?.state && <em className="is-plain">{r.values.state}</em>}</span>;
+  if (c.kind === "lock") {
+    const locked = r?.values?.lock_state ? r.values.lock_state === "locked" : m.state === 1 ? true : m.state === 0 ? false : null;
+    return <span className={`ov-value ${locked === false ? "is-warn" : locked === null ? "is-muted" : ""}`}>{locked === null ? "รอสถานะ" : locked ? "ล็อกอยู่" : "ปลดล็อก"}</span>;
+  }
+  if (c.kind === "climate") return <span className="ov-value">{number(m.local_temperature, 1)}<small>°C</small>{(m.occupied_heating_setpoint ?? m.current_heating_setpoint) != null && <em>ตั้ง {number(m.occupied_heating_setpoint ?? m.current_heating_setpoint, 1)}<small>°C</small></em>}{r?.values?.system_mode && <em className="is-plain">{r.values.system_mode}</em>}</span>;
+  if (c.kind === "metering") return <span className="ov-value">{number(m.power)}<small>W</small>{m.energy != null && <em>{number(m.energy, 2)}<small>kWh</small></em>}</span>;
+  if (c.kind === "light") return <span className="ov-value">{number(m.illuminance)}<small>lx</small></span>;
+  if (c.kind === "sos" || c.kind === "remote") {
+    if (c.status === "offline") return <span className="ov-value is-muted">ขาดการติดต่อ</span>;
+    return <span className="ov-value">พร้อมใช้งาน{Number.isFinite(r?.battery) && <em>{number(r?.battery)}<small>% แบต</small></em>}</span>;
+  }
+  if (c.kind === "zigbee" || c.kind === "fan" || c.kind === "info") {
+    // Anything else Zigbee2MQTT reports: its first two measurements with their units.
+    const shown = Object.entries(m).filter(([k]) => k !== "linkquality" && !/^sw\d$/.test(k)).slice(0, 2);
+    if (shown.length) return <span className="ov-value">{shown.map(([k, v], i) => i === 0 ? <span key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></span> : <em key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></em>)}</span>;
+  }
+  if (!r) return <span className="ov-value is-muted">ไม่มีข้อมูล</span>;
+  // A beacon's only value is "is it heard": an offline tag must not read as present.
+  if (c.status === "offline") return <span className="ov-value is-muted">ไม่อยู่ในระยะ</span>;
+  return <span className="ov-value">{c.wearable && c.zone ? "ในพื้นที่" : "อยู่ในระยะ"}</span>;
+}
+
 export default function Overview({ getToken, refresh, onUnauthorized, onNavigate, onSummary }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; onNavigate: (to: OverviewTarget) => void; onSummary?: (openAlerts: number) => void }) {
   const showSim = useShowSimulated();
   const handlers = useLatest({ getToken, refresh });
@@ -118,6 +196,20 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
   const [range, setRange] = useState("24h");
   const [shadow, setShadow] = useState(false);
   const [detail, setDetail] = useState<{ key: string; range: string; history: Reading[] } | null>(null);
+  const mode = useSyncExternalStore(subscribeViewMode, getViewMode, () => "cards" as ViewMode);
+  const [notice3d, setNotice3d] = useState("");
+  const fallBackToCards = useCallback((notice: string) => { setNotice3d(notice); setViewMode("cards"); }, []);
+  const [stage, setStage] = useState(() => ({ Stage: loadStage(), failed: false, attempt: 0 }));
+  const stageFailed = useCallback((notice: string) => {
+    setStage((s) => ({ ...s, failed: true }));
+    fallBackToCards(stage.attempt > 0 ? "โหลดมุมมอง 3D ไม่สำเร็จอีกครั้ง · แสดงแบบการ์ดแทน · โหลดหน้าใหม่เพื่อลองอีกครั้ง" : notice);
+  }, [fallBackToCards, stage.attempt]);
+  const open3d = () => {
+    setNotice3d("");
+    if (stage.failed) setStage((s) => ({ Stage: loadStage(), failed: false, attempt: s.attempt + 1 }));
+    setViewMode("3d");
+  };
+  const OverviewStage = stage.Stage;
 
   const load = useCallback(async (force: boolean) => {
     try {
@@ -244,6 +336,9 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
     return (model?.cards ?? []).filter((c) => inProject(c.projectId) && (kind === "all" || c.kind === kind) && (only === "all" || (only === "wearable" ? c.wearable : c.status !== "online" || c.reasons.length > 0)) && (!q || c.name.toLowerCase().includes(q) || c.external.includes(q.replace(/:/g, "")) || c.gatewayName.toLowerCase().includes(q)))
       .sort((a, b) => Number(b.sos) - Number(a.sos) || rank[a.status] - rank[b.status] || Number(b.registered) - Number(a.registered) || a.name.localeCompare(b.name, "th"));
   }, [model, inProject, kind, only, query]);
+  // Tuya Wi‑Fi cards on the board: asked once per device whether they have a switch (cached for the page).
+  // Only the board asks here; in 3D the stage asks for its own (same cache).
+  const hasOutput = useOutputs(client, mode === "3d" ? [] : visible.filter((c) => c.kind === "tuya" && c.deviceId && c.registered && c.status !== "offline").map((c) => c.deviceId!));
   const groups = useMemo(() => {
     const out = new Map<string, Card[]>();
     for (const c of visible) { const key = group === "gateway" ? (c.gatewayName || "ไม่ทราบ gateway") : group === "kind" ? (KIND_LABEL[c.kind] ?? c.kind) : ""; out.set(key, [...(out.get(key) ?? []), c]); }
@@ -286,55 +381,17 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
   const doorLog = opened?.door ? (snapshot?.events ?? []).filter((e) => e.external_id.toLowerCase() === opened.external && (e.event_type === "door_open" || e.event_type === "door_closed")).slice(0, 10) : [];
   const openedComfort = opened && (opened.kind === "environment" || opened.kind === "occupancy") ? comfortOf(opened.reading?.temperature, opened.reading?.humidity) : null;
 
-  const value = (c: Card) => {
-    const r = c.reading, m = (r?.metrics ?? {}) as Record<string, number>;
-    if (c.occupancy) return <span className={`ov-value ${c.status === "offline" ? "is-muted" : c.occupancy.occupied ? "is-occupied" : "is-vacant"}`}>{c.status === "offline" ? "ไม่มีข้อมูล" : c.occupancy.occupied ? "มีคน" : "ว่าง"}{Number.isFinite(r?.temperature) && <em>{number(r?.temperature, 1)}<small>°C</small></em>}</span>;
-    if (c.door) return <span className={`ov-value ${c.door.open === null ? "is-muted" : c.door.leftOpen ? "is-warn" : c.door.open ? "is-open" : ""}`}>{c.door.open === null ? "รอสถานะ" : c.door.open ? "เปิดอยู่" : "ปิดอยู่"}{c.door.since && <em className="is-plain">{c.door.sinceExact ? "" : "≥ "}{duration(now - Date.parse(c.door.since))}</em>}</span>;
-    if (c.kind === "environment") {
-      const comfort = comfortOf(r?.temperature, r?.humidity);
-      return <span className="ov-value">{number(r?.temperature, 1)}<small>°C</small> <em>{number(r?.humidity)}<small>%</small></em>{comfort && c.status !== "offline" && <b className={`ov-comfort ${comfort.ok ? "is-ok" : "is-off"}`} title={COMFORT_NOTE}>{comfort.label}</b>}</span>;
-    }
-    if (c.kind === "switch") {
-      const gangs = switchGangs(m);
-      if (c.status === "offline" || !gangs.length) return <span className="ov-value is-muted">{c.status === "offline" ? "ขาดการติดต่อ" : "รอสถานะ"}</span>;
-      return <span className="ov-value">{gangs.filter(([, on]) => on).length}<small>/{gangs.length} ช่องเปิด</small> <em className="is-plain">{gangs.map(([gang, on]) => `${gang}:${on ? "เปิด" : "ปิด"}`).join(" ")}</em></span>;
-    }
-    if (c.kind === "tamper") return <span className={`ov-value ${m.tamper === 1 ? "is-bad" : ""}`}>{m.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</span>;
-    if (c.kind === "leak") return <span className={`ov-value ${m.leak === 1 ? "is-bad" : ""}`}>{m.leak === 1 ? "น้ำรั่ว" : "แห้ง"}</span>;
-    if (c.kind === "motion") return <span className={`ov-value ${m.vibration === 1 || m.motion === 1 ? "is-warn" : ""}`}>{m.vibration === 1 || m.motion === 1 ? "เคลื่อนไหว" : "นิ่ง"}{m.accel_g != null && <em>{Number(m.accel_g).toFixed(2)}<small>g</small></em>}</span>;
-    if (c.kind === "hazard") {
-      const active = activeHazards(m);
-      return <span className={`ov-value ${active.length ? "is-bad" : ""}`}>{active.length ? active.map((h) => HAZARD_LABEL[h]).join(" · ") : r ? "ปกติ" : "รอสถานะ"}</span>;
-    }
-    if (c.kind === "lighting") return <span className={`ov-value ${m.state == null ? "is-muted" : ""}`}>{m.state == null ? "รอสถานะ" : m.state === 1 ? "เปิด" : "ปิด"}{m.brightness != null && <em>{Math.round((m.brightness / 254) * 100)}<small>%</small></em>}</span>;
-    if (c.kind === "cover") return <span className="ov-value">{number(m.position)}<small>% เปิด</small>{r?.values?.state && <em className="is-plain">{r.values.state}</em>}</span>;
-    if (c.kind === "lock") {
-      const locked = r?.values?.lock_state ? r.values.lock_state === "locked" : m.state === 1 ? true : m.state === 0 ? false : null;
-      return <span className={`ov-value ${locked === false ? "is-warn" : locked === null ? "is-muted" : ""}`}>{locked === null ? "รอสถานะ" : locked ? "ล็อกอยู่" : "ปลดล็อก"}</span>;
-    }
-    if (c.kind === "climate") return <span className="ov-value">{number(m.local_temperature, 1)}<small>°C</small>{(m.occupied_heating_setpoint ?? m.current_heating_setpoint) != null && <em>ตั้ง {number(m.occupied_heating_setpoint ?? m.current_heating_setpoint, 1)}<small>°C</small></em>}{r?.values?.system_mode && <em className="is-plain">{r.values.system_mode}</em>}</span>;
-    if (c.kind === "metering") return <span className="ov-value">{number(m.power)}<small>W</small>{m.energy != null && <em>{number(m.energy, 2)}<small>kWh</small></em>}</span>;
-    if (c.kind === "light") return <span className="ov-value">{number(m.illuminance)}<small>lx</small></span>;
-    if (c.kind === "sos" || c.kind === "remote") {
-      if (c.status === "offline") return <span className="ov-value is-muted">ขาดการติดต่อ</span>;
-      return <span className="ov-value">พร้อมใช้งาน{Number.isFinite(r?.battery) && <em>{number(r?.battery)}<small>% แบต</small></em>}</span>;
-    }
-    if (c.kind === "zigbee" || c.kind === "fan" || c.kind === "info") {
-      // Anything else Zigbee2MQTT reports: its first two measurements with their units.
-      const shown = Object.entries(m).filter(([k]) => k !== "linkquality" && !/^sw\d$/.test(k)).slice(0, 2);
-      if (shown.length) return <span className="ov-value">{shown.map(([k, v], i) => i === 0 ? <span key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></span> : <em key={k}>{Number.isInteger(v) ? v : v.toFixed(1)}<small>{METRIC_UNIT[k] ?? ` ${k}`}</small></em>)}</span>;
-    }
-    if (!r) return <span className="ov-value is-muted">ไม่มีข้อมูล</span>;
-    // A beacon's only value is "is it heard": an offline tag must not read as present.
-    if (c.status === "offline") return <span className="ov-value is-muted">ไม่อยู่ในระยะ</span>;
-    return <span className="ov-value">{c.wearable && c.zone ? "ในพื้นที่" : "อยู่ในระยะ"}</span>;
-  };
+  const value = (c: Card) => cardValue(c, now);
 
   return (
     <section className="topo ov">
       <header className="topo-bar ov-bar">
         <h1 className="topo-bar-title">ภาพรวม</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "อัปเดตแบบ real-time" : "ตรวจเป็นรอบทุก 5 วินาที"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
+        <div className="fp-seg ov-seg ov-mode" role="group" aria-label="รูปแบบการแสดงผล">
+          <button type="button" className={mode === "cards" ? "is-on" : ""} aria-pressed={mode === "cards"} onClick={() => setViewMode("cards")}><LayoutGrid size={13} aria-hidden="true" />การ์ด</button>
+          <button type="button" className={mode === "3d" ? "is-on" : ""} aria-pressed={mode === "3d"} onClick={open3d} title="ภาพ 3 มิติของอุปกรณ์ทั้งหมดรอบ gateway · ตัวกรองเดียวกับการ์ด"><Box size={13} aria-hidden="true" />3D</button>
+        </div>
         {shadow && <span className="ov-shadow" title="ALERTS_SHADOW=true · ระบบบันทึกเหตุการณ์ตามปกติ แต่ไม่เปิดการแจ้งเตือน ไม่ส่งข้อความ และไม่รันออโตเมชัน ยกเว้นปุ่มฉุกเฉิน SOS และเครื่องตรวจควัน / แก๊ส / CO ที่แจ้งเตือนเสมอ · ใช้ช่วงทดสอบอุปกรณ์จริง">โหมดเงา · แจ้งเตือนเฉพาะ SOS และควัน / แก๊ส</span>}
         <select className="ov-select" aria-label="โปรเจค" value={project} onChange={(e) => setProject(e.target.value)}>
           <option value="all">ทุกโปรเจค</option>
@@ -350,7 +407,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
           <option value="all">ทุกชนิด</option>
           {kinds.map((k) => <option key={k} value={k}>{KIND_LABEL[k] ?? k}</option>)}
         </select>
-        <select className="ov-select" aria-label="จัดกลุ่ม" value={group} onChange={(e) => setGroup(e.target.value as typeof group)}>
+        <select className="ov-select" aria-label="จัดกลุ่ม" value={group} onChange={(e) => setGroup(e.target.value as typeof group)} disabled={mode === "3d"} title={mode === "3d" ? "มุมมอง 3D จัดกลุ่มตาม gateway เสมอ" : undefined}>
           <option value="gateway">กลุ่มตาม gateway / โซน</option>
           <option value="kind">กลุ่มตามชนิด</option>
           <option value="none">ไม่จัดกลุ่ม</option>
@@ -360,6 +417,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
 
       <div className="ov-scroll">
         {error && <div className="topo-alert is-error" role="alert">{error} · ระบบจะลองใหม่อัตโนมัติ</div>}
+        {notice3d && <div className="topo-alert ov-notice" role="status">{notice3d}{stage.failed && stage.attempt > 0 && <button type="button" className="ov-link" onClick={() => window.location.reload()}>โหลดหน้าใหม่</button>}<button type="button" className="ov-link" onClick={() => setNotice3d("")}>ปิด</button></div>}
         {sosAlerts.length > 0 && (
           <div className="ov-sos" role="alert">
             <Siren size={20} aria-hidden="true" />
@@ -392,6 +450,18 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
         </div>
 
         <div className="ov-main">
+          {mode === "3d" ? (
+            <div className="ov-board">
+              {!model ? <p className="ov-empty">กำลังโหลดข้อมูลจริง…</p> : (
+                <StageBoundary key={stage.attempt} onFail={stageFailed}>
+                <Suspense fallback={<p className="ov-empty">กำลังเตรียมภาพ 3 มิติ…</p>}>
+                  <OverviewStage cards={visible} gateways={scopedGateways} projects={snapshot?.projects ?? []} colors={PROJECT_COLORS} showEmptyHubs={kind === "all" && only === "all" && !query.trim()}
+                    client={client} kindLabel={KIND_LABEL} renderValue={value} onOpen={setOpenKey} onUnavailable={fallBackToCards} onShowCards={() => setViewMode("cards")} />
+                </Suspense>
+                </StageBoundary>
+              )}
+            </div>
+          ) : (
           <div className="ov-board">
             {!model && <p className="ov-empty">กำลังโหลดข้อมูลจริง…</p>}
             {model && visible.length === 0 && <p className="ov-empty">{model.cards.length === 0 ? "ยังไม่มีอุปกรณ์ส่งข้อมูล · เชื่อม gateway ในหน้าเชื่อมต่ออุปกรณ์ก่อน" : "ไม่มีอุปกรณ์ตรงกับตัวกรองนี้"}</p>}
@@ -403,7 +473,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                     const Icon = KIND_ICON[c.kind] ?? Bluetooth, color = c.projectId ? PROJECT_COLORS[(snapshot?.projects ?? []).find((p) => p.id === c.projectId)?.color ?? ""] : undefined;
                     const cardStrip = c.occupancy ? activityStrip(c.samples, now, "motion", 1, 5 * 60000) : c.door ? activityStrip(c.samples, now, "door", 1, 5 * 60000) : null;
                     const series = c.kind === "environment" ? c.history.filter(environmentReading).slice(-40).map((h) => h.temperature) : c.history.slice(-40).map((h) => Number((h.metrics as Record<string, number> | undefined)?.accel_g ?? NaN)).filter((v) => Number.isFinite(v));
-                    const controllable = !!c.deviceId && c.registered && CONTROL_KINDS.has(c.kind) && c.status !== "offline";
+                    const controllable = !!c.deviceId && c.registered && CONTROL_KINDS.has(c.kind) && c.status !== "offline" && (c.kind !== "tuya" || hasOutput(c.deviceId));
                     return (
                       <div key={c.key} className={`ov-card-slot${controllable ? " has-controls" : ""}`}>
                       <button type="button" className={`ov-card is-${c.status}${c.sos ? " is-sos" : ""}${c.door?.leftOpen && c.status !== "offline" ? " is-door-long" : ""}${c.occupancy?.occupied && c.status !== "offline" ? " is-occupied" : ""}`} onClick={() => setOpenKey(c.key)} style={color ? ({ "--ov-project": color } as React.CSSProperties) : undefined}>
@@ -428,6 +498,7 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
               </section>
             ))}
           </div>
+          )}
 
           <aside className="ov-side">
             <section>

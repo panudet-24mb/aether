@@ -158,3 +158,9 @@
 .ov-card-controls .dc-switches { gap: 5px; }
 .ov-card-controls .dc-switch { padding: 0 9px 0 5px; gap: 6px; }
 .ov-card-controls .dc-switch small { display: none; }
+
+/* View switch: the card board or the 3D constellation (overview3d/, docs/platform/overview-3d.md). */
+.ov-mode button svg { flex-shrink: 0; }
+.ov-select:disabled { opacity: .5; cursor: not-allowed; }
+.ov-notice { display: flex; align-items: center; gap: 10px; }
+.ov-notice .ov-link { font-size: 12px; }

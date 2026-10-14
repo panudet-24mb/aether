@@ -5,13 +5,29 @@ header bar with **การ์ด | 3D**. The choice is remembered per browser i
 (`"cards"` or `"3d"`; if storage is blocked, the switch still works for the visit). The default is the card board,
 which is unchanged.
 
-The KPI row, the SOS banner, every filter (project, ทั้งหมด / ต้องดู / Wearable, kind, search), the side panel and
-the device drawer (Sheet, with its controls) are the same in both views. In 3D, only the card board area is
-replaced by the stage. The "จัดกลุ่ม" select is disabled there because 3D always groups by gateway.
+In 3D the **whole Overview area** (everything right of the app sidebar) becomes one three.js scene. There is no
+flat header, KPI row, SOS strip, side panel or drawer. Their content lives inside the scene as glass panels:
+
+| Card page | 3D scene |
+|---|---|
+| KPI row (6 tiles) | six KPI tiles on an arc above and behind the platform; same values, colour states and click actions |
+| SOS strip | a large pulsing banner above the SOS device, with รับทราบ / ดูรายละเอียด and ดูบนผังอาคาร; ไปที่เหตุ frames it |
+| ต้องดูตอนนี้ | a panel on the left wall; an alert flies the camera to its device and opens the detail; ดูทั้งหมด opens the alerts page |
+| ใครอยู่ที่ไหน | a panel on the left wall (8 rows, then "และอีก n คน"); a person opens the detail; ดูบนผัง opens the floor plan |
+| Gateway | a panel on the right wall (8 rows); a gateway flies the camera to its hub; ดูทั้งหมด opens the connect page |
+| เหตุการณ์ล่าสุด | a panel on the right wall (10 rows, new rows slide in); an event opens its device's detail |
+| device drawer (Sheet) | a detail panel beside the device (the camera flies to frame both): the same status, reasons, facts, history, full DeviceControlsPanel and action links; ✕ or Esc closes it |
+| header filters, view switch | the HUD (top left): presets, tour, fullscreen, ตัวกรอง (project / show / kind / search) and การ์ด |
+
+The page renders this content once, in shared components (`frontend/app/live/overview-parts.tsx`: `OverviewFilters`,
+`kpiTiles`/`KpiRow`, `SosBanner`, the four list sections and `DeviceDetail`). The card page lays them out flat. The
+stage places the same React elements into CSS3D panels with portals. There is no second copy of the business
+logic: `overview.tsx` computes the model, the filters and every action once. The "จัดกลุ่ม" select only exists in
+card mode, because 3D always groups by gateway.
 
 Code: `frontend/app/live/overview3d/`
-- `stage.tsx`: the React stage. It is lazy-loaded with `React.lazy`, so card mode never downloads it. It handles the toolbar, labels, tooltip, legend and aria-live.
-- `engine.ts`: the three.js renderer. It is imperative, renders on demand, and positions the label elements React renders.
+- `stage.tsx`: the React stage. It is lazy-loaded with `React.lazy`, so card mode never downloads it. It handles the HUD, the device labels, the tooltip, the legend, aria-live and the in-scene panels (`Panel3D`: a portal into an element the engine places).
+- `engine.ts`: the three.js renderer. It is imperative and renders on demand. It positions the label elements React renders, and runs the CSS3D layer (`PanelRegistry`, `CSS3DRenderer`) that places, turns and fades the panels.
 - `layout.ts`: pure layout (hubs, rings, label priority, SOS diff). `types.ts` holds shapes, tiers and the controllable rule.
 - `power.tsx`: the on/off toggle on a label. It uses the same command flow as `DeviceControlsPanel`.
 - `synthetic.ts`: a seeded synthetic site, used by the self-test and the dev-only scale toggle.
@@ -97,18 +113,30 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 
 - **Camera:** OrbitControls with damping. Drag rotates, the wheel zooms, right-drag pans, and arrow keys pan while the canvas has focus.
 - **Hover:** a highlight ring on the node and a tooltip with name, kind, gateway, value, status and first reason.
-- **Click:** clicking a node opens the Sheet. Clicking a hub flies the camera to it.
+- **Click:** clicking a node or its label flies the camera to it and opens the detail panel beside it. Clicking a hub flies the camera to it.
+- **Intro:** entering 3D starts with a short fly-in from above (a cut with reduced motion).
+- **Fullscreen:** the HUD's เต็มจอ button puts the stage in fullscreen (`requestFullscreen` on the stage); Esc leaves it.
 - **Presets (toolbar, or keys 1 / 2 / 3 while focus is inside the stage, never page-wide):**
   - ภาพรวม frames everything.
   - มุมบน is a top-down view.
   - ไปที่เหตุ flies to the first SOS, or the first alert. The button is red when an SOS exists and disabled when there is nothing.
 - **ทัวร์:** a slow auto-orbit. It stops as soon as the operator drags. It is off with reduced motion.
-- **การ์ด (toolbar):** goes back to the board in one click, as does the header switch.
+- **การ์ด (HUD):** goes back to the card page in one click.
+
+### In-scene panels
+
+- **How they are drawn:** `CSS3DRenderer` over the WebGL canvas, sharing its camera. The CSS scene runs at 40× the WebGL scale, so panels sit near CSS scale 1 and the browser rasterises Thai text crisply. Panels are real DOM, so their text can be selected, their buttons clicked, and they can be tabbed into.
+- **Readable from any angle:** panels face the viewer squarely (screen-aligned).
+- **Fading:** panels fade with distance. A panel steps aside (opacity 0.12, no pointer) when it would cover the middle of the view in front of the camera's target, when it sits nearer than an open detail panel, or when it is very close to the camera. The SOS banner stays bright except over an open detail.
+- **Occlusion:** not attempted. CSS3D always draws over WebGL.
+- **Placement:** sized and placed from the constellation's radius. KPIs sit on an arc behind the platform, the lists at ±50° and ±128° on the wall, the SOS banner above its device, the detail panel beside its device on the camera's right.
+- **Budget:** at most 12 panels (6 KPIs, 4 lists, the SOS banner, the detail). Lists are capped, with ดูทั้งหมด.
 
 ## Accessibility
 
 - The canvas wrapper has `role="application"` and a Thai `aria-label` that says what is shown and how to use it.
-- Labels, hub chips, toolbar buttons and toggles are real buttons in tab order. Toggles carry Thai `aria-label`s, `role="switch"`, `aria-checked` and `aria-busy`.
+- Labels, hub chips, HUD buttons, panel buttons and toggles are real buttons in tab order. Opening a detail moves focus to its close button; Esc closes it.
+- Toggles carry Thai `aria-label`s, `role="switch"`, `aria-checked` and `aria-busy`.
 - An `aria-live="assertive"` region announces each **new** SOS once ("SOS ใหม่ · <name> ที่ <gateway> · ปุ่ม ไปที่เหตุ พาไปจุดนั้น"). The SOS banner above stays the visual cue.
 - `prefers-reduced-motion` affects the stage in four ways:
   - Ambient pulses stop.
@@ -121,6 +149,7 @@ or an answer without features is retried with backoff (4 s doubling, at most 5 m
 
 - **Lazy chunk:** card mode does not load the stage (`stage-*.js` is its own chunk).
 - **Render on demand:** a frame is drawn only for a data change, a camera move or damping, a tween, the tour, hover, or an ambient pulse.
+  - The CSS3D layer re-renders only when the camera moved or a panel was added, moved or removed, never on ambient pulses.
   - With reduced motion, or while the tab is hidden, an idle stage draws **0 frames**.
   - Otherwise ambient pulses are throttled: 30 fps while an alert or SOS pulses, 20 fps for hub breathing alone.
 - **Rebuilds:** the scene is rebuilt only when what it draws changes (a signature of hubs, positions, status, SOS, occupancy, door and power). The overview's 5 s clock tick does not rebuild it.

@@ -1,13 +1,16 @@
 "use client";
-// The overview's 3D mode (docs/platform/overview-3d.md): the board's own cards, filters included, as a constellation
-// of gateway hubs with their devices in rings. Loaded lazily, so the card mode never pays for three.js.
+// The overview's 3D mode (docs/platform/overview-3d.md): the whole page as one scene. The board's own cards, filters
+// included, form a constellation of gateway hubs with their devices in rings; the KPIs, the SOS banner, the side
+// lists and the device detail are CSS3D panels in the same scene (the page renders their content, the stage places
+// it). One small HUD holds the filters and the camera. Loaded lazily, so the card mode never pays for three.js.
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Crosshair, Info, LayoutGrid, Orbit, Pause, ScanEye, View } from "lucide-react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { ChevronUp, Crosshair, Info, LayoutGrid, Maximize, Minimize, Orbit, Pause, ScanEye, SlidersHorizontal, View, X } from "lucide-react";
 import * as THREE from "three";
 import type { CommandClient } from "../../topology/device-controls";
 import { useLatest } from "../../topology/use-latest";
-import { ConstellationEngine, type Palette, type Preset } from "./engine";
+import { ConstellationEngine, PanelRegistry, type PanelKind, type PanelPlace, type Palette, type Preset } from "./engine";
 import { buildHubs, layoutConstellation, newSos } from "./layout";
 import { useOutputs } from "./outputs";
 import { PowerStore, PowerToggle } from "./power";
@@ -15,7 +18,24 @@ import { syntheticSite } from "./synthetic";
 import { controllable, poweredOn, type HubPlace, type NodePlace, type StageCard, type StageGateway, type StageProject } from "./types";
 import "./stage.css";
 
+/** What the page's own lists can ask of the stage (a gateway row flies to its hub). */
+export type StageApi = { focusHub: (id: string) => void };
+
 export type StageProps = {
+  api?: RefObject<StageApi | null>;
+  /** The page's filter controls (project, show, kind, search), shown in the HUD. */
+  filters: ReactNode;
+  /** Live / polling, shadow mode and load errors, shown in the HUD head. */
+  status: ReactNode;
+  /** The six KPI tiles (the page's own buttons and actions), on an arc behind the platform. */
+  kpis: { key: string; node: ReactNode }[];
+  /** The SOS banner and the device it hangs above. */
+  sos: { key: string; node: ReactNode } | null;
+  /** The side lists (ต้องดูตอนนี้, ใครอยู่ที่ไหน, Gateway, เหตุการณ์ล่าสุด), on walls left and right; a null node is skipped. */
+  panels: { key: string; node: ReactNode }[];
+  /** The open device's detail, shown beside it (replaces the card page's drawer). */
+  detail: { key: string; title: string; subtitle: string; sos: boolean; body: ReactNode } | null;
+  onCloseDetail: () => void;
   cards: StageCard[];
   gateways: StageGateway[];
   projects: StageProject[];
@@ -81,6 +101,21 @@ function signature(hubs: HubPlace[], nodes: NodePlace[]): string {
 
 const typing = (el: Element | null) => !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el as HTMLElement).isContentEditable);
 
+/** A CSS3D panel: React renders `children` into its own element (a portal); the engine places, turns and fades it. */
+function Panel3D({ registry, id, kind, place, width, label, children }: { registry: PanelRegistry; id: string; kind: PanelKind; place: PanelPlace; width: number; label?: string; children: ReactNode }) {
+  // The element CSS3D moves around; its kind never changes for a given panel.
+  const [el] = useState(() => Object.assign(document.createElement("div"), { className: `ov3d-panel is-${kind}` }));
+  const placeKey = JSON.stringify(place);
+  useEffect(() => { registry.set(id, { el, place: JSON.parse(placeKey) as PanelPlace, width, kind }); }, [registry, id, el, placeKey, width, kind]);
+  useEffect(() => () => registry.remove(id), [registry, id]);
+  return createPortal(label ? <div role="region" aria-label={label}>{children}</div> : children, el);
+}
+
+/** A point on the panel wall: `deg` from straight behind the platform (−z), clockwise seen from above. */
+const polar = (deg: number, r: number, y: number): [number, number, number] => [Math.sin((deg * Math.PI) / 180) * r, y, -Math.cos((deg * Math.PI) / 180) * r];
+/** Side lists: two on the left wall, two on the right. */
+const LIST_DEG: Record<string, number> = { alerts: -50, wearables: -128, gateways: 50, events: 128 };
+
 export default function OverviewStage(props: StageProps) {
   const { client, kindLabel, renderValue, onOpen } = props;
   const reduced = useReducedMotion();
@@ -102,7 +137,13 @@ export default function OverviewStage(props: StageProps) {
   const canControl = useMemo(() => (c: StageCard) => controllable(c) && (c.kind !== "tuya" || hasOutput(c.deviceId!)), [hasOutput]);
   const canControlRef = useLatest(canControl);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const cssHostRef = useRef<HTMLDivElement>(null);
+  const [registry] = useState(() => new PanelRegistry());
+  const [hudOpen, setHudOpen] = useState(false);
+  const [full, setFull] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef(new Map<string, HTMLElement>());
   const hubEls = useRef(new Map<string, HTMLElement>());
@@ -131,20 +172,50 @@ export default function OverviewStage(props: StageProps) {
         labelEl: (key) => labelEls.current.get(key),
         hubLabelEl: (id) => hubEls.current.get(id),
         tooltipEl: () => tooltipRef.current,
-      }, { quality: "auto", reducedMotion: window.matchMedia(reducedQuery).matches });
+      }, { quality: "auto", reducedMotion: window.matchMedia(reducedQuery).matches, cssHost: cssHostRef.current });
     } catch {
       onUnavailableRef.current(UNAVAILABLE);
       return;
     }
     const lost = (e: Event) => { e.preventDefault(); onUnavailableRef.current(UNAVAILABLE); };
     engine.renderer.domElement.addEventListener("webglcontextlost", lost);
+    engine.bindPanels(registry);
     engineRef.current = engine;
     return () => {
       engine.renderer.domElement.removeEventListener("webglcontextlost", lost);
       engine.dispose();
       engineRef.current = null;
     };
-  }, [onOpenRef, onUnavailableRef, canControlRef]);
+  }, [onOpenRef, onUnavailableRef, canControlRef, registry]);
+  useImperativeHandle(props.api, () => ({ focusHub: (id: string) => engineRef.current?.focusHub(id) }), []);
+
+  // The panel wall: KPIs on an arc behind the platform, the lists left and right, sized to the constellation.
+  const wall = stable.layout.radius * 1.0 + 6;
+  useEffect(() => { engineRef.current?.setExtent(wall * 1.3); }, [wall]);
+  const kpiAt = (i: number, n: number) => polar((n > 1 ? -56 + (112 * i) / (n - 1) : 0) + 8, wall * 1.15, wall * 0.46 + 3);
+  // Keyboard users land on the detail's close button when it opens.
+  const detailKey = props.detail?.key;
+  useEffect(() => {
+    if (!detailKey) return;
+    // The panel joins the document on the scene's next render; focus it once it is there.
+    let raf = 0, tries = 0;
+    const tryFocus = () => {
+      const el = closeRef.current;
+      if (el?.isConnected) el.focus({ preventScroll: true });
+      else if (tries++ < 30) raf = requestAnimationFrame(tryFocus);
+    };
+    raf = requestAnimationFrame(tryFocus);
+    return () => cancelAnimationFrame(raf);
+  }, [detailKey]);
+  useEffect(() => {
+    const onChange = () => setFull(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFull = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void rootRef.current?.requestFullscreen().catch(() => {});
+  };
 
   useEffect(() => { engineRef.current?.setData(stable.layout); }, [stable]);
   useEffect(() => { engineRef.current?.setReducedMotion(reduced); }, [reduced]);
@@ -158,7 +229,7 @@ export default function OverviewStage(props: StageProps) {
     return () => m.removeEventListener("change", onChange);
   }, []);
   // New label elements mount at the origin, hidden; the next frame places them.
-  useEffect(() => { engineRef.current?.invalidate(); }, [labelKeys, cards]);
+  useEffect(() => { engineRef.current?.refreshLabels(); }, [labelKeys, cards]);
 
   useEffect(() => {
     if (!demo) return;
@@ -170,6 +241,7 @@ export default function OverviewStage(props: StageProps) {
   const go = (p: Preset) => { setTour(false); engineRef.current?.preset(p); };
   // 1 / 2 / 3 only while focus is inside the stage (WCAG 2.1.4: no page-wide single-key shortcuts).
   const onKey = (e: ReactKeyboardEvent) => {
+    if (e.key === "Escape" && props.detail) { e.preventDefault(); props.onCloseDetail(); return; }
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || typing(e.target as Element)) return;
     const preset = ({ "1": "overview", "2": "top", "3": "alert" } as Record<string, Preset>)[e.key];
     if (preset) { e.preventDefault(); go(preset); }
@@ -188,7 +260,39 @@ export default function OverviewStage(props: StageProps) {
   const shownKeys = labelKeys.filter((k) => byKey.has(k));
 
   return (
-    <div className={`ov3d${reduced ? " is-still" : ""}`} onKeyDown={onKey}>
+    <div ref={rootRef} className={`ov3d${reduced ? " is-still" : ""}${full ? " is-full" : ""}`} onKeyDown={onKey}>
+      {/* Tab order: the HUD, then the in-scene panels (KPIs, lists, SOS, detail), then the scene and its labels. */}
+      <div className="ov3d-hud" role="region" aria-label="ตัวควบคุมภาพรวม 3D">
+        <div className="ov3d-hud-head">
+          <strong>ภาพรวม 3D</strong>
+          {props.status}
+          <div className="ov3d-toolbar" role="toolbar" aria-label="มุมกล้อง">
+            <button type="button" onClick={() => go("overview")} title="ภาพรวม (1)"><View size={15} aria-hidden="true" /><span className="ov3d-sr">ภาพรวม</span><kbd>1</kbd></button>
+            <button type="button" onClick={() => go("top")} title="มุมบน (2)"><ScanEye size={15} aria-hidden="true" /><span className="ov3d-sr">มุมบน</span><kbd>2</kbd></button>
+            <button type="button" className={target?.sos ? "is-sos" : target ? "is-alert" : ""} disabled={!target} onClick={() => go("alert")} title={target ? `ไปที่เหตุ: ${target.name} (3)` : "ไม่มีเหตุที่ต้องดูในตัวกรองนี้"}><Crosshair size={15} aria-hidden="true" /><span className="ov3d-sr">ไปที่เหตุ</span><kbd>3</kbd></button>
+            <button type="button" aria-pressed={tour} disabled={reduced} title={reduced ? "ทัวร์ปิดอยู่ เพราะตั้งค่าลดการเคลื่อนไหวไว้" : "ทัวร์ · หมุนกล้องรอบช้า ๆ · ลากเมื่อไรก็หยุด"} onClick={() => setTour(engineRef.current?.setTour(!tour) ?? false)}>{tour ? <Pause size={15} aria-hidden="true" /> : <Orbit size={15} aria-hidden="true" />}<span className="ov3d-sr">ทัวร์</span></button>
+            <button type="button" aria-pressed={full} onClick={toggleFull} title={full ? "ออกจากเต็มจอ (Esc)" : "เต็มจอ"}>{full ? <Minimize size={15} aria-hidden="true" /> : <Maximize size={15} aria-hidden="true" />}<span className="ov3d-sr">เต็มจอ</span></button>
+            <button type="button" className={`ov3d-filter-btn${hudOpen ? " is-on" : ""}`} aria-expanded={hudOpen} onClick={() => setHudOpen(!hudOpen)} title="ตัวกรอง: โปรเจค ชนิด ต้องดู ค้นหา">{hudOpen ? <ChevronUp size={15} aria-hidden="true" /> : <SlidersHorizontal size={15} aria-hidden="true" />}ตัวกรอง</button>
+            <button type="button" onClick={props.onShowCards} title="กลับไปมุมมองการ์ด"><LayoutGrid size={15} aria-hidden="true" />การ์ด</button>
+          </div>
+        </div>
+        {hudOpen && <div className="ov3d-hud-filters">{props.filters}</div>}
+      </div>
+
+      <div ref={cssHostRef} className="ov3d-css-host" />
+      {props.kpis.map((k, i) => <Panel3D key={k.key} registry={registry} id={`kpi-${k.key}`} kind="kpi" place={{ at: kpiAt(i, props.kpis.length) }} width={wall * 0.42}>{k.node}</Panel3D>)}
+      {props.panels.filter((p) => p.node).map((p) => <Panel3D key={p.key} registry={registry} id={`list-${p.key}`} kind="list" place={{ at: polar(LIST_DEG[p.key] ?? 0, wall * 1.1, wall * 0.12 + 2) }} width={wall * 0.62}>{p.node}</Panel3D>)}
+      {props.sos && <Panel3D registry={registry} id="sos" kind="sos" place={{ above: props.sos.key }} width={Math.max(10, wall * 0.5)}>{props.sos.node}</Panel3D>}
+      {props.detail && (
+        <Panel3D registry={registry} id="detail" kind="detail" place={{ beside: props.detail.key }} width={9.5} label={`รายละเอียด ${props.detail.title}`}>
+          <div className={`ov3d-detail-head${props.detail.sos ? " is-sos" : ""}`}>
+            <div><strong>{props.detail.title}</strong><small>{props.detail.subtitle}</small></div>
+            <button ref={closeRef} type="button" className="ov3d-close" aria-label="ปิดรายละเอียด (Esc)" title="ปิด (Esc)" onClick={props.onCloseDetail}><X size={16} aria-hidden="true" /></button>
+          </div>
+          {props.detail.body}
+        </Panel3D>
+      )}
+
       <div ref={hostRef} className="ov3d-canvas" role="application" tabIndex={0} aria-roledescription="ภาพ 3 มิติ"
         aria-label={`ภาพรวม 3 มิติ · gateway ${stable.layout.hubs.length} จุด · อุปกรณ์ ${stable.layout.nodes.length} ชิ้น · ลากเพื่อหมุน ล้อเมาส์เพื่อซูม ลูกศรเพื่อเลื่อน ปุ่ม 1 2 3 เปลี่ยนมุมกล้อง · ป้ายชื่อเป็นปุ่มเปิดรายละเอียด`} />
       <div className="ov3d-vignette" aria-hidden="true" />
@@ -227,14 +331,6 @@ export default function OverviewStage(props: StageProps) {
             <small>คลิกเพื่อดูรายละเอียดและสั่งงาน</small>
           </>
         )}
-      </div>
-
-      <div className="ov3d-toolbar" role="toolbar" aria-label="มุมกล้อง">
-        <button type="button" onClick={() => go("overview")} title="ภาพรวม (1)"><View size={14} aria-hidden="true" />ภาพรวม<kbd>1</kbd></button>
-        <button type="button" onClick={() => go("top")} title="มุมบน (2)"><ScanEye size={14} aria-hidden="true" />มุมบน<kbd>2</kbd></button>
-        <button type="button" className={target?.sos ? "is-sos" : target ? "is-alert" : ""} disabled={!target} onClick={() => go("alert")} title={target ? `ไปที่ ${target.name} (3)` : "ไม่มีเหตุที่ต้องดูในตัวกรองนี้"}><Crosshair size={14} aria-hidden="true" />ไปที่เหตุ<kbd>3</kbd></button>
-        <button type="button" aria-pressed={tour} disabled={reduced} title={reduced ? "ปิดอยู่ เพราะตั้งค่าลดการเคลื่อนไหวไว้" : "หมุนกล้องรอบช้า ๆ · ลากเมื่อไรก็หยุด"} onClick={() => setTour(engineRef.current?.setTour(!tour) ?? false)}>{tour ? <Pause size={14} aria-hidden="true" /> : <Orbit size={14} aria-hidden="true" />}ทัวร์</button>
-        <button type="button" onClick={props.onShowCards} title="กลับไปมุมมองการ์ด"><LayoutGrid size={14} aria-hidden="true" />การ์ด</button>
       </div>
 
       <details className="ov3d-legend">

@@ -13,10 +13,33 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
 import { pickLabels } from "./layout";
 import { labelTier, poweredOn, SHAPES, shapeOf, type HubPlace, type NodePlace, type Shape } from "./types";
 
 export type Quality = "high" | "med" | "low";
+
+/** Where an in-scene panel sits: a world point, beside a device (the detail), or above one (the SOS banner). */
+export type PanelPlace = { at: [number, number, number] } | { beside: string } | { above: string };
+export type PanelKind = "kpi" | "list" | "sos" | "detail";
+/** One CSS3D panel: React renders into `el` (a portal); the engine places, turns and fades it. `width` is in world units. */
+export type PanelSpec = { el: HTMLElement; place: PanelPlace; width: number; kind: PanelKind };
+/** CSS pixel width of each panel kind (stage.css sets the same widths). */
+const PANEL_PX: Record<PanelKind, number> = { kpi: 232, list: 340, sos: 600, detail: 460 };
+/** The CSS3D scene runs at K× the WebGL scale, so panels sit near scale 1 and the browser rasterises text crisply. */
+const CSS_K = 40;
+
+/** Panels React has mounted, by key; the engine binds to it once it exists (panels can mount before the engine). */
+export class PanelRegistry {
+  readonly items = new Map<string, PanelSpec>();
+  private listener: ((key: string, spec: PanelSpec | null) => void) | null = null;
+  set(key: string, spec: PanelSpec) { this.items.set(key, spec); this.listener?.(key, spec); }
+  remove(key: string) { this.items.delete(key); this.listener?.(key, null); }
+  bind(fn: ((key: string, spec: PanelSpec | null) => void) | null) {
+    this.listener = fn;
+    if (fn) for (const [k, v] of this.items) fn(k, v);
+  }
+}
 export type Preset = "overview" | "top" | "alert";
 export type Palette = Record<"paper" | "panel" | "ink" | "muted" | "dim" | "accent" | "warning" | "danger" | "border" | "grid" | "blue", THREE.Color>;
 export type Pick = { kind: "node"; key: string } | { kind: "hub"; id: string } | null;
@@ -161,7 +184,18 @@ export class ConstellationEngine {
   private raycaster = new THREE.Raycaster();
   private disposed = false;
 
-  constructor(host: HTMLElement, palette: Palette, hooks: EngineHooks, opts: { quality?: Quality | "auto"; reducedMotion?: boolean } = {}) {
+  private css: CSS3DRenderer;
+  private cssHost: HTMLElement | null;
+  private cssScene = new THREE.Scene();
+  private cssCamera = new THREE.PerspectiveCamera();
+  private panels = new Map<string, { obj: CSS3DObject; spec: PanelSpec; at: THREE.Vector3 }>();
+  private registry: PanelRegistry | null = null;
+  private cssDirty = true;
+  private lastCam = new THREE.Matrix4();
+  private lastProj = new THREE.Matrix4();
+  private extent = 0;
+
+  constructor(host: HTMLElement, palette: Palette, hooks: EngineHooks, opts: { quality?: Quality | "auto"; reducedMotion?: boolean; cssHost?: HTMLElement | null } = {}) {
     this.host = host;
     this.hooks = hooks;
     this.palette = palette;
@@ -175,6 +209,11 @@ export class ConstellationEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
+    // In-scene panels: a CSS3D layer over the canvas sharing the camera (crisp, clickable, accessible Thai text).
+    this.css = new CSS3DRenderer();
+    this.css.domElement.className = "ov3d-css";
+    this.cssHost = opts.cssHost ?? null;
+    this.cssHost?.appendChild(this.css.domElement);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     const room = new RoomEnvironment();
@@ -238,6 +277,10 @@ export class ConstellationEngine {
     el.removeEventListener("pointercancel", this.onCancel);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.controls.dispose();
+    this.registry?.bind(null);
+    for (const p of this.panels.values()) this.cssScene.remove(p.obj); // CSS3DObject detaches its element on removal
+    this.panels.clear();
+    this.css.domElement.remove();
     this.clearData();
     disposeTree(this.platform);
     disposeTree(this.fx);
@@ -253,6 +296,10 @@ export class ConstellationEngine {
 
   invalidate() { this.dirty = true; }
 
+  /** The label elements changed (content or set): re-place them on the next frame without redrawing the scene. */
+  refreshLabels() { this.labelsDirty = true; }
+  private labelsDirty = false;
+
   private onVisibility = () => {
     this.hidden = document.visibilityState === "hidden";
     if (!this.hidden) { this.lastFrame = 0; this.invalidate(); }
@@ -264,6 +311,8 @@ export class ConstellationEngine {
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
     this.composer?.setSize(w, h);
+    this.css.setSize(w, h);
+    this.cssDirty = true;
     this.bloom?.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -330,7 +379,12 @@ export class ConstellationEngine {
     const moving = !!this.tween || this.touring;
     const ambientDue = this.ambient() && now - this.lastAmbient >= (this.sosFx.length || this.alertIdx.length ? AMBIENT_MS : BREATH_MS);
     if (this.pointerDirty) { this.pointerDirty = false; this.updateHover(); }
-    if (!this.dirty && !moving && !damping && !ambientDue) { this.lastFrame = 0; return; }
+    if (!this.dirty && !moving && !damping && !ambientDue) {
+      // Label content changed (a new reading) but nothing in the scene did: place the labels, skip the WebGL frame.
+      if (this.labelsDirty) { this.labelsDirty = false; this.placeLabels(); }
+      this.lastFrame = 0;
+      return;
+    }
     if (ambientDue) this.lastAmbient = now;
     if (this.lastFrame > 0) {
       this.frameTimes.push(now - this.lastFrame);
@@ -350,6 +404,7 @@ export class ConstellationEngine {
     this.renderer.info.reset();
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
+    this.renderPanels();
     if (moving || damping || this.dirty) this.maybeRepickLabels(now);
     this.placeLabels();
     this.dirty = false;
@@ -631,7 +686,8 @@ export class ConstellationEngine {
 
     if (this.hovered && !this.refs.has(this.hovered)) this.setHovered(null);
     this.step(performance.now());
-    if (!this.framed && this.nodes.length + this.hubs.length > 0) { this.framed = true; this.preset("overview", 0); }
+    if (!this.framed && this.nodes.length + this.hubs.length > 0) { this.framed = true; this.intro(); }
+    for (const [key, p] of this.panels) if ("above" in p.spec.place) this.placePanel(key, p.spec, false);
     this.lastLabelPick = 0;
     this.repickLabels();
     this.invalidate();
@@ -681,12 +737,119 @@ export class ConstellationEngine {
     else this.invalidate();
   }
 
+  // ---- in-scene panels (CSS3D) ------------------------------------------------------------------------------
+
+  bindPanels(registry: PanelRegistry) {
+    this.registry = registry;
+    registry.bind((key, spec) => {
+      if (spec) this.placePanel(key, spec, true);
+      else {
+        const p = this.panels.get(key);
+        if (p) { this.cssScene.remove(p.obj); this.panels.delete(key); }
+      }
+      this.cssDirty = true;
+      this.invalidate();
+    });
+  }
+
+  /** Creates or moves a panel. A newly placed detail panel flies the camera to frame it with its device. */
+  private placePanel(key: string, spec: PanelSpec, fresh: boolean) {
+    let p = this.panels.get(key);
+    if (p && p.obj.element !== spec.el) { this.cssScene.remove(p.obj); p = undefined; }
+    const keepBeside = !!p && "beside" in spec.place && "beside" in p.spec.place && p.spec.place.beside === spec.place.beside;
+    const at = keepBeside ? p!.at : this.resolve(spec);
+    if (!p) {
+      const obj = new CSS3DObject(spec.el);
+      this.cssScene.add(obj);
+      p = { obj, spec, at };
+      this.panels.set(key, p);
+    }
+    p.spec = spec;
+    p.at.copy(at);
+    p.obj.position.copy(at).multiplyScalar(CSS_K);
+    p.obj.scale.setScalar((spec.width * CSS_K) / PANEL_PX[spec.kind]);
+    if (fresh && !keepBeside && "beside" in spec.place) {
+      const node = this.refs.get(spec.place.beside)?.place.at;
+      const mid = node ? new THREE.Vector3(...node).lerp(at, 0.5) : at.clone();
+      this.focusPoint([mid.x, mid.y, mid.z], spec.width * 1.7 + 6, true);
+    }
+    this.cssDirty = true;
+  }
+
+  /** World position of a panel's centre. */
+  private resolve(spec: PanelSpec): THREE.Vector3 {
+    const place = spec.place;
+    if ("at" in place) return new THREE.Vector3(...place.at);
+    const key = "beside" in place ? place.beside : place.above;
+    const node = this.refs.get(key)?.place.at;
+    const fwd = new THREE.Vector3();
+    this.camera.getWorldDirection(fwd);
+    if (!node) {
+      // The device is filtered out of the scene: the panel opens in front of the camera.
+      return this.camera.position.clone().add(fwd.multiplyScalar(spec.width * 1.6 + 4));
+    }
+    const at = new THREE.Vector3(...node);
+    if ("above" in place) return at.add(new THREE.Vector3(0, 5 + spec.width * 0.18, 0));
+    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+    return at.add(right.multiplyScalar(spec.width / 2 + 2.2)).add(new THREE.Vector3(0, 1.5, 0));
+  }
+
+  /**
+   * Re-renders the CSS3D layer only when the camera moved or a panel changed (not on ambient pulses). Panels face
+   * the camera, fade with distance, and step aside (fade, no pointer) when one would cover the middle of the view in
+   * front of what the camera looks at.
+   */
+  private renderPanels() {
+    if (!this.cssHost) return;
+    this.camera.updateMatrixWorld();
+    const moved = !this.lastCam.equals(this.camera.matrixWorld) || !this.lastProj.equals(this.camera.projectionMatrix);
+    if (!moved && !this.cssDirty) return;
+    this.lastCam.copy(this.camera.matrixWorld);
+    this.lastProj.copy(this.camera.projectionMatrix);
+    this.cssDirty = false;
+    const cam = this.camera.position, targetDist = cam.distanceTo(this.controls.target), fitD = this.fit(), v = new THREE.Vector3();
+    // With a device detail open, nothing nearer the camera than the detail may cover it.
+    let detailDist = Infinity;
+    for (const p of this.panels.values()) if (p.spec.kind === "detail") detailDist = cam.distanceTo(p.at);
+    for (const p of this.panels.values()) {
+      // Screen-aligned: a panel always faces the viewer squarely, so its text stays readable from any orbit angle.
+      p.obj.quaternion.copy(this.camera.quaternion);
+      v.copy(p.at).project(this.camera);
+      const el = p.obj.element, behind = v.z > 1;
+      if (el.style.display !== (behind ? "none" : "")) el.style.display = behind ? "none" : "";
+      if (behind) continue;
+      const d = cam.distanceTo(p.at);
+      const blocking = p.spec.kind !== "detail" && p.spec.kind !== "sos" && ((d < targetDist * 0.85 && Math.abs(v.x) < 0.45 && Math.abs(v.y) < 0.45) || (detailDist < Infinity && d < detailDist * 1.15) || d < targetDist * 0.55);
+      // The SOS banner stays bright, except when it would sit over an open device detail.
+      const sosAside = p.spec.kind === "sos" && detailDist < Infinity && d < detailDist * 1.3;
+      const opacity = p.spec.kind === "detail" ? 1 : p.spec.kind === "sos" ? (sosAside ? 0.25 : 1) : blocking ? 0.12 : Math.max(0.5, Math.min(1, 1.35 - d / (fitD * 1.7)));
+      el.style.opacity = opacity.toFixed(2);
+      el.style.pointerEvents = blocking || sosAside ? "none" : "auto";
+    }
+    this.cssCamera.copy(this.camera);
+    this.cssCamera.position.multiplyScalar(CSS_K);
+    this.cssCamera.updateMatrixWorld();
+    this.css.render(this.cssScene, this.cssCamera);
+  }
+
+  /** The first view: a short fly-in from high above (a cut with reduced motion). */
+  private intro() {
+    if (this.reducedMotion) { this.preset("overview", 0); return; }
+    const d = this.fit();
+    this.camera.position.set(d * 0.25, d * 1.9, d * 1.25);
+    this.controls.target.set(0, 0, 0);
+    this.preset("overview", 2600);
+  }
+
   // ---- camera ------------------------------------------------------------------------------------------------
 
   private fit(): number {
     const half = (this.camera.fov * Math.PI) / 360;
-    return ((this.radius + 4) / Math.sin(half)) / Math.min(1, this.camera.aspect * 0.9);
+    return ((Math.max(this.radius + 4, this.extent)) / Math.sin(half)) / Math.min(1, this.camera.aspect * 0.9);
   }
+
+  /** The radius the overview preset frames (the panel wall around the platform, when there is one). */
+  setExtent(r: number) { this.extent = r; }
 
   /** Moves the camera to a preset; "alert" goes to the first SOS (else the first alert) and reports whether one exists. */
   preset(p: Preset, ms = 1400): boolean {
@@ -697,7 +860,9 @@ export class ConstellationEngine {
     if (p === "alert") {
       const np = this.nodes.find((x) => x.card.sos) ?? this.nodes.find((x) => x.card.status === "alert");
       if (!np) return false;
-      this.focusPoint(np.at, 16);
+      // An SOS has its banner above it: frame both.
+      if (np.card.sos) this.focusPoint([np.at[0], np.at[1] + 4, np.at[2]], 26);
+      else this.focusPoint(np.at, 16);
       return true;
     }
     this.flyTo(new THREE.Vector3(0, 0.62, 0.78).normalize().multiplyScalar(d * 0.78), new THREE.Vector3(0, 0, 0), ms);
@@ -715,10 +880,11 @@ export class ConstellationEngine {
   }
 
   /** Flies to a point, approaching from the platform's outside edge (keeps the constellation behind it). */
-  private focusPoint(at: [number, number, number], dist: number) {
+  private focusPoint(at: [number, number, number], dist: number, keepHeading = false) {
     this.touring = false;
     const target = new THREE.Vector3(...at);
-    const out = new THREE.Vector3(at[0], 0, at[2]);
+    // Normally from the platform's outside edge; a detail panel keeps the current heading, so it stays beside its device.
+    const out = keepHeading ? this.camera.position.clone().sub(this.controls.target).setY(0) : new THREE.Vector3(at[0], 0, at[2]);
     if (out.lengthSq() < 1) out.copy(this.camera.position).setY(0);
     out.normalize();
     const pos = target.clone().add(out.multiplyScalar(dist * 0.75)).add(new THREE.Vector3(0, dist * 0.7, 0));

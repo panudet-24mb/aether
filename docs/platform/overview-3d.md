@@ -84,7 +84,7 @@ Labels are DOM elements, not sprites. React renders at most **40** device labels
 engine projects them every frame.
 
 - **Which devices get a label:** SOS, then alert, then controllable, then the rest. Within a tier, the device nearest the camera wins. The set is re-picked at most every 350 ms while the camera moves.
-- **Declutter:** a label that would overlap a higher-priority or nearer label is hidden for that frame. SOS labels are never hidden, and neither is a label that holds keyboard focus.
+- **Declutter:** a label that would overlap a higher-priority or nearer label is hidden for that frame. A label under a panel shown on screen (KPI, list, SOS banner, detail) is always hidden, at every tier and every size: panels stack above labels. SOS labels are never hidden, and neither is a label that holds keyboard focus.
 - **Content:** the status dot, the name (with an SOS tag), and the device's value. The value is rendered by the board's own `value()`, so it has the same semantics: °C / % / W / เปิด-ปิด / มีคน-ว่าง / ประตู.
 - **Click:** a label is a real `<button>`. It opens the existing device Sheet (`setOpenKey`). A hub chip hangs just below its gateway's base, out of the devices' way, and flies the camera to that gateway.
 

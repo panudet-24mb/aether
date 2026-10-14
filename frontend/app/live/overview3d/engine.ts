@@ -200,6 +200,8 @@ export class ConstellationEngine {
   private detailRO: ResizeObserver | null = null;
   /** The device whose detail is open: its label always shows (above every tier) beside its ring. */
   private selected: string | null = null;
+  /** Screen boxes [left, top, right, bottom] of the panels shown, from the last panel pass; labels never sit under them. */
+  private panelBoxes: [number, number, number, number][] = [];
   private selectedAt: number[] | null = null;
   private selectRing: THREE.Mesh;
   private registry: PanelRegistry | null = null;
@@ -521,6 +523,9 @@ export class ConstellationEngine {
       const top = it.below ? it.y + 6 : it.y - lh;
       const box: [number, number, number, number] = [it.x - lw / 2, top, it.x + lw / 2, top + lh];
       const clash = placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
+      // Panels (KPIs, lists, SOS, detail) always win over labels, at every tier: a label under one is hidden.
+      const underPanel = this.panelBoxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
+      if (underPanel && !it.el.contains(focused)) { hidden.push(it.el); return; }
       // SOS always shows; a label holding keyboard focus never disappears under the operator.
       if (clash && it.tier > 0 && !it.el.contains(focused)) { hidden.push(it.el); return; }
       placed.push(box);
@@ -975,6 +980,7 @@ export class ConstellationEngine {
       const rect = { x: ((v.x + 1) / 2) * W, y: ((1 - v.y) / 2) * H, w: PANEL_PX[p.spec.kind] * scale, h: (p.el.offsetHeight || PANEL_PX[p.spec.kind] * 0.6) * scale };
       placed.set(p, { rect, scale, depth });
     }
+    this.panelBoxes = [];
     // An open device detail wins: every other panel that overlaps it on screen steps right back.
     let detailRect: ScreenRect | null = null;
     for (const p of this.panels.values()) if (p.spec.kind === "detail") detailRect = placed.get(p)?.rect ?? null;
@@ -984,7 +990,7 @@ export class ConstellationEngine {
       if (el.style.display === "none") el.style.display = "";
       el.style.transform = `translate(${at.rect.x.toFixed(1)}px, ${at.rect.y.toFixed(1)}px) scale(${at.scale.toFixed(4)}) translate(-50%, -50%)`;
       el.style.zIndex = String(Math.max(1, 100000 - Math.round(at.depth * 100)));
-      if (p.spec.kind === "detail") { el.style.opacity = "1"; el.style.pointerEvents = "auto"; this.setReachable(el, true); continue; }
+      if (p.spec.kind === "detail") { el.style.opacity = "1"; el.style.pointerEvents = "auto"; this.setReachable(el, true); this.panelBoxes.push(boxOf(at.rect)); continue; }
       v.copy(p.at).project(this.camera);
       const d = cam.distanceTo(p.at);
       const underDetail = !!(detailRect && rectsOverlap(at.rect, detailRect));
@@ -993,6 +999,7 @@ export class ConstellationEngine {
       el.style.opacity = opacity.toFixed(2);
       el.style.pointerEvents = underDetail || blocking ? "none" : "auto";
       this.setReachable(el, !(underDetail || blocking));
+      if (opacity > 0.12) this.panelBoxes.push(boxOf(at.rect));
     }
   }
 
@@ -1123,6 +1130,8 @@ export class ConstellationEngine {
     this.invalidate();
   }
 }
+
+const boxOf = (r: ScreenRect): [number, number, number, number] => [r.x - r.w / 2, r.y - r.h / 2, r.x + r.w / 2, r.y + r.h / 2];
 
 function finish(im: THREE.InstancedMesh) {
   im.instanceMatrix.needsUpdate = true;

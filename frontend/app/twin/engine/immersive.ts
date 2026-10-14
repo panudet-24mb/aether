@@ -108,18 +108,19 @@ export function makeGround(theme: TwinTheme, centre: THREE.Vector3, radius: numb
 /** Glass walls with a cool sheen and accent edges bright enough to bloom; slabs a touch of metal. */
 export function styleBuilding(building: THREE.Group, theme: TwinTheme) {
   const accent = new THREE.Color(theme.accent);
-  const glassTint = new THREE.Color(theme.blue).lerp(new THREE.Color(theme.ink), 0.45);
+  // Frosted rather than clear: wall fixtures (switches, sockets, units) need a wall to sit on.
+  const glassTint = new THREE.Color(theme.blue).lerp(new THREE.Color(theme.ink), 0.62);
   building.traverse((o) => {
     const mat = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     for (const m of Array.isArray(mat) ? mat : mat ? [mat] : []) {
       if ((m as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
         const g = m as THREE.MeshPhysicalMaterial;
         g.color.copy(glassTint);
-        g.roughness = 0.06;
         g.metalness = 0.15;
         g.envMapIntensity = 1.1;
         g.clearcoat = 0.6;
-        g.opacity = Math.min(0.2, g.opacity * 0.85);
+        g.opacity = Math.min(0.3, g.opacity * 1.25);
+        g.roughness = 0.35;
         g.needsUpdate = true;
       } else if ((m as THREE.LineBasicMaterial).isLineBasicMaterial) {
         const l = m as THREE.LineBasicMaterial;

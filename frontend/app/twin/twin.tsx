@@ -16,8 +16,9 @@ import type { EngineStats, Preset, TwinStyle } from "./engine/engine";
 import TwinView, { type ModelStatus, type TwinControls, type TwinSource, type TwinViewHandle } from "./twin-view";
 import { TwinMinimap, zoneSummaries } from "./twin-plan";
 import TwinModelPanel from "./twin-model";
-import { fetchModel, fetchModelFile, modelSender, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
+import { fetchModel, fetchModelFile, modelSender, withTimeout, type ModelClient, type ModelTransform, type SiteModel } from "./model-api";
 import { quickToggle, type QuickResult } from "./quick-toggle";
+import { fixtureStateOf, type FixtureState } from "./engine/lifelike/fixtures";
 import "../topology/topology.css";
 import "../floorplan/floorplan.css";
 import "./twin.css";
@@ -54,8 +55,9 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [people, setPeople] = useState<PeopleMode>(() => (store.get("aether.twin.people") as PeopleMode) || "counts");
   // The look: classic (the original rendering) or immersive (beacons, badges with buttons, holographic floor).
   const [style, setStyle] = useState<TwinStyle>(() => (store.get("aether.twin.style") === "immersive" ? "immersive" : "classic"));
-  // Ambient motion is off unless this browser turned it on (wall monitors must idle at 0 fps).
-  const [ambient, setAmbient] = useState(() => store.get("aether.twin.ambient") === "1");
+  // Motion (walking figures, smoke, ambient sweep) is on in the immersive style unless this browser turned it off;
+  // it still pauses after 2 minutes without input, so wall monitors idle at 0 fps.
+  const [ambient, setAmbient] = useState(() => store.get("aether.twin.motion") !== "0");
   const [showModel, setShowModel] = useState(false);
   const [modelInfo, setModelInfo] = useState<{ model: SiteModel | null; status: ModelStatus }>({ model: null, status: "none" });
   const [modelKey, setModelKey] = useState(0);
@@ -63,6 +65,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [canManage, setCanManage] = useState<boolean | null>(null);
   const [canCommand, setCanCommand] = useState<boolean | null>(null);
   const [pendingCmd, setPendingCmd] = useState<Record<string, QuickResult>>({});
+  const [fixtureStates, setFixtureStates] = useState<Record<string, FixtureState>>({});
   const [explode, setExplode] = useState(0.55);
   const [isolate, setIsolate] = useState(false);
   const [tour, setTour] = useState(false);
@@ -116,7 +119,6 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   useEffect(() => { if (siteId) store.set("aether.twin.site", siteId); }, [siteId]);
   useEffect(() => { store.set("aether.twin.people", people); }, [people]);
   useEffect(() => { store.set("aether.twin.style", style); }, [style]);
-  useEffect(() => { store.set("aether.twin.ambient", ambient ? "1" : "0"); }, [ambient]);
 
   // Who may upload, align or delete the building model: owners, and admins whose floor plan access is not read-only
   // (the server's rule for writing sites). Unknown → the panel shows the controls and explains a refusal.
@@ -159,6 +161,58 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   // A member known not to command devices gets badges without power buttons; unknown → buttons, and a refusal is explained.
   const controls: TwinControls | undefined = useMemo(() => (canCommand === false ? undefined : { pending: pendingCmd, onToggle, disabled: mode !== "live" }), [canCommand, pendingCmd, onToggle, mode]);
   const fitModel = useCallback((t: ModelTransform) => handle.current?.fitModel(t) ?? null, []);
+  // Immersive: an AC's switch or a blind's position is not in the live view, so the controls of the climate and cover
+  // devices (at most 12, the active floor first) are read when the view opens and every minute: two at a time, 10 s
+  // each at most, never while the tab is hidden or the scene's idle pause is on, and never two loads at once. A device
+  // that fails is backed off (1, 2, 4 min) and dropped after 3 failures in a row; each load replaces the states (a
+  // failed or dropped device goes back to its default look) and a load older than the last applied one is discarded;
+  // leaving the view aborts what is in flight.
+  const hasState = !!state;
+  const stateNow = useLatest(state);
+  const floorNow = useLatest(floorId);
+  useEffect(() => {
+    if (style !== "immersive" || mode !== "live" || !hasState) return;
+    const abort = new AbortController();
+    const failures = new Map<string, { n: number; until: number }>();
+    let running = false, issued = 0, applied = 0;
+    const load = async () => {
+      if (running || document.hidden || handle.current?.engine()?.idle()) return;
+      running = true;
+      const seq = ++issued;
+      try {
+        const now = Date.now();
+        const list = (stateNow.current?.devices ?? [])
+          .filter((d) => d.kind === "device" && (d.class === "climate" || d.class === "cover"))
+          .filter((d) => { const f = failures.get(d.id); return !f || (f.n < 3 && now >= f.until); })
+          .sort((a, b) => Number(b.floor_id === floorNow.current) - Number(a.floor_id === floorNow.current))
+          .slice(0, 12);
+        const out: Record<string, FixtureState> = {};
+        const queue = [...list];
+        const worker = async () => {
+          for (let d = queue.shift(); d && !abort.signal.aborted; d = queue.shift()) {
+            try {
+              const r = await modelClient.send("GET", `/devices/${d.id}/controls`, undefined, { signal: withTimeout(abort.signal, 10000) });
+              if (!r.ok) throw new Error(String(r.status));
+              out[d.id] = fixtureStateOf(((await r.json()) as { state?: Record<string, unknown> }).state ?? {}, d.class);
+              failures.delete(d.id);
+            } catch {
+              if (abort.signal.aborted) return;
+              // Unreadable or too slow: back off, then give up on this device; its fixture keeps the default look.
+              const n = (failures.get(d.id)?.n ?? 0) + 1;
+              failures.set(d.id, { n, until: Date.now() + 60000 * 2 ** (n - 1) });
+            }
+          }
+        };
+        await Promise.all([worker(), worker()]);
+        if (!abort.signal.aborted && seq > applied) { applied = seq; setFixtureStates(out); }
+      } finally {
+        running = false;
+      }
+    };
+    void load();
+    const id = setInterval(load, 60000);
+    return () => { abort.abort(); clearInterval(id); };
+  }, [style, mode, hasState, modelClient, stateNow, floorNow, siteId]);
   const onModel = useCallback((m: SiteModel | null, status: ModelStatus) => setModelInfo({ model: m, status }), []);
 
   // Signals refetch now (alerts at once, the rest coalesced by the hook); the poll is only a safety net.
@@ -327,7 +381,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
           <button type="button" className={style === "immersive" ? "is-on" : ""} aria-pressed={style === "immersive"} onClick={() => setStyle("immersive")} title="ห้องควบคุม: สถานะและปุ่มสั่งงานในฉาก"><Sparkles size={13} />Immersive</button>
         </div>
         {style === "immersive" && (
-          <button type="button" className={`topo-btn ${ambient ? "is-on" : ""}`} aria-pressed={ambient} onClick={() => setAmbient(!ambient)} title="ภาพเคลื่อนไหวพื้นหลัง (หยุดเองเมื่อซ่อนแท็บหรือตั้งค่าลดการเคลื่อนไหว)" aria-label="ภาพเคลื่อนไหวพื้นหลัง"><Waves size={14} /></button>
+          <button type="button" className={`topo-btn ${ambient ? "is-on" : ""}`} aria-pressed={ambient} onClick={() => { store.set("aether.twin.motion", ambient ? "0" : "1"); setAmbient(!ambient); }} title="ภาพเคลื่อนไหวพื้นหลัง (หยุดเองเมื่อซ่อนแท็บหรือตั้งค่าลดการเคลื่อนไหว)" aria-label="ภาพเคลื่อนไหวพื้นหลัง"><Waves size={14} /></button>
         )}
         <label className="fp-site twin-site">
           <Building2 size={14} />
@@ -362,7 +416,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
         {siteId ? (
           <TwinView siteId={siteId} source={source} floorId={floorId} layers={layers} people={people} tour={tour && mode === "live"} explode={explode} isolate={isolate}
             mode={mode} frozen={frozen} autoFocus={mode === "live"} style={style} ambient={ambient} controls={controls}
-            modelKey={modelKey} modelTransform={modelDraft} onModel={onModel}
+            modelKey={modelKey} modelTransform={modelDraft} onModel={onModel} fixtureStates={fixtureStates}
             refreshKey={refreshKey} pollMs={connected ? 20000 : 6000} handleRef={handle} onReady={onReady} onState={onState} onSelect={setSelected} onError={fail}
             onAlertFocus={(a) => { const z = handle.current?.engine()?.zoneName(a.gateway_id); if (z) setFloorId(z.floorId); setTour(false); }} />
         ) : sites && <div className="twin-empty"><Building2 size={28} /><p>ยังไม่มีอาคาร · วาดผังในหน้า &ldquo;ผังอาคาร&rdquo; ก่อน แล้วกลับมาดูแบบ digital twin</p></div>}
@@ -392,7 +446,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
               <small className="twin-hatch">ลายขีด = ไม่มีเซ็นเซอร์ในโซน</small>
             </>
           )}
-          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง</small>}
+          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง{style === "immersive" ? " · ท่าทางเดินและชุดเป็นภาพประกอบ" : ""}</small>}
         </div>
         {showModel && siteId && (
           // Keyed by site: switching building mid-upload unmounts the panel, which aborts the upload and cancels it on

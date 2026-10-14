@@ -37,6 +37,27 @@ therefore never draws a person at a coordinate:
 - a tag heard by a gateway that no zone lists gets a dashed ring around that gateway, never a room;
 - the legend always says "ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง" while the people layer is on.
 
+**Illustrative walking (immersive style).** In the immersive style people are drawn as walking figures (see "Lifelike
+hospital"). That walking is illustration, not data: a figure only ever wanders inside its **current** zone, between
+random points and spots by the furniture, so the room looks inhabited; its path and its place in the room say nothing.
+The legend adds "ท่าทางเดินและชุดเป็นภาพประกอบ" (outfits are illustration too).
+
+What a figure is keyed by, and so what moves on a refresh:
+
+- `counts` and `tracks`: a figure belongs to a **slot** (`gateway#007`, an SOS taking the first index), never to a
+  person or a pseudonym (a pseudonym changes with every response). A refresh moves nobody and re-dresses nobody; a
+  headcount going up adds a figure at its slot, going down removes the last one. A person moving between zones shows
+  as one figure leaving one zone and another appearing in the other: there is no walk, because nothing links them.
+- `named`: a figure belongs to its tag. A zone change walks it to the edge the two zones share and into the new zone,
+  at a pace that finishes in about 3 s, and only when that path stays inside the two zones (each leg is checked, so it
+  never crosses a wall or a third room); otherwise, or on another floor, it appears at its new slot.
+
+Figures wander around furniture (operator-drawn and generated), and a slot covered by furniture moves to the nearest
+free spot. `counts` figures carry no label (their outfit comes from a hash of the slot key, which carries no
+identity); `tracks` and `named` keep their pseudonym or name only where the classic view shows one (an SOS). A person
+who pressed SOS kneels and waves at their slot in their current zone, under the red pillar. With motion reduced,
+figures stand still at their slots.
+
 **Temperature colours are relative to each zone's comfort band**, not one scale for the whole building (a cold store
 at 5 °C would otherwise make every normal room look hot): inside the band is the accent, below it runs to blue, above it
 to coral, full colour 4 °C outside the band. A zone's band is its own `comfort` (°C, low and high, in the floor layout;
@@ -233,12 +254,82 @@ on a 1×1 canvas and reads it back as sRGB, since three.js cannot parse oklch):
 - Device-to-gateway link lines are **not drawn**: the live state carries no device→gateway link, and a guessed line
   (nearest gateway, zone gateway) would state a topology that may be false.
 
-**Ambient motion** (the ≋ button, `aether.twin.ambient`, **off by default**; a browser that turns it on keeps it on): a slow sweep across the grid, breathing
-beacon rings and the pulse of a device alert's ring. It draws at most 30 fps, is never counted towards the quality
-tier's frame rate, and stops when motion is reduced, the tab is hidden, the view is paused (a TV playlist) or the
-button is off, and 2 minutes after the last pointer or keyboard input or meaningful state change (a switch, a door,
-an alert, a headcount); input resumes it. Wall monitors therefore idle at 0 fps. Without it the scene is idle at 0 fps; a device alert then shows a solid ring (an alert can stay open for
+**Ambient motion** (the ≋ button, `aether.twin.motion`, **on by default** in the immersive style; a browser that turns
+it off keeps it off): walking figures, smoke and mist, airflow, swinging doors, a slow sweep across the grid, breathing
+beacon rings and the pulse of a device alert's ring. It draws at most 30 fps (60 fps on the high tier while figures
+walk: a 30 fps walk reads as stop motion), is never counted towards the quality tier's frame rate, and stops when motion is reduced, the tab is hidden, the view is paused (a TV playlist) or the
+button is off, and 2 minutes after the last pointer or keyboard input or meaningful state change (a switch, a door or
+an online state changing, an alert opening); input or such a change resumes it. People moving (headcounts) is not a
+meaningful change, so a busy hospital's wall screen still idles at 0 fps.
+Without it the scene is idle at 0 fps and figures stand still; a device alert then shows a solid ring (an alert can stay open for
 hours and is no reason to keep rendering). SOS and hazard pillars keep their own pulse in both styles.
+
+### Lifelike hospital (immersive)
+
+The immersive style draws the building as a furnished, inhabited hospital (`engine/lifelike/`). Classic and the TV
+display are unchanged. Everything is generated in the browser from the floor plan and the live state: **no downloaded
+models** (no third-party assets and no licensing questions; three.js ships no CC0 furniture or humanoid that would
+fit).
+
+- **Interior** (`interior.ts`, active floor): each zone is classified from its kind and name (ICU, ER, ward, lobby,
+  nurse station, lab, pharmacy, cold store, server room, corridor, storage, office) and furnished accordingly: beds
+  with rails, bedside monitors and IV poles (ward, ICU, ER), a reception counter and rows of waiting chairs (lobby), a
+  nurse counter with screens, carts and shelves, lab benches with instruments, pharmacy shelving, cold-store fridges,
+  server racks, corridor benches, plants. Plan items the operator drew (beds, desks, stairs, lifts, racks) are drawn as
+  furniture in their place and the generated pieces fit around them. Placement is deterministic (seeded by the zone's
+  id), inside the zone, along its walls or in a grid, at least 1 m from doors and 0.45 m from any placed device. The
+  furniture is a few hundred primitives in four instanced meshes. A customer building model that is shown replaces it
+  (the model has its own interior), and in "replace" mode its doors and windows replace the drawn ones too; people
+  then walk around nothing.
+- **Fixtures** (`fixtures.ts`): a device's look comes from its class and name. Wall switches, sockets (switched devices
+  that meter power: the appliance's plug), wall air conditioners and thermostats snap to the nearest wall of their zone
+  (projected onto it, off by half the thickest wall there) at 1.2 m, 0.3 m, 2.4 m and 1.5 m. A switch is a plate whose
+  rocker tilts and takes a hint of the accent when on, a socket has a glowing indicator, an air conditioner is a split
+  unit with a dark outlet and a louver that opens and breathes soft airflow while it runs, a purifier puffs upwards, a
+  cover is a blind that hangs down as far as it is closed. The live view carries no state for climate and cover
+  devices, so in this style the page reads the controls of at most 12 of them (the active floor first) when it opens
+  and every minute (an AC's `switch`, a thermostat's `system_mode`, a cover's `position`): two requests at a time, 10 s
+  each at most, none while the tab is hidden or the scene's idle pause is on, never two loads at once (a tick that
+  finds one running is skipped), a device that fails backed off (1, 2, 4 minutes) and dropped after 3 failures in a
+  row, everything aborted when the view closes. Each load replaces the states it read (a device that failed or was
+  dropped goes back to its default look), and an older load never lands over a newer one. Each read is a `device_controls` row in the access
+  log, deduplicated per member and device for 10 minutes. Without that a blind hangs half down and an AC stays still. Lights are ceiling panels that glow with a pool of light on the floor when on; their glow is kept under the
+  bloom threshold and bloom fades in with camera distance, so a close look does not turn them into white blobs. Sensors keep a small
+  status dot where they really hang: environment sensors on the wall at 1.6 m, PIR and smoke, gas and CO detectors on
+  the ceiling, door sensors on the frame of the nearest door. A fixture shows its status like a beacon would: an
+  alert tints it coral under the pulsing ring, stale data amber, no contact grey, and a light in doubt is neither lit
+  nor dark. **Clicking a fixture** (primary button only) first selects the device: its card opens and its badge takes
+  keyboard focus. A second, deliberate click (400 ms or more after the selecting one) on that switch, light or purifier
+  runs the same command flow as the badge's power button (pending, sent, confirmed or a Thai reason, the same
+  permissions, nothing in replay); a fast double-click, or a fixture selected from its card or the list rather than by
+  a click on it, only selects. A socket never
+  switches from the canvas (a fridge or a monitor may be plugged in): only from its badge or card. Where a sensor and a
+  light panel are both under the pointer, the sensor wins. The badges stay as the accessible control and float above
+  the fixture.
+- **People** (`crowd.ts`): stylised figures about 1.75 m tall (head one 7.5th of it, shoulders wider than hips) built
+  from rounded parts: capsule legs and arms, a tapered torso with rounded shoulders, neck, head with two eyes and a
+  hair cap, hands and shoes; a coat to mid-thigh or a hospital gown to the knee. Each part is one instanced mesh (12
+  for up to 150 figures), with a walk cycle and an idle pose. Outfits (scrubs, white coat, patient gown, visitor) are
+  chosen by a hash of the person's key (the data has no role). Figures more than 25 m from the camera, and every figure
+  on the med and low tiers, are plain capsules; past 150 people the rest stay the plain tokens. The walking rules are under "Honest positioning".
+- **Effects** (`effects.ts`), each one a reading or an open alert: an open hazard alert (smoke, gas, CO) puts a smoke
+  plume at its detector under a flashing ceiling alarm: soft, feathered puffs sized in metres that rotate slowly, grow
+  as they rise, fade in and out, lean with a slow drift and spread under the ceiling, dark and dense at the source and
+  lighter as they spread (gas and CO stay low, tinted yellow-green); an open leak
+  alert puts a rippling puddle under its sensor; a door with a door sensor swings open with it and turns amber when
+  open for more than a minute; a zone 3 °C or more above its comfort band shimmers; a cold store has a low mist; a room
+  whose PIR saw motion in the last 5 minutes gets a soft light; windows glow warm from 19:00 to 06:00 in the site's time
+  zone (the deployment default, Asia/Bangkok, while sites carry none). Shimmer covers the zone's own shape and uses
+  fresh readings only, weighted like the heat map (none older than 15 minutes).
+- **Motion and budget**: walking, particles and swinging run only as ambient motion (above). With motion reduced
+  figures stand in their slots, plumes, mist and airflow hold still and doors snap, nothing flashes. On the med and low
+  tiers particle counts drop and figures become capsules. The walls are frosted rather than clear in this style, so
+  wall fixtures have a wall to sit on, and the operator may zoom in to 1 m (classic keeps 4 m). Measured on the demo
+  hospital (3 floors, 44 people, 1440×900, Chrome on an Apple M4 Pro, high tier): all floors 78 draw calls, 61k
+  triangles, 60 fps while figures walk; one floor isolated 48–54 draw calls and 18–26k triangles, 57–60 fps; a close-up
+  among detailed figures 75–81 draw calls and 113k triangles; with a smoke plume open 90 draw calls and 90–112k
+  triangles at 60 fps. A detailed figure is about 1,300 triangles, so 150 of them near the camera stay inside the
+  budget: under 150 draw calls and 400k triangles. The furniture of one floor is 6–8k triangles.
 
 ### In-scene badges and buttons
 

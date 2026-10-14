@@ -9,6 +9,7 @@ import { draftOf, type Site } from "../floorplan/model";
 import { useLatest } from "../topology/use-latest";
 import { type Layer, type PeopleMode, type TwinAlert, type TwinDevice, type TwinState } from "./api";
 import { TwinEngine, type BadgeSpec, type Preset, type Quality, type TwinStyle } from "./engine/engine";
+import type { FixtureState } from "./engine/lifelike";
 import { disposeTree, type Floor3D } from "./engine/building";
 import { parseModel } from "./engine/model";
 import { cachedModel, primeModelCache, type ModelTransform, type SiteModel } from "./model-api";
@@ -81,6 +82,8 @@ export type TwinViewProps = {
   ambient?: boolean;
   /** Immersive only: power buttons on the badges of controllable devices. */
   controls?: TwinControls;
+  /** Immersive: states the live view lacks (an AC's switch, a cover's position), from the devices' controls. */
+  fixtureStates?: Record<string, FixtureState>;
   /** Changing it refetches the building model's record (after an upload, a save or a delete). */
   modelKey?: number;
   /** A transform to preview instead of the saved one (the alignment panel). */
@@ -139,6 +142,10 @@ export default function TwinView(props: TwinViewProps) {
   const cb = useLatest({ onReady: props.onReady, onAlertFocus: props.onAlertFocus, onState: props.onState, onSelect: props.onSelect, onError: props.onError, onModel: props.onModel, onToggle: controls?.onToggle });
   const qualityRef = useLatest(quality);
   const styleRef = useLatest(style);
+  const controlsRef = useLatest(controls);
+  const selectedRef = useRef<string | null>(null);
+  /** The fixture a canvas click selected, and when (a toggle needs that and a second click 400 ms later). */
+  const canvasPick = useRef<{ id: string; at: number } | null>(null);
   // Bumped when an engine is created, so the model and style are applied to a new WebGL context too.
   const [engineGen, setEngineGen] = useState(0);
   const [site, setSite] = useState<Site | null>(null);
@@ -197,7 +204,24 @@ export default function TwinView(props: TwinViewProps) {
       return () => cancelAnimationFrame(id);
     }
     engineRef.current = engine;
-    engine.setPickHandler((p) => setSelected(p ? p.id : null));
+    engine.setPickHandler((p) => {
+      // Fixtures (immersive): the first click selects the device (its card opens, its badge takes focus); a second,
+      // deliberate click (400 ms or more later) on the switch, light or purifier a canvas click selected switches it
+      // through the badge's command flow. A fast double-click, a fixture selected from the card or list, sockets, and
+      // anything a member may not command or in replay, only ever select.
+      if (p?.kind === "fixture") {
+        const ctl = controlsRef.current, d = stateRef.current?.devices.find((x) => x.id === p.id);
+        const picked = canvasPick.current;
+        const deliberate = !!picked && picked.id === p.id && selectedRef.current === p.id && performance.now() - picked.at >= 400;
+        if (p.toggle && deliberate && ctl && !ctl.disabled && d) { ctl.onToggle(d); return; }
+        if (selectedRef.current === p.id && picked?.id === p.id) return;
+        canvasPick.current = { id: p.id, at: performance.now() };
+        setSelected(p.id);
+        setTimeout(() => engineRef.current?.focusBadge(p.id), 80);
+        return;
+      }
+      setSelected(p ? p.id : null);
+    });
     engine.setBadgeHandler((id, action) => {
       if (action === "select") { setSelected(id); return; }
       const d = stateRef.current?.devices.find((x) => x.id === id);
@@ -232,10 +256,14 @@ export default function TwinView(props: TwinViewProps) {
       if (debug) delete (window as unknown as { __twin?: unknown }).__twin;
     };
     // A quality change is applied below without recreating the context.
-  }, [fallback, qualityRef, styleRef, stateRef, cb]);
+  }, [fallback, qualityRef, styleRef, stateRef, cb, controlsRef, selectedRef, canvasPick]);
 
   useEffect(() => { engineRef.current?.setQuality(quality); }, [quality]);
   useEffect(() => { engineRef.current?.setStyle(style); }, [style, engineGen]);
+  // Night windows follow the site's time zone when the site carries one (else the deployment default, Asia/Bangkok).
+  const siteTimeZone = (site as (Site & { timezone?: string }) | null)?.timezone ?? null;
+  useEffect(() => { engineRef.current?.setTimeZone(siteTimeZone); }, [siteTimeZone, engineGen]);
+  useEffect(() => { if (props.fixtureStates) engineRef.current?.setFixtureStates(props.fixtureStates); }, [props.fixtureStates, style, engineGen]);
   useEffect(() => {
     engineRef.current?.setAmbient(ambient);
     engineRef.current?.setPaused(paused);
@@ -424,7 +452,12 @@ export default function TwinView(props: TwinViewProps) {
     } else e.setLabels(out.slice(0, 40));
   }, [state, site, floorId, layers, selected, style, badges.length]);
 
-  useEffect(() => { cb.current.onSelect?.(state?.devices.find((d) => d.id === selected) ?? null); }, [selected, state, cb]);
+  useEffect(() => {
+    selectedRef.current = selected;
+    // Selected some other way (the card, the list, another device): a fixture click must select it again first.
+    if (canvasPick.current && canvasPick.current.id !== selected) canvasPick.current = null;
+    cb.current.onSelect?.(state?.devices.find((d) => d.id === selected) ?? null);
+  }, [selected, state, cb]);
 
   // The handle the page (and a TV playlist) drives.
   useImperativeHandle(props.handleRef, () => ({

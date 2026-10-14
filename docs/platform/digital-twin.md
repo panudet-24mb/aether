@@ -37,6 +37,16 @@ therefore never draws a person at a coordinate:
 - a tag heard by a gateway that no zone lists gets a dashed ring around that gateway, never a room;
 - the legend always says "ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง" while the people layer is on.
 
+**Illustrative walking (immersive style).** In the immersive style people are drawn as walking figures (see "Lifelike
+hospital"). That walking is illustration, not data: a figure only ever wanders inside its **current** zone, between
+random points and spots by the furniture, so the room looks inhabited; its path and its place in the room say nothing.
+A zone change walks the figure to the edge the two zones share and into the new zone (a few seconds), standing for
+"moved to"; another floor makes it simply appear there. The legend adds "ท่าทางเดินเป็นภาพประกอบ". The people modes
+are unchanged: `counts` draws anonymous figures with no labels (colours are chosen from a hash of the token, which
+carries no identity), `tracks` and `named` keep their pseudonym or name only where the classic view shows one (an SOS),
+and a person who pressed SOS kneels and waves under the red pillar. With motion reduced, figures stand still in the
+fixed slots described above.
+
 **Temperature colours are relative to each zone's comfort band**, not one scale for the whole building (a cold store
 at 5 °C would otherwise make every normal room look hot): inside the band is the accent, below it runs to blue, above it
 to coral, full colour 4 °C outside the band. A zone's band is its own `comfort` (°C, low and high, in the floor layout;
@@ -233,12 +243,58 @@ on a 1×1 canvas and reads it back as sRGB, since three.js cannot parse oklch):
 - Device-to-gateway link lines are **not drawn**: the live state carries no device→gateway link, and a guessed line
   (nearest gateway, zone gateway) would state a topology that may be false.
 
-**Ambient motion** (the ≋ button, `aether.twin.ambient`, **off by default**; a browser that turns it on keeps it on): a slow sweep across the grid, breathing
-beacon rings and the pulse of a device alert's ring. It draws at most 30 fps, is never counted towards the quality
-tier's frame rate, and stops when motion is reduced, the tab is hidden, the view is paused (a TV playlist) or the
+**Ambient motion** (the ≋ button, `aether.twin.motion`, **on by default** in the immersive style; a browser that turns
+it off keeps it off): walking figures, smoke and mist, airflow, swinging doors, a slow sweep across the grid, breathing
+beacon rings and the pulse of a device alert's ring. It draws at most 30 fps (60 fps on the high tier while figures
+walk: a 30 fps walk reads as stop motion), is never counted towards the quality tier's frame rate, and stops when motion is reduced, the tab is hidden, the view is paused (a TV playlist) or the
 button is off, and 2 minutes after the last pointer or keyboard input or meaningful state change (a switch, a door,
-an alert, a headcount); input resumes it. Wall monitors therefore idle at 0 fps. Without it the scene is idle at 0 fps; a device alert then shows a solid ring (an alert can stay open for
+an alert, a headcount, so an alert opening resumes it); input resumes it. Wall monitors therefore idle at 0 fps.
+Without it the scene is idle at 0 fps and figures stand still; a device alert then shows a solid ring (an alert can stay open for
 hours and is no reason to keep rendering). SOS and hazard pillars keep their own pulse in both styles.
+
+### Lifelike hospital (immersive)
+
+The immersive style draws the building as a furnished, inhabited hospital (`engine/lifelike/`). Classic and the TV
+display are unchanged. Everything is generated in the browser from the floor plan and the live state: **no downloaded
+models** (no third-party assets and no licensing questions; three.js ships no CC0 furniture or humanoid that would
+fit).
+
+- **Interior** (`interior.ts`, active floor): each zone is classified from its kind and name (ICU, ER, ward, lobby,
+  nurse station, lab, pharmacy, cold store, server room, corridor, storage, office) and furnished accordingly: beds
+  with rails, bedside monitors and IV poles (ward, ICU, ER), a reception counter and rows of waiting chairs (lobby), a
+  nurse counter with screens, carts and shelves, lab benches with instruments, pharmacy shelving, cold-store fridges,
+  server racks, corridor benches, plants. Plan items the operator drew (beds, desks, stairs, lifts, racks) are drawn as
+  furniture in their place and the generated pieces fit around them. Placement is deterministic (seeded by the zone's
+  id), inside the zone, along its walls or in a grid, at least 1 m from doors and 0.45 m from any placed device. The
+  furniture is a few hundred primitives in four instanced meshes. A customer building model that is shown replaces it
+  (the model has its own interior); people then walk around nothing.
+- **Fixtures** (`fixtures.ts`): a device's look comes from its class and name. Wall switches, sockets (switched devices
+  that meter power: the appliance's plug), wall air conditioners and thermostats snap to the nearest wall of their zone
+  (projected onto it, off by half the thickest wall there) at 1.2 m, 0.3 m, 2.4 m and 1.5 m. A switch is a plate whose
+  rocker tilts and takes a hint of the accent when on, a socket has a glowing indicator, an air conditioner breathes
+  soft airflow when on, a purifier puffs upwards, a cover is a blind (its position is not in the live state, so it
+  hangs half down). Lights are ceiling panels that glow with a pool of light on the floor when on. Sensors keep a small
+  status dot where they really hang: environment sensors on the wall at 1.6 m, PIR and smoke, gas and CO detectors on
+  the ceiling, door sensors on the frame of the nearest door. **Clicking a fixture** of a switch, socket, light or
+  purifier runs the same command flow as its badge's power button (pending, sent, confirmed or a Thai reason, the same
+  permissions, nothing in replay); any other fixture opens the device's card. The badges stay as the accessible
+  control and float above the fixture.
+- **People** (`crowd.ts`): stylised low-poly figures (legs, arms, torso, head, hair: six instanced meshes for up to 150
+  figures) with a walk cycle and an idle pose, dressed in scrubs, white coats, patient gowns or visitors' clothes chosen
+  by a hash of the person's key (the data has no role). Past 150 people the rest stay the plain tokens; on the med and
+  low tiers figures are capsules. The walking rules are under "Honest positioning".
+- **Effects** (`effects.ts`), each one a reading or an open alert: an open hazard alert (smoke, gas, CO) puts a rising,
+  spreading plume in its zone (dark grey; a yellow-green tint for gas or CO) under a flashing ceiling alarm; an open leak
+  alert puts a rippling puddle under its sensor; a door with a door sensor swings open with it and turns amber when
+  open for more than a minute; a zone 3 °C or more above its comfort band shimmers; a cold store has a low mist; a room
+  whose PIR saw motion in the last 5 minutes gets a soft light; windows glow warm from 19:00 to 06:00 local time.
+- **Motion and budget**: walking, particles and swinging run only as ambient motion (above). With motion reduced
+  figures stand in their slots, plumes, mist and airflow hold still and doors snap, nothing flashes. On the med and low
+  tiers particle counts drop and figures become capsules. The walls are frosted rather than clear in this style, so
+  wall fixtures have a wall to sit on, and the operator may zoom in to 1 m (classic keeps 4 m). Measured on the demo
+  hospital (3 floors, 44 people, 1440×900, Chrome on an Apple M4 Pro, high tier): all floors 81 draw calls, 63k
+  triangles, 60 fps while figures walk; one floor isolated 51–58 draw calls and 19–29k triangles, 58–60 fps; the
+  furniture of one floor is 6–8k triangles. Budget: under 150 draw calls and 400k triangles.
 
 ### In-scene badges and buttons
 

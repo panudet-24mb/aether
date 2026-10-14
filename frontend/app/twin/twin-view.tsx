@@ -139,6 +139,7 @@ export default function TwinView(props: TwinViewProps) {
   const cb = useLatest({ onReady: props.onReady, onAlertFocus: props.onAlertFocus, onState: props.onState, onSelect: props.onSelect, onError: props.onError, onModel: props.onModel, onToggle: controls?.onToggle });
   const qualityRef = useLatest(quality);
   const styleRef = useLatest(style);
+  const controlsRef = useLatest(controls);
   // Bumped when an engine is created, so the model and style are applied to a new WebGL context too.
   const [engineGen, setEngineGen] = useState(0);
   const [site, setSite] = useState<Site | null>(null);
@@ -197,7 +198,15 @@ export default function TwinView(props: TwinViewProps) {
       return () => cancelAnimationFrame(id);
     }
     engineRef.current = engine;
-    engine.setPickHandler((p) => setSelected(p ? p.id : null));
+    engine.setPickHandler((p) => {
+      // A switch, plug, light or purifier fixture (immersive) is switched by a click, through the same flow as its
+      // badge's button; anything else, or a member who may not command, or replay, opens the device's card.
+      if (p?.kind === "fixture" && p.toggle) {
+        const ctl = controlsRef.current, d = stateRef.current?.devices.find((x) => x.id === p.id);
+        if (ctl && !ctl.disabled && d) { ctl.onToggle(d); return; }
+      }
+      setSelected(p ? p.id : null);
+    });
     engine.setBadgeHandler((id, action) => {
       if (action === "select") { setSelected(id); return; }
       const d = stateRef.current?.devices.find((x) => x.id === id);
@@ -232,7 +241,7 @@ export default function TwinView(props: TwinViewProps) {
       if (debug) delete (window as unknown as { __twin?: unknown }).__twin;
     };
     // A quality change is applied below without recreating the context.
-  }, [fallback, qualityRef, styleRef, stateRef, cb]);
+  }, [fallback, qualityRef, styleRef, stateRef, cb, controlsRef]);
 
   useEffect(() => { engineRef.current?.setQuality(quality); }, [quality]);
   useEffect(() => { engineRef.current?.setStyle(style); }, [style, engineGen]);

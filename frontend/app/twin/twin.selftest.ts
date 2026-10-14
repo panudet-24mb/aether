@@ -4,13 +4,14 @@
  * this repo, so this is a plain module: `runTwinSelfTest()` returns the failures (empty means everything passed).
  *
  * Run it with the repo's own TypeScript, from `frontend/`:
- *   ./node_modules/.bin/tsc app/twin/engine/heat.ts app/twin/engine/slots.ts app/twin/model-transform.ts app/twin/twin.selftest.ts \
+ *   ./node_modules/.bin/tsc app/twin/engine/heat.ts app/twin/engine/slots.ts app/twin/model-transform.ts app/twin/engine/lifelike/geo.ts app/twin/twin.selftest.ts \
  *     --outDir /tmp/twintest --module commonjs --target es2020 --skipLibCheck --strict
  *   node -e "const f=require('/tmp/twintest/twin.selftest.js').runTwinSelfTest(); console.log(f.length ? f.join('\n') : 'PASS'); process.exit(f.length ? 1 : 0)"
  */
 import { RAMPS, comfortBand, comfortT, contrast, heatGrid, heatPixels, idwAt, pointIn, rampColor, staleWeight, type HeatSensor, type P } from "./engine/heat";
 import { assignSlots, zoneSlots } from "./engine/slots";
 import { base64, chunkRanges, isGlb2, normalizeTransform, sameTransform } from "./model-transform";
+import { hash, inside, randomInside, rng, segmentInside, snapToWall, type Segment } from "./engine/lifelike/geo";
 
 export function runTwinSelfTest(): string[] {
   const fail: string[] = [];
@@ -92,5 +93,21 @@ export function runTwinSelfTest(): string[] {
   check(n.scale === 0.0001 && n.opacity === 1 && n.up === "y" && n.mode === "overlay" && n.visible && n.clip_to_floor, "transform clamps and defaults (clip_to_floor defaults to true, as on the server)");
   check(n.rotation_deg[0] === -90 && n.rotation_deg[1] === 170 && n.rotation_deg[2] === 30 && n.offset_m[1] === 0, "rotation wraps to ±180, NaN offsets fall back");
   check(sameTransform(normalizeTransform(null), normalizeTransform({})) && !sameTransform(normalizeTransform(null), normalizeTransform({ scale: 2 })), "transform equality");
+
+  // Lifelike: layouts are deterministic, wall fixtures land on the room side of the thickest wall, walks stay inside.
+  const a1 = rng(hash("zone-1")), a2 = rng(hash("zone-1")), b1 = rng(hash("zone-2"));
+  const seqA = [a1(), a1(), a1()], seqB = [a2(), a2(), a2()];
+  check(JSON.stringify(seqA) === JSON.stringify(seqB) && seqA[0] !== b1() && seqA.every((v) => v >= 0 && v < 1), "seeded layout randomness is stable per zone");
+  const room: P[] = [[0, 0], [14, 0], [14, 10], [0, 10]];
+  const walls: Segment[] = [{ a: [0, 0], b: [40, 0], thickness: 0.3 }, { a: [0, 0], b: [14, 0], thickness: 0.12 }, { a: [0, 0], b: [0, 10], thickness: 0.12 }];
+  const sw = snapToWall([3, 1], walls)!;
+  check(!!sw && Math.abs(sw.at[1] - 0.165) < 1e-6 && sw.normal[1] === 1 && Math.abs(sw.at[0] - 3) < 1e-6, `a switch at (3, 1) lands on the inner face of the 0.3 m shell, facing the room: ${JSON.stringify(sw)}`);
+  const corner = snapToWall([0.05, 5], walls)!;
+  check(corner.normal[0] === 1 && Math.abs(corner.at[0] - 0.075) < 1e-6, "a device beside the west wall faces east, off by half the wall's thickness");
+  const r = rng(7);
+  let allInside = true;
+  for (let i = 0; i < 200; i++) { const p = randomInside(room, 0.4, r); if (!p || !inside(p, room) || p[0] < 0.4 || p[0] > 13.6 || p[1] < 0.4 || p[1] > 9.6) allInside = false; }
+  check(allInside, "wander targets stay 0.4 m inside the zone");
+  check(segmentInside([1, 1], [7, 1], ell) && !segmentInside([7, 2], [2, 7], ell), "a walk across the notch of an L-shaped zone is refused");
   return fail;
 }

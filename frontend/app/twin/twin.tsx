@@ -54,8 +54,9 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   const [people, setPeople] = useState<PeopleMode>(() => (store.get("aether.twin.people") as PeopleMode) || "counts");
   // The look: classic (the original rendering) or immersive (beacons, badges with buttons, holographic floor).
   const [style, setStyle] = useState<TwinStyle>(() => (store.get("aether.twin.style") === "immersive" ? "immersive" : "classic"));
-  // Ambient motion is off unless this browser turned it on (wall monitors must idle at 0 fps).
-  const [ambient, setAmbient] = useState(() => store.get("aether.twin.ambient") === "1");
+  // Motion (walking figures, smoke, ambient sweep) is on in the immersive style unless this browser turned it off;
+  // it still pauses after 2 minutes without input, so wall monitors idle at 0 fps.
+  const [ambient, setAmbient] = useState(() => store.get("aether.twin.motion") !== "0");
   const [showModel, setShowModel] = useState(false);
   const [modelInfo, setModelInfo] = useState<{ model: SiteModel | null; status: ModelStatus }>({ model: null, status: "none" });
   const [modelKey, setModelKey] = useState(0);
@@ -116,7 +117,6 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
   useEffect(() => { if (siteId) store.set("aether.twin.site", siteId); }, [siteId]);
   useEffect(() => { store.set("aether.twin.people", people); }, [people]);
   useEffect(() => { store.set("aether.twin.style", style); }, [style]);
-  useEffect(() => { store.set("aether.twin.ambient", ambient ? "1" : "0"); }, [ambient]);
 
   // Who may upload, align or delete the building model: owners, and admins whose floor plan access is not read-only
   // (the server's rule for writing sites). Unknown → the panel shows the controls and explains a refusal.
@@ -327,7 +327,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
           <button type="button" className={style === "immersive" ? "is-on" : ""} aria-pressed={style === "immersive"} onClick={() => setStyle("immersive")} title="ห้องควบคุม: สถานะและปุ่มสั่งงานในฉาก"><Sparkles size={13} />Immersive</button>
         </div>
         {style === "immersive" && (
-          <button type="button" className={`topo-btn ${ambient ? "is-on" : ""}`} aria-pressed={ambient} onClick={() => setAmbient(!ambient)} title="ภาพเคลื่อนไหวพื้นหลัง (หยุดเองเมื่อซ่อนแท็บหรือตั้งค่าลดการเคลื่อนไหว)" aria-label="ภาพเคลื่อนไหวพื้นหลัง"><Waves size={14} /></button>
+          <button type="button" className={`topo-btn ${ambient ? "is-on" : ""}`} aria-pressed={ambient} onClick={() => { store.set("aether.twin.motion", ambient ? "0" : "1"); setAmbient(!ambient); }} title="ภาพเคลื่อนไหวพื้นหลัง (หยุดเองเมื่อซ่อนแท็บหรือตั้งค่าลดการเคลื่อนไหว)" aria-label="ภาพเคลื่อนไหวพื้นหลัง"><Waves size={14} /></button>
         )}
         <label className="fp-site twin-site">
           <Building2 size={14} />
@@ -392,7 +392,7 @@ export default function DigitalTwin({ getToken, refresh, onUnauthorized }: { get
               <small className="twin-hatch">ลายขีด = ไม่มีเซ็นเซอร์ในโซน</small>
             </>
           )}
-          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง</small>}
+          {layers.includes("people") && <small className="twin-honest">ตำแหน่งระดับโซนจาก RSSI · ไม่ใช่พิกัดจริง{style === "immersive" ? " · ท่าทางเดินเป็นภาพประกอบ" : ""}</small>}
         </div>
         {showModel && siteId && (
           // Keyed by site: switching building mid-upload unmounts the panel, which aborts the upload and cancels it on

@@ -21,6 +21,7 @@ import { comfortBand, comfortT, heatGrid, heatPixels, staleWeight, type HeatKind
 import { assignSlots, zoneSlots } from "./slots";
 import { beaconColor, makeEnvironment, makeGround, styleBuilding, towerGeometry, type BeaconTone, type Ground } from "./immersive";
 import { ModelLayer, type Flattened, type PlanPlace } from "./model";
+import { Lifelike, MAX_FIGURES, type WalkerSpec } from "./lifelike";
 import { readTheme, type TwinTheme } from "../theme";
 import type { ModelTransform } from "../model-api";
 import type { Layer, PeopleMode, TwinAlert, TwinDevice, TwinState } from "../api";
@@ -34,7 +35,8 @@ const ZONE_COLORS: Record<string, [number, number, number]> = { mint: [167, 243,
 
 export type LabelSpec = { id: string; floorId: string; x: number; y: number; h: number; text: string; tone?: "sos" | "warn" | "muted" | "person" | "zone" };
 export type EngineStats = { fps: number; calls: number; triangles: number; tier: Quality; textures: number; geometries: number };
-export type PickResult = { kind: "device" | "gateway"; id: string } | null;
+/** A click: a device's beacon or gateway selects it; a fixture (immersive) may switch it (`toggle`). */
+export type PickResult = { kind: "device" | "gateway" | "fixture"; id: string; toggle?: boolean } | null;
 
 /** An in-scene status badge (immersive): a projected DOM node with a select button and, for outputs, a power switch. */
 export type BadgeSpec = {
@@ -106,6 +108,9 @@ export class TwinEngine {
   private badgeRange = 60;
   private onBadge: ((id: string, action: BadgeAction) => void) | null = null;
   private modelLayer = new ModelLayer();
+  /** The furnished interior, fixtures, walking figures and effects (immersive only). */
+  private lifelike: Lifelike | null = null;
+  private lastStep = 0;
   private modelTransform: ModelTransform | null = null;
   private lastBuild: { floors: Floor3D[]; activeId: string; explode: number; isolate: boolean } | null = null;
 
@@ -217,6 +222,7 @@ export class TwinEngine {
     for (const g of [this.stage, this.building, this.heat, this.markers, this.people, this.fx]) disposeTree(g);
     for (const p of this.heatPlanes.values()) p.texture.dispose();
     this.modelLayer.dispose();
+    this.lifelike?.dispose();
     this.envMap?.dispose();
     this.badgeHost?.removeEventListener("click", this.onBadgeClick);
     this.badgeHost?.remove();
@@ -257,9 +263,10 @@ export class TwinEngine {
         this.composer.addPass(new OutputPass());
       }
       // Bloom only on the high tier; the immersive style lets beacons and edges glow a little more.
-      this.bloom!.strength = immersive ? 0.8 : 0.55;
-      this.bloom!.radius = immersive ? 0.62 : 0.5;
-      this.bloom!.threshold = immersive ? 0.7 : 0.82;
+      // Immersive: only what is meant to glow (beacons, screens, lit fixtures, edges) blooms, not white furniture.
+      this.bloom!.strength = immersive ? 0.7 : 0.55;
+      this.bloom!.radius = immersive ? 0.55 : 0.5;
+      this.bloom!.threshold = immersive ? 0.88 : 0.82;
     } else if (this.composer) {
       this.composer.dispose();
       this.composer = null;
@@ -312,7 +319,10 @@ export class TwinEngine {
   };
 
 
-  private onVisibility = () => this.invalidate();
+  private onVisibility = () => { this.lastStep = 0; this.invalidate(); };
+
+  /** Walking, swinging and particles may move: the immersive style with ambient motion on and motion not reduced. */
+  private motionAllowed(): boolean { return this.style === "immersive" && this.ambient && !this.reducedMotion; }
 
   /** Lights, background and environment for the current style; classic is exactly the original setup. */
   private applyLook() {
@@ -326,8 +336,18 @@ export class TwinEngine {
     (this.scene.background as THREE.Color).setHex(bg);
     this.scene.environment = immersive && this.envMap ? this.envMap.texture : null;
     this.scene.environmentIntensity = immersive ? 0.55 : 1;
+    // Immersive lets the operator walk up to a fixture (a wall switch is 9 cm wide); classic keeps its 4 m.
+    this.controls.minDistance = immersive ? 1 : 4;
     this.hemi.intensity = immersive ? 0.5 : 1.05;
     this.sun.intensity = immersive ? 0.85 : 1.1;
+    if (immersive && !this.lifelike && this.theme) {
+      this.lifelike = new Lifelike(this.theme);
+      this.scene.add(this.lifelike.group);
+    } else if (!immersive && this.lifelike) {
+      this.scene.remove(this.lifelike.group);
+      this.lifelike.dispose();
+      this.lifelike = null;
+    }
   }
 
   stats(): EngineStats {
@@ -357,8 +377,10 @@ export class TwinEngine {
     const now = performance.now();
     if (!this.dirty && !moving && !damping) {
       this.lastFrame = 0;
-      // Ambient motion alone draws at 30 fps at most and is never counted towards the tier's frame rate.
-      if (!this.ambientActive() || now - this.ambientAt < 33) return;
+      // Ambient motion alone is never counted towards the tier's frame rate. It draws at 30 fps at most, except walking
+      // figures on the high tier (60 fps: a 30 fps walk looks like stop motion).
+      const cap = this.lifelike?.wantsFrames() && this.tier === "high" ? 15 : 33;
+      if (!this.ambientActive() || now - this.ambientAt < cap) return;
     }
     if (this.lastFrame > 0) {
       this.frameTimes.push(now - this.lastFrame);
@@ -405,6 +427,11 @@ export class TwinEngine {
       (s.pillar.material as THREE.MeshBasicMaterial).opacity = 0.32 + 0.18 * Math.sin(t * 4 + s.phase * 6);
     }
     const ambient = this.ambientActive();
+    if (this.lifelike) {
+      const dt = this.lastStep ? (now - this.lastStep) / 1000 : 0;
+      this.lastStep = now;
+      this.lifelike.step(now, t, dt, this.motionAllowed());
+    }
     // A device alert's ring pulses only as ambient motion (an alert can stay open for hours: never a reason to keep
     // rendering on its own); still, it is a solid ring. SOS and hazards keep their own always-on pulse above.
     this.paintAlerts(t, ambient);
@@ -528,7 +555,9 @@ export class TwinEngine {
     for (const spec of this.badges) {
       const rec = this.badgeEls.get(spec.id);
       if (!rec) continue;
-      const at = this.world(spec.floorId, spec.x, spec.y, spec.h);
+      // A fixture's badge floats above where it hangs (wall plate, ceiling light), not above the raw placement.
+      const mt = this.lifelike?.mount(spec.id);
+      const at = mt ? this.world(mt.floorId, mt.x, mt.y, mt.h + 0.3) : this.world(spec.floorId, spec.x, spec.y, spec.h);
       if (at) v.copy(at).project(this.camera);
       const holdsFocus = !!focused && rec.el.contains(focused);
       if (!at || v.z > 1 || v.x < -1.05 || v.x > 1.05 || v.y < -1.05 || v.y > 1.05) {
@@ -584,6 +613,7 @@ export class TwinEngine {
     const { frames } = buildBuilding(this.building, { floors, activeId, assets: [], selection: null, explode, isolate, devices: false, people: false, labels: false, liveZones: false, glass: true, zones: false });
     this.floors = floors.map((f) => ({ id: f.id, draft: f.draft, frame: frames.find((fr) => fr.id === f.id) ?? { id: f.id, y: 0, originX: 0, originZ: 0, visible: false, active: false } }));
     if (this.style === "immersive" && this.theme) styleBuilding(this.building, this.theme);
+    if (this.lifelike) hideItemBoxes(this.building, frames.find((fr) => fr.active)?.y ?? 0);
     // Floors above the active one fade almost away, so the camera can look down into the active floor.
     const activeY = frames.find((fr) => fr.active)?.y ?? 0;
     for (const g of this.building.children) {
@@ -607,6 +637,8 @@ export class TwinEngine {
     }
     const act = this.floors.find((f) => f.id === activeId) ?? this.floors[0];
     if (act) this.badgeRange = Math.max(45, Math.hypot(act.draft.width_m, act.draft.depth_m) * 1.5);
+    const activeFloorY = frames.find((fr) => fr.active)?.y ?? 0;
+    this.lifelike?.build(this.floors.map((f) => ({ id: f.id, draft: f.draft, visible: f.frame.visible, active: f.frame.active, above: f.frame.y > activeFloorY + 0.01 })), (fl, x, y, h) => this.world(fl, x, y, h), this.tier !== "high", this.state?.devices ?? []);
     this.buildStage();
     this.buildOutlines();
     for (const p of this.heatPlanes.values()) { p.texture.dispose(); }
@@ -692,6 +724,7 @@ export class TwinEngine {
     this.state = state;
     this.layers = new Set(layers);
     const now = Date.parse(state.server_time) || Date.now();
+    this.lifelike?.setState(state, (a) => this.alertPlace(a));
     this.updateMarkers(state);
     this.updateHeat(state, now, force);
     this.updatePeople(state);
@@ -749,7 +782,7 @@ export class TwinEngine {
         texture.minFilter = THREE.LinearFilter;
         texture.needsUpdate = true;
         const above = f.frame.y > (this.floors.find((x) => x.frame.active)?.frame.y ?? 0) + 0.01;
-        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(f.draft.width_m, f.draft.depth_m), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide, opacity: f.frame.active ? 1 : above ? 0.14 : 0.45 }));
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(f.draft.width_m, f.draft.depth_m), new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide, opacity: f.frame.active ? (this.lifelike ? 0.62 : 1) : above ? 0.14 : 0.45 }));
         // +90° about x: plan y grows towards +z, and texture row 0 (v = 0) is the plan's top edge (y = 0).
         mesh.rotation.x = Math.PI / 2;
         mesh.position.set(f.frame.originX + f.draft.width_m / 2, f.frame.y + 0.08, f.frame.originZ + f.draft.depth_m / 2);
@@ -767,7 +800,10 @@ export class TwinEngine {
 
   private updateMarkers(state: TwinState) {
     const visible = new Set(this.floors.filter((f) => f.frame.visible).map((f) => f.id));
-    const devices = state.devices.filter((d) => d.kind === "device" && visible.has(d.floor_id));
+    // Lifelike: switches, plugs, lights and units are fixtures, not beacons; sensors keep a beacon where they hang.
+    const lf = this.lifelike;
+    const devices = state.devices.filter((d) => d.kind === "device" && visible.has(d.floor_id) && !lf?.replacesBeacon(d.id))
+      .map((d) => { const m = lf?.mount(d.id); return m ? { ...d, x: m.x, y: m.y, z: m.h, mounted: true } : d; });
     const gateways = state.devices.filter((d) => d.kind === "gateway" && visible.has(d.floor_id));
     const low = this.tier === "low";
     const immersive = this.style === "immersive" && !!this.theme;
@@ -804,9 +840,12 @@ export class TwinEngine {
       const at = this.world(d.floor_id, d.x, d.y, d.z)!;
       m.makeTranslation(at.x, at.y, at.z);
       if (d.on === 1) m.scale(new THREE.Vector3(immersive ? 1.35 : 1.45, immersive ? 1.35 : 1.45, immersive ? 1.35 : 1.45));
+      // A sensor on its wall or ceiling is a small status dot, without a stem.
+      const mounted = "mounted" in d;
+      if (mounted) m.scale(new THREE.Vector3(0.55, 0.55, 0.55));
       this.deviceMesh!.setMatrixAt(i, m);
       this.deviceMesh!.setColorAt(i, immersive ? beaconColor(this.theme!, beaconTone(d, now), c) : c.setHex(tone(d)));
-      stems.push(at.x, at.y, at.z, at.x, at.y - d.z + 0.1, at.z);
+      if (!mounted) stems.push(at.x, at.y, at.z, at.x, at.y - d.z + 0.1, at.z);
     });
     this.gatewayMesh.count = gateways.length;
     gateways.forEach((g, i) => {
@@ -958,6 +997,17 @@ export class TwinEngine {
       this.people.add(ring);
       this.nearRings.push(ring);
     }
+    if (this.lifelike) {
+      // Lifelike: the first people walk as figures inside their zone; past MAX_FIGURES the rest stay tokens.
+      const specs: WalkerSpec[] = [];
+      for (const [z, list] of byZone) {
+        const slots = assignSlots(list.map((e) => e.id), z.slots);
+        for (const e of list) specs.push({ id: e.id, floorId: z.floorId, zoneKey: `${z.floorId}:${z.index}`, poly: z.zone.points as P[], slot: slots.get(e.id)!, sos: e.sos });
+      }
+      const figures = specs.slice(0, MAX_FIGURES);
+      this.lifelike.setPeople(figures, this.tier === "high" ? "figure" : "capsule", now);
+      for (const f of figures) next.delete(f.id);
+    }
     this.tokens = next;
     const low = this.tier === "low";
     if (!this.personMesh || this.personMesh.instanceMatrix.count < Math.max(1, next.size)) {
@@ -1054,12 +1104,15 @@ export class TwinEngine {
   private applyModel() {
     const t = this.modelTransform;
     if (!t || !this.modelLayer.loaded) {
+      this.lifelike?.setFurnitureVisible(true);
       this.modelLayer.group.visible = false;
       this.building.visible = true;
       this.invalidate();
       return;
     }
     this.modelLayer.apply(t, this.planPlace());
+    // A customer model has its own furniture: no procedural interior while it is shown.
+    this.lifelike?.setFurnitureVisible(!t.visible);
     // replace: the model stands in for the generated building; devices, heat and people stay.
     this.building.visible = !(t.visible && t.mode === "replace");
     this.invalidate();
@@ -1158,11 +1211,32 @@ export class TwinEngine {
     this.raycaster.setFromCamera(pointer, this.camera);
     const hits = this.raycaster.intersectObjects([this.deviceMesh, this.gatewayMesh].filter((x): x is THREE.InstancedMesh => !!x), false);
     const hit = hits[0];
+    const fixture = this.lifelike?.pick(this.raycaster);
+    if (fixture && (!hit || fixture.distance <= hit.distance)) { this.onPick?.({ kind: "fixture", id: fixture.id, toggle: fixture.toggle }); return; }
     if (!hit || hit.instanceId === undefined) { this.onPick?.(null); return; }
     const kind = hit.object.userData.pick as "device" | "gateway";
     const d = (kind === "device" ? this.deviceIndex : this.gatewayIndex)[hit.instanceId];
     this.onPick?.(d ? { kind, id: d.id } : null);
   };
+}
+
+/**
+ * Lifelike: the plan items the interior draws as furniture (the grey boxes of beds, desks, stairs, lifts, racks on
+ * the active floor) and the doors and windows the effects draw (the active floor and those below) are hidden from the
+ * generic building.
+ */
+function hideItemBoxes(building: THREE.Group, activeY: number) {
+  for (const g of building.children) {
+    const active = Math.abs(g.position.y - activeY) < 0.01, above = g.position.y > activeY + 0.01;
+    g.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshStandardMaterial | undefined;
+      if (!mesh.isMesh || !mat?.isMeshStandardMaterial || (mat as unknown as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) return;
+      const near = (hex: number) => { const c = new THREE.Color(hex); return Math.abs(mat.color.r - c.r) + Math.abs(mat.color.g - c.g) + Math.abs(mat.color.b - c.b) < 0.01; };
+      // building.ts colours items by type: blue doors and windows, muted grey for beds, desks, stairs, lifts, racks.
+      if ((near(BLUE) && !above) || (active && near(MUTED) && mesh !== g.children[0])) mesh.visible = false;
+    });
+  }
 }
 
 /** A device's beacon status: alert coral, stale or door open amber, offline dim grey, a switched-off output dimmed. */

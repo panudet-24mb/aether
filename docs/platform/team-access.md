@@ -215,6 +215,7 @@ Argon2id ยังอยู่ใน Go เท่านั้น `ChangeOwnPassw
 | `core.floors` | `site_id` | `core.site_in_scope(site_id)` |
 | `core.floor_placements` | `floor_id` | `core.floor_in_scope(floor_id)` |
 | `core.floor_images` | `floor_id` | `core.floor_in_scope(floor_id)` |
+| `core.site_models`, `core.site_model_uploads`, `core.site_model_chunks` (migration `00048`) | `site_id` | `core.site_in_scope(site_id)` · โมเดล 3D ของอาคาร (`docs/platform/digital-twin.md`) |
 | `core.automations` | `project_id` | `core.project_in_scope(project_id)` · project NULL ถูกซ่อน |
 | `core.automation_state` | `automation_id` | `core.automation_in_scope(automation_id)` |
 | `core.automation_runs` | `automation_id` | `core.automation_in_scope(automation_id)` |

@@ -4647,6 +4647,551 @@
     }
    }
   },
+  "/api/v1/sites/{id}/model": {
+   "get": {
+    "summary": "The 3D building model of a site (metadata and transform), or model: null. Whoever can read the site.",
+    "operationId": "get__api_v1_sites_id_model",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The site's model",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "model"
+         ],
+         "properties": {
+          "model": {
+           "$ref": "#/components/schemas/SiteModel"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/file": {
+   "get": {
+    "summary": "The model bytes (binary glTF 2.0), streamed. With ?rev=N (the current model revision; any other is 404) the response is cacheable for a day (Cache-Control: private, max-age=86400); without rev it is private, no-cache. ETag is the quoted sha256 and If-None-Match answers 304. At most 16 downloads at once (4 per workspace): 503 with Retry-After above that. A download averaging under 32 KiB/s after 30 s is dropped.",
+    "operationId": "get__api_v1_sites_id_model_file",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "rev",
+      "in": "query",
+      "required": false,
+      "description": "The model revision. When present it must be the current one (404 otherwise).",
+      "schema": {
+       "type": "integer",
+       "minimum": 1
+      }
+     },
+     {
+      "name": "If-None-Match",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "GLB bytes; X-Content-Type-Options: nosniff; Cache-Control as above",
+      "content": {
+       "model/gltf-binary": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "304": {
+      "description": "Not modified (ETag)"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "Too many downloads in flight; retry after Retry-After seconds"
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/uploads": {
+   "post": {
+    "summary": "Start a chunked model upload (owner/admin). Drops the workspace's uploads older than one hour and replaces the caller's own unfinished upload to this site. 409 {error: upload_in_progress, upload_id, started_at} while another member's unfinished upload to this site is younger than one hour (cancel it with …/cancel); 409 conflict when the workspace already has 4 open. Send the file in chunks of chunk_size bytes, then commit within one hour. Unfinished uploads do not survive a database crash or restore (404: start again).",
+    "operationId": "post__api_v1_sites_id_model_uploads",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Upload started",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "upload_id",
+          "chunk_size",
+          "chunks"
+         ],
+         "properties": {
+          "upload_id": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "chunk_size": {
+           "type": "integer",
+           "description": "163840; every chunk but the last is exactly this size."
+          },
+          "chunks": {
+           "type": "integer",
+           "description": "ceil(size / chunk_size), at most 205"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Another member's upload to this site is in progress",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string",
+           "enum": [
+            "upload_in_progress"
+           ]
+          },
+          "upload_id": {
+           "type": "string",
+           "format": "uuid"
+          },
+          "started_at": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "request_id": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "name",
+         "source_format",
+         "size",
+         "sha256"
+        ],
+        "properties": {
+         "name": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "File name to show; path, control and format characters are removed."
+         },
+         "source_format": {
+          "type": "string",
+          "enum": [
+           "glb",
+           "gltf",
+           "obj",
+           "fbx",
+           "stl",
+           "3dm",
+           "ifc"
+          ],
+          "description": "What the browser converted from; the uploaded bytes are always GLB."
+         },
+         "size": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 33554432
+         },
+         "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "sha256 of the whole GLB"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/uploads/{upload}/chunks/{index}": {
+   "post": {
+    "summary": "Store one chunk (owner/admin). index 0..chunks-1; every chunk but the last is exactly chunk_size bytes and the last makes up the declared size. Sending an index again replaces it (retry). On 429 wait Retry-After seconds and resend.",
+    "operationId": "post__api_v1_sites_id_model_uploads_upload_chunks_index",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "upload",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "index",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "minimum": 0,
+       "maximum": 204
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Stored"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "data_base64"
+        ],
+        "properties": {
+         "data_base64": {
+          "type": "string",
+          "description": "Standard base64 of the chunk bytes"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/uploads/{upload}/commit": {
+   "post": {
+    "summary": "Finish an upload (owner/admin): chunk writes wait for a running commit; every chunk present, the total size, the sha256 and a GLB v2 container (magic glTF, version 2, header length = size, first chunk JSON) are checked, then the site's model is replaced in one transaction. The revision goes up by one (it never repeats, also after a delete) and the previous transform is kept. Emits the realtime inventory signal. At most 3 commits run at once across workspaces: 503 with Retry-After when none is free.",
+    "operationId": "post__api_v1_sites_id_model_uploads_upload_commit",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "upload",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The site's model",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "model"
+         ],
+         "properties": {
+          "model": {
+           "$ref": "#/components/schemas/SiteModel"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "No free commit slot; retry after Retry-After seconds"
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/uploads/{upload}/cancel": {
+   "post": {
+    "summary": "Cancel an unfinished upload of this site, whoever started it (owner/admin); the model is untouched. Audited as site.model.upload_cancelled. 404 when it is gone (committed, cancelled or expired).",
+    "operationId": "post__api_v1_sites_id_model_uploads_upload_cancel",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     },
+     {
+      "name": "upload",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Cancelled"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/transform": {
+   "post": {
+    "summary": "Place the model (owner/admin). Fields left out take their default; unknown fields or values out of range are 400. 404 when the site has no model.",
+    "operationId": "post__api_v1_sites_id_model_transform",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "The site's model",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "required": [
+          "model"
+         ],
+         "properties": {
+          "model": {
+           "$ref": "#/components/schemas/SiteModel"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ModelTransform"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/sites/{id}/model/delete": {
+   "post": {
+    "summary": "Remove the site's model and any upload in progress (owner/admin). Succeeds when there is none.",
+    "operationId": "post__api_v1_sites_id_model_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/topology/layout": {
    "get": {
     "summary": "Shared canvas layout of the connect view (every member; nodes outside the caller's projects are left out)",
@@ -10018,6 +10563,118 @@
       "items": {
        "$ref": "#/components/schemas/Floor"
       }
+     }
+    }
+   },
+   "ModelTransform": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "scale": {
+      "type": "number",
+      "minimum": 0.0001,
+      "maximum": 10000,
+      "default": 1,
+      "description": "Model units to metres"
+     },
+     "up": {
+      "type": "string",
+      "enum": [
+       "y",
+       "z"
+      ],
+      "default": "y"
+     },
+     "rotation_deg": {
+      "type": "array",
+      "items": {
+       "type": "number",
+       "minimum": -360,
+       "maximum": 360
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [
+       0,
+       0,
+       0
+      ]
+     },
+     "offset_m": {
+      "type": "array",
+      "items": {
+       "type": "number",
+       "minimum": -100000,
+       "maximum": 100000
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [
+       0,
+       0,
+       0
+      ],
+      "description": "Metres from the floor plan origin"
+     },
+     "opacity": {
+      "type": "number",
+      "minimum": 0.05,
+      "maximum": 1,
+      "default": 1
+     },
+     "visible": {
+      "type": "boolean",
+      "default": true
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "overlay",
+       "replace"
+      ],
+      "default": "overlay"
+     },
+     "clip_to_floor": {
+      "type": "boolean",
+      "default": true
+     }
+    }
+   },
+   "SiteModel": {
+    "type": "object",
+    "nullable": true,
+    "properties": {
+     "revision": {
+      "type": "integer",
+      "description": "Goes up on every commit and never repeats for the site; use it as ?rev= on the file"
+     },
+     "name": {
+      "type": "string"
+     },
+     "source_format": {
+      "type": "string",
+      "enum": [
+       "glb",
+       "gltf",
+       "obj",
+       "fbx",
+       "stl",
+       "3dm",
+       "ifc"
+      ]
+     },
+     "size": {
+      "type": "integer"
+     },
+     "sha256": {
+      "type": "string"
+     },
+     "uploaded_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "transform": {
+      "$ref": "#/components/schemas/ModelTransform"
      }
     }
    },

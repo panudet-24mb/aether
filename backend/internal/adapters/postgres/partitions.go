@@ -161,6 +161,12 @@ func (r *Repository) MaintainAndReport(ctx context.Context, now time.Time) {
 	if e != nil {
 		slog.Warn("partition maintenance failed; retried next run", "error", e.Error())
 	}
+	// Building model uploads nobody finished (migration 00048); unrelated to partitions, but hourly too.
+	if n, e := r.SweepSiteModelUploads(ctx); e != nil {
+		slog.Warn("site model upload sweep failed; retried next run", "error", e.Error())
+	} else if n > 0 {
+		slog.Info("site model uploads expired", "deleted", n)
+	}
 	health, e := r.PartitionHealth(ctx)
 	if e != nil {
 		slog.Error("partition health check failed", "error", e.Error())

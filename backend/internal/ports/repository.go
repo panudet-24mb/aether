@@ -65,6 +65,15 @@ type Repository interface {
 	DeleteFloor(context.Context, domain.Principal, string) error
 	SetFloorImage(context.Context, domain.Principal, string, string, []byte) error
 	FloorImage(context.Context, domain.Principal, string) (string, []byte, error)
+	// Building model (3D): one GLB per site, uploaded in chunks (docs/platform/digital-twin.md).
+	SiteModel(context.Context, domain.Principal, string) (*domain.SiteModel, error)
+	SiteModelSlice(ctx context.Context, p domain.Principal, site string, revision, offset, n int) ([]byte, error)
+	StartSiteModelUpload(context.Context, domain.Principal, domain.SiteModelUpload) (domain.SiteModelUpload, error)
+	PutSiteModelChunk(ctx context.Context, p domain.Principal, site, upload string, idx int, data []byte) error
+	CommitSiteModel(ctx context.Context, p domain.Principal, site, upload string) (*domain.SiteModel, error)
+	CancelSiteModelUpload(ctx context.Context, p domain.Principal, site, upload string) error
+	SetSiteModelTransform(context.Context, domain.Principal, string, domain.ModelTransform) (*domain.SiteModel, error)
+	DeleteSiteModel(context.Context, domain.Principal, string) error
 	Presence(context.Context, domain.Principal, string) (domain.Presence, error)
 	// Asset registry: every gateway and active device with its record, maintenance plans and history.
 	ListAssets(context.Context, domain.Principal) ([]domain.AssetRow, error)

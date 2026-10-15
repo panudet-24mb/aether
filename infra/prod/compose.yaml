@@ -138,12 +138,15 @@ services:
       - work_mem=8MB
       - -c
       - maintenance_work_mem=256MB
+      # WAL volume is dominated by full-page images (ble_history and its indexes take scattered writes): zstd
+      # compresses them far better than pglz, and a longer checkpoint interval writes each hot page's image less often.
+      # Measured 2026-10-15 at ~21 GB/day with pglz + 15min, which the PITR archive must hold for up to two weeks.
       - -c
-      - wal_compression=on
+      - wal_compression=zstd
       - -c
-      - checkpoint_timeout=15min
+      - checkpoint_timeout=30min
       - -c
-      - max_wal_size=4GB
+      - max_wal_size=8GB
       - -c
       - min_wal_size=1GB
       - -c

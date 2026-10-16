@@ -70,7 +70,7 @@ Nothing here depends on the real B10 reporting presses (that is still unverified
 - Webhook targets must be HTTPS to public hosts; plain HTTP and private/loopback targets are accepted only when `APP_ENV=development` (local receivers, `host.docker.internal`). Redirects are not followed.
 - Button and tamper semantics for B7/B10/MBT01 are still unverified on hardware (see [Minew kit](minew-kit.md)); do not treat these alerts as certified emergency signals until a captured packet passes the golden tests. The built-in `button` rule makes the platform react loudly to whatever the pipeline *does* report; it does not make the hardware decoding correct.
 - One worker per API process; with several API replicas deliveries are still safe (row locks) but offline scans may run concurrently, which is harmless because marking is idempotent.
-- No escalation, quiet hours, per‑tenant rate limits or scheduled reports yet; delivery log keeps the newest 100 rows in the UI.
+- No escalation, quiet hours or per‑tenant rate limits yet (scheduled reports go through the same channels, see `reports.md`); delivery log keeps the newest 100 rows in the UI.
 
 ## Verification
 

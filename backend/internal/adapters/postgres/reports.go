@@ -6,10 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -271,15 +273,24 @@ type reportDefinitionRow struct {
 	TempMin, TempMax, HumMin, HumMax *float64
 	CreatedBy                        *string
 	CreatedAt, UpdatedAt             time.Time
+	Schedule                         string
+	ScheduleWeekday                  *int
+	ScheduleTime                     *string
+	Channels                         string
+	NextRunAt                        *time.Time
 }
 
 const reportDefinitionColumns = `id::text AS id, project_id::text AS project_id, name, kind, sensors::text AS sensors,
  temp_min::float8 AS temp_min, temp_max::float8 AS temp_max, hum_min::float8 AS hum_min, hum_max::float8 AS hum_max,
- created_by::text AS created_by, created_at, updated_at`
+ created_by::text AS created_by, created_at, updated_at, schedule, schedule_weekday, schedule_time, channels::text AS channels, next_run_at`
 
 func (row reportDefinitionRow) definition() (domain.ReportDefinition, error) {
-	d := domain.ReportDefinition{ID: row.ID, ProjectID: row.ProjectID, Name: row.Name, Kind: row.Kind, TempMin: row.TempMin, TempMax: row.TempMax, HumMin: row.HumMin, HumMax: row.HumMax, CreatedBy: row.CreatedBy, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	d := domain.ReportDefinition{ID: row.ID, ProjectID: row.ProjectID, Name: row.Name, Kind: row.Kind, TempMin: row.TempMin, TempMax: row.TempMax, HumMin: row.HumMin, HumMax: row.HumMax, CreatedBy: row.CreatedBy, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		Schedule: row.Schedule, ScheduleWeekday: row.ScheduleWeekday, ScheduleTime: row.ScheduleTime, NextRunAt: row.NextRunAt}
 	if e := json.Unmarshal([]byte(row.Sensors), &d.Sensors); e != nil {
+		return d, e
+	}
+	if e := json.Unmarshal([]byte(row.Channels), &d.Channels); e != nil {
 		return d, e
 	}
 	return d, nil
@@ -398,6 +409,21 @@ func (r *Repository) SaveReportDefinition(ctx context.Context, p domain.Principa
 			if _, e := writableRow(tx, "report_definitions", d.ID); e != nil {
 				return e
 			}
+			// An unchanged schedule keeps its next_run_at: an edit made after it passed but before the scheduler picked
+			// the report up must not skip that period.
+			var current []struct {
+				Schedule        string
+				ScheduleWeekday *int
+				ScheduleTime    *string
+				NextRunAt       *time.Time
+			}
+			if e := tx.Raw(`SELECT schedule, schedule_weekday, schedule_time, next_run_at FROM core.report_definitions WHERE id = ?::uuid`, d.ID).Scan(&current).Error; e != nil {
+				return e
+			}
+			if len(current) == 1 && d.Schedule != "none" && current[0].NextRunAt != nil && current[0].Schedule == d.Schedule &&
+				equalPtr(current[0].ScheduleWeekday, d.ScheduleWeekday) && equalPtr(current[0].ScheduleTime, d.ScheduleTime) {
+				d.NextRunAt = current[0].NextRunAt
+			}
 		}
 		if e := checkAlertProject(tx, d.ProjectID); e != nil {
 			return e
@@ -428,6 +454,13 @@ func (r *Repository) SaveReportDefinition(ctx context.Context, p domain.Principa
 				return domain.Because(domain.ErrInvalid, "too_many_sensors")
 			}
 		}
+		if e := checkReportChannels(tx, d.Channels, d.ProjectID); e != nil {
+			return e
+		}
+		channels, e := json.Marshal(d.Channels)
+		if e != nil {
+			return e
+		}
 		sensors, e := json.Marshal(stored)
 		if e != nil {
 			return e
@@ -445,14 +478,18 @@ func (r *Repository) SaveReportDefinition(ctx context.Context, p domain.Principa
 			if n >= domain.ReportMaxDefinitions {
 				return domain.Because(domain.ErrConflict, "too_many_reports")
 			}
-			if e := tx.Raw(`INSERT INTO core.report_definitions(tenant_id,id,project_id,name,kind,sensors,temp_min,temp_max,hum_min,hum_max,created_by)
-         VALUES(?,?,?::uuid,?,'environment',?::jsonb,?,?,?,?,?) RETURNING `+reportDefinitionColumns,
-				p.TenantID, d.ID, d.ProjectID, d.Name, string(sensors), d.TempMin, d.TempMax, d.HumMin, d.HumMax, p.UserID).Scan(&rows).Error; e != nil {
+			if e := tx.Raw(`INSERT INTO core.report_definitions(tenant_id,id,project_id,name,kind,sensors,temp_min,temp_max,hum_min,hum_max,created_by,
+          schedule,schedule_weekday,schedule_time,channels,next_run_at)
+         VALUES(?,?,?::uuid,?,'environment',?::jsonb,?,?,?,?,?,?,?,?,?::jsonb,?) RETURNING `+reportDefinitionColumns,
+				p.TenantID, d.ID, d.ProjectID, d.Name, string(sensors), d.TempMin, d.TempMax, d.HumMin, d.HumMax, p.UserID,
+				d.Schedule, d.ScheduleWeekday, d.ScheduleTime, string(channels), d.NextRunAt).Scan(&rows).Error; e != nil {
 				return e
 			}
-		} else if e := tx.Raw(`UPDATE core.report_definitions SET project_id=?::uuid, name=?, sensors=?::jsonb, temp_min=?, temp_max=?, hum_min=?, hum_max=?, updated_at=now()
+		} else if e := tx.Raw(`UPDATE core.report_definitions SET project_id=?::uuid, name=?, sensors=?::jsonb, temp_min=?, temp_max=?, hum_min=?, hum_max=?,
+        schedule=?, schedule_weekday=?, schedule_time=?, channels=?::jsonb, next_run_at=?, updated_at=now()
         WHERE id = ?::uuid RETURNING `+reportDefinitionColumns,
-			d.ProjectID, d.Name, string(sensors), d.TempMin, d.TempMax, d.HumMin, d.HumMax, d.ID).Scan(&rows).Error; e != nil {
+			d.ProjectID, d.Name, string(sensors), d.TempMin, d.TempMax, d.HumMin, d.HumMax,
+			d.Schedule, d.ScheduleWeekday, d.ScheduleTime, string(channels), d.NextRunAt, d.ID).Scan(&rows).Error; e != nil {
 			return e
 		}
 		if len(rows) != 1 {
@@ -472,6 +509,11 @@ func (r *Repository) SaveReportDefinition(ctx context.Context, p domain.Principa
 		}
 		return audit(tx, p, action, d.ID)
 	})
+	// A CHECK the API did not catch first (it validates the same rules) is still the caller's input.
+	var pg *pgconn.PgError
+	if errors.As(e, &pg) && pg.Code == "23514" {
+		return out, domain.ErrInvalid
+	}
 	return out, classify(e)
 }
 
@@ -489,4 +531,26 @@ func (r *Repository) DeleteReportDefinition(ctx context.Context, p domain.Princi
 		}
 		return audit(tx, p, "report.deleted", id)
 	})
+}
+
+// checkReportChannels: every channel of a report must exist, be enabled, and be a workspace channel or one of the
+// report's project (the rule of alert rules; core.notification_channels is project-scoped, so an invisible or foreign
+// id counts as unknown). 400 invalid_channels otherwise.
+func checkReportChannels(tx *gorm.DB, channels []string, project *string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	var n int64
+	if e := tx.Raw(`SELECT count(DISTINCT id) FROM core.notification_channels WHERE id = ANY(?::uuid[]) AND enabled
+    AND (project_id IS NULL OR project_id = ?::uuid)`, pgArray(channels), project).Scan(&n).Error; e != nil {
+		return e
+	}
+	if int(n) != len(distinct(channels)) {
+		return domain.Because(domain.ErrInvalid, "invalid_channels")
+	}
+	return nil
+}
+
+func equalPtr[T comparable](a, b *T) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }

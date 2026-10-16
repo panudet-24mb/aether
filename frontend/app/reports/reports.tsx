@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Droplets, FileDown, FileSpreadsheet, Plus, Printer, RefreshCw, Save, Search, Thermometer, Trash2 } from "lucide-react";
+import { CalendarClock, Droplets, FileDown, FileSpreadsheet, Mail, MessageSquare, Plus, Printer, RefreshCw, Save, Search, Send, Thermometer, Trash2, Webhook } from "lucide-react";
 import "./reports.css";
 import { ApiError, createClientFrom, type Project } from "../topology/api";
 import { useLatest } from "../topology/use-latest";
@@ -11,7 +11,11 @@ import type { Me } from "../team/team";
 
 type SensorInfo = { gateway_id: string; external_id: string; name: string; gateway_name: string; project_id: string | null; profile_id: string };
 type SensorRef = { gateway_id: string; external_id: string };
-type Definition = { id: string; project_id: string | null; name: string; kind: string; sensors: SensorRef[]; temp_min: number | null; temp_max: number | null; hum_min: number | null; hum_max: number | null; updated_at: string };
+type Definition = { id: string; project_id: string | null; name: string; kind: string; sensors: SensorRef[]; temp_min: number | null; temp_max: number | null; hum_min: number | null; hum_max: number | null; updated_at: string;
+  schedule: "none" | "daily" | "weekly"; schedule_weekday: number | null; schedule_time: string | null; channels: string[]; next_run_at: string | null };
+type Channel = { id: string; name: string; kind: "webhook" | "line" | "email"; enabled: boolean; project_id: string | null };
+type Delivery = { id: string; channel_id: string | null; channel_name: string; channel_kind: string; status: "queued" | "sent" | "failed" | "skipped"; attempts: number; last_error: string | null; sent_at: string | null };
+type Run = { id: string; period_from: string; period_to: string; trigger: "schedule" | "manual"; status: "queued" | "done"; created_at: string; deliveries: Delivery[] };
 type Stats = { min: number; max: number; avg: number } | null;
 type Day = { date: string; buckets: number; expected: number; coverage_pct: number; temperature: Stats; humidity: Stats };
 type Excursion = { metric: "temperature" | "humidity"; direction: "high" | "low"; start: string; end: string; duration_min: number; peak: number };
@@ -20,7 +24,7 @@ type SensorSummary = SensorInfo & { buckets: number; expected_buckets: number; c
 type Range = { min: number | null; max: number | null };
 type Summary = { from: string; to: string; generated_at: string; workspace: string; temp: Range; hum: Range; report: { id: string; name: string } | null; sensors: SensorSummary[]; omitted: (SensorRef & { reason: string })[] };
 type Tab = "export" | "summary";
-type Form = { name: string; project_id: string; sensors: string[]; temp_min: string; temp_max: string; hum_min: string; hum_max: string };
+type Form = { name: string; project_id: string; sensors: string[]; temp_min: string; temp_max: string; hum_min: string; hum_max: string; schedule: Definition["schedule"]; weekday: string; time: string; channels: string[] };
 
 const MAX_SENSORS = 50, MAX_DAYS = 31;
 /** The server caps a raw export at sensors × days started (domain.ReportRawSensorDays). */
@@ -44,6 +48,10 @@ const REASONS: Record<string, string> = {
   raw_too_large: `ข้อมูลดิบ (raw) ส่งออกได้ครั้งละไม่เกิน ${RAW_SENSOR_DAYS} เซนเซอร์-วัน (จำนวนเซนเซอร์ × จำนวนวัน) ลดจำนวนเซนเซอร์หรือวัน หรือเลือกความละเอียดแบบเฉลี่ย`,
   sensor_outside_project: "รายงานของโปรเจคใช้ได้เฉพาะเซนเซอร์บน gateway ของโปรเจคนั้น เลือกโปรเจคให้ตรงหรือบันทึกเป็นรายงานทั้ง workspace",
   rate_limited: "มีการออกรายงานอื่นกำลังทำงานอยู่ กรุณารอสักครู่แล้วลองใหม่",
+  too_many_sends: "ส่งรายงานด้วยมือได้ไม่เกิน 10 ครั้งต่อชั่วโมงต่อ workspace กรุณารอแล้วลองใหม่",
+  no_channels: "เลือกช่องทางส่งอย่างน้อย 1 ช่องทาง",
+  invalid_channels: "ช่องทางส่งต้องเปิดใช้งาน และเป็นของทั้ง workspace หรือของโปรเจคเดียวกับรายงาน",
+  invalid_schedule: "ตั้งเวลาส่งไม่ถูกต้อง เลือกเวลา (และวันในสัปดาห์สำหรับรายสัปดาห์)",
   forbidden: "บัญชีนี้ไม่มีสิทธิ์ทำรายการนี้",
 };
 const OMITTED: Record<string, string> = { sensor_not_found: "ไม่พบหรืออยู่นอกโปรเจคของคุณ", personal_sensor: "เปลี่ยนเป็นอุปกรณ์สวมใส่/roaming", sensor_not_registered: "ถูกถอนการลงทะเบียน" };
@@ -63,8 +71,16 @@ const thaiDay = (day: string) => new Date(`${day}T00:00:00+07:00`).toLocaleDateS
 const thaiTime = (iso: string) => new Date(iso).toLocaleString("th-TH", { timeZone: "Asia/Bangkok", hour12: false, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const duration = (min: number) => (min < 60 ? `${min} นาที` : `${Math.floor(min / 60)} ชม.${min % 60 ? ` ${min % 60} นาที` : ""}`);
 const rangeLabel = (r: Range, unit: string) => (r.min == null && r.max == null ? "ไม่กำหนด" : r.min != null && r.max != null ? `${r.min}–${r.max} ${unit}` : r.min != null ? `ไม่ต่ำกว่า ${r.min} ${unit}` : `ไม่เกิน ${r.max} ${unit}`);
-const emptyForm = (project: string): Form => ({ name: "", project_id: project, sensors: [], temp_min: "", temp_max: "", hum_min: "", hum_max: "" });
-const formOf = (d: Definition): Form => ({ name: d.name, project_id: d.project_id ?? "", sensors: d.sensors.map(keyOf), temp_min: limitText(d.temp_min), temp_max: limitText(d.temp_max), hum_min: limitText(d.hum_min), hum_max: limitText(d.hum_max) });
+const emptyForm = (project: string): Form => ({ name: "", project_id: project, sensors: [], temp_min: "", temp_max: "", hum_min: "", hum_max: "", schedule: "none", weekday: "1", time: "07:00", channels: [] });
+const formOf = (d: Definition): Form => ({ name: d.name, project_id: d.project_id ?? "", sensors: d.sensors.map(keyOf), temp_min: limitText(d.temp_min), temp_max: limitText(d.temp_max), hum_min: limitText(d.hum_min), hum_max: limitText(d.hum_max),
+  schedule: d.schedule ?? "none", weekday: String(d.schedule_weekday ?? 1), time: d.schedule_time ?? "07:00", channels: d.channels ?? [] });
+const WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]; // ISO 1..7
+const DELIVERY_LABEL: Record<Delivery["status"], string> = { queued: "รอส่ง", sent: "ส่งแล้ว", failed: "ส่งไม่สำเร็จ", skipped: "ข้าม" };
+const KindIcon = ({ kind }: { kind: string }) => (kind === "webhook" ? <Webhook size={14} aria-hidden="true" /> : kind === "line" ? <MessageSquare size={14} aria-hidden="true" /> : <Mail size={14} aria-hidden="true" />);
+const scheduleLabel = (d: Pick<Definition, "schedule" | "schedule_weekday" | "schedule_time">) =>
+  d.schedule === "daily" ? `ทุกวัน ${d.schedule_time}` : d.schedule === "weekly" ? `ทุกวัน${WEEKDAYS[(d.schedule_weekday ?? 1) - 1]} ${d.schedule_time}` : "";
+const bangkokDay = (iso: string) => new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 10);
+const isDay = (s: string | null) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 function SensorPicker({ sensors, selected, onChange, disabled }: { sensors: SensorInfo[]; selected: string[]; onChange: (keys: string[]) => void; disabled?: boolean }) {
   const [query, setQuery] = useState("");
@@ -181,31 +197,42 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [summaryFrom, setSummaryFrom] = useState(() => addDays(today, -6)), [summaryTo, setSummaryTo] = useState(today);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [channels, setChannels] = useState<Channel[]>([]), [emailAvailable, setEmailAvailable] = useState(false);
+  const [runs, setRuns] = useState<Run[]>([]);
   const unauthorized = useRef(false);
 
   const canWrite = !!me && ["owner", "admin", "operator"].includes(me.role) && me.permissions?.reports !== "read";
   // A workspace report needs every project in view (core.report_definitions' policies).
   const wholeWorkspace = !!me && (me.role === "owner" || me.project_ids === null);
+  // The shell passes a new onUnauthorized on every render (it re-renders on its polls): read it through a ref, so fail,
+  // load and the first-load effect below stay the same and the page is not reloaded on every shell render.
+  const unauthorizedRef = useLatest(onUnauthorized);
   const fail = useCallback((e: unknown, fallback: string) => {
-    if (e instanceof ApiError && e.status === 401 && !unauthorized.current) { unauthorized.current = true; onUnauthorized?.(); }
+    if (e instanceof ApiError && e.status === 401 && !unauthorized.current) { unauthorized.current = true; unauthorizedRef.current?.(); }
     if (e instanceof ApiError) return (e.reason && REASONS[e.reason]) || (e.status === 403 ? REASONS.forbidden : e.status === 429 ? REASONS.rate_limited : e.message);
     return e instanceof Error ? e.message : fallback;
-  }, [onUnauthorized]);
+  }, [unauthorizedRef]);
 
+  const loadRuns = useCallback(async (id: string) => {
+    if (!id) { setRuns([]); return; }
+    try { setRuns((await client.raw<{ items: Run[] }>(`/reports/definitions/${id}/runs`)).items); } catch { setRuns([]); }
+  }, [client]);
   const load = useCallback(async () => {
     try {
-      const [s, d, p] = await Promise.all([client.raw<{ items: SensorInfo[] }>("/reports/sensors"), client.raw<{ items: Definition[] }>("/reports/definitions"), client.projects().catch(() => [] as Project[])]);
-      setSensors(s.items); setDefinitions(d.items); setProjects(p); setError("");
-    } catch (e) { setError(fail(e, "โหลดข้อมูลรายงานไม่สำเร็จ")); }
+      const [s, d, p, ch] = await Promise.all([client.raw<{ items: SensorInfo[] }>("/reports/sensors"), client.raw<{ items: Definition[] }>("/reports/definitions"), client.projects().catch(() => [] as Project[]),
+        client.raw<{ items: Channel[]; email_available: boolean }>("/reports/channels").catch(() => ({ items: [] as Channel[], email_available: false }))]);
+      setSensors(s.items); setDefinitions(d.items); setProjects(p); setChannels(ch.items); setEmailAvailable(ch.email_available); setError("");
+      return d.items;
+    } catch (e) { setError(fail(e, "โหลดข้อมูลรายงานไม่สำเร็จ")); return null; }
   }, [client, fail]);
-  useEffect(() => { const id = requestAnimationFrame(() => void load()); return () => cancelAnimationFrame(id); }, [load]);
 
   const byKey = useMemo(() => new Map(sensors.map((s) => [keyOf(s), s])), [sensors]);
   const edit = (patch: Partial<Form>) => { setForm((f) => ({ ...f, ...patch })); setDirty(true); };
-  const choose = (id: string) => {
+  const choose = (id: string, list = definitions) => {
     setSelected(id); setConfirmDelete(false); setDirty(false); setSummary(null);
-    const d = definitions.find((x) => x.id === id);
+    const d = list.find((x) => x.id === id);
     setForm(d ? formOf(d) : emptyForm(""));
+    void loadRuns(d ? id : "");
   };
   const limits = () => {
     const v = { temp_min: parseLimit(form.temp_min), temp_max: parseLimit(form.temp_max), hum_min: parseLimit(form.hum_min), hum_max: parseLimit(form.hum_max) };
@@ -238,13 +265,30 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
       setSummary({ ...out, report: out.report ?? (selected && form.name ? { id: selected, name: `${form.name} (แก้ไขยังไม่บันทึก)` } : null) });
     } catch (e) { setError(fail(e, "สร้างรายงานไม่สำเร็จ")); } finally { setBusy(false); }
   }
+  async function runSaved(id: string, from: string, to: string) {
+    setBusy(true); setError(""); setNotice("");
+    try { setSummary(await client.post<Summary>("/reports/summary", { report_id: id, ...rangeOf(from, to) }, SUMMARY_TIMEOUT_MS)); }
+    catch (e) { setError(fail(e, "สร้างรายงานไม่สำเร็จ")); } finally { setBusy(false); }
+  }
+  async function sendNow() {
+    if (!selected) return;
+    const bad = rangeError(summaryFrom, summaryTo);
+    if (bad) { setError(bad); return; }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await client.post<Run>(`/reports/definitions/${selected}/send`, rangeOf(summaryFrom, summaryTo));
+      setNotice(`ส่งรายงานช่วง ${thaiDay(summaryFrom)} – ${thaiDay(summaryTo)} เข้าคิวแล้ว จะส่งภายในประมาณครึ่งนาที`);
+      await loadRuns(selected);
+    } catch (e) { setError(fail(e, "ส่งรายงานไม่สำเร็จ")); } finally { setBusy(false); }
+  }
   async function save(asNew: boolean) {
     setBusy(true); setError(""); setNotice("");
     try {
-      const body = { name: form.name.trim(), project_id: form.project_id || null, sensors: form.sensors.map(refOf), ...limits() };
+      const schedule = form.schedule === "none" ? { schedule: "none" } : { schedule: form.schedule, schedule_time: form.time, ...(form.schedule === "weekly" ? { schedule_weekday: Number(form.weekday) } : {}) };
+      const body = { name: form.name.trim(), project_id: form.project_id || null, sensors: form.sensors.map(refOf), ...limits(), ...schedule, channels: form.channels };
       const out = asNew || !selected ? await client.post<Definition>("/reports/definitions", body) : await client.post<Definition>(`/reports/definitions/${selected}/update`, body);
       await load();
-      setSelected(out.id); setForm(formOf(out)); setDirty(false);
+      setSelected(out.id); setForm(formOf(out)); setDirty(false); void loadRuns(out.id);
       setNotice(asNew || !selected ? "บันทึกรายงานแล้ว" : "บันทึกการแก้ไขแล้ว");
     } catch (e) { setError(fail(e, "บันทึกรายงานไม่สำเร็จ")); } finally { setBusy(false); }
   }
@@ -257,6 +301,35 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
       choose(""); setNotice("ลบรายงานแล้ว");
     } catch (e) { setError(fail(e, "ลบรายงานไม่สำเร็จ")); } finally { setBusy(false); }
   }
+
+  // The first load, and the deep link of a scheduled message: open the summary tab on that report and those days, once.
+  // The link's parameters are taken off the address right away, so neither a re-render nor a reload runs it again.
+  const actions = useLatest({ choose, runSaved });
+  const linkTaken = useRef(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      let report: string | null = null, from: string | null = null, to: string | null = null;
+      if (!linkTaken.current) {
+        linkTaken.current = true;
+        const url = new URL(location.href);
+        report = url.searchParams.get("report"); from = url.searchParams.get("from"); to = url.searchParams.get("to");
+        if (report || from || to) {
+          ["report", "from", "to"].forEach((k) => url.searchParams.delete(k));
+          history.replaceState(history.state, "", url.pathname + url.search.replace("reports=", "reports") + url.hash);
+        }
+      }
+      void load().then((list) => {
+        if (!list || !report || !list.some((d) => d.id === report)) return;
+        setTab("summary");
+        actions.current.choose(report, list);
+        if (isDay(from) && isDay(to) && !rangeError(from!, to!)) {
+          setSummaryFrom(from!); setSummaryTo(to!);
+          void actions.current.runSaved(report, from!, to!);
+        }
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [load, actions]);
 
   const projectName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? "โปรเจคอื่น" : "ทั้ง workspace");
   const lastDay = summary ? addDays(new Date(Date.parse(summary.to) + 7 * 3600_000).toISOString().slice(0, 10), -1) : "";
@@ -297,7 +370,7 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
           <aside className="rp-side rp-noprint" aria-label="รายงานที่บันทึกไว้">
             <h2>รายงานที่บันทึกไว้</h2>
             <button type="button" className={`rp-def ${selected === "" ? "is-on" : ""}`} onClick={() => choose("")}><Plus size={14} aria-hidden="true" /><span><strong>{canWrite ? "สร้างรายงานใหม่" : "กำหนดเอง"}</strong><small>เลือกเซนเซอร์และเกณฑ์เอง</small></span></button>
-            {definitions.map((d) => <button type="button" key={d.id} className={`rp-def ${selected === d.id ? "is-on" : ""}`} onClick={() => choose(d.id)}><span><strong>{d.name}</strong><small>{projectName(d.project_id)} · {d.sensors.length} เซนเซอร์</small></span></button>)}
+            {definitions.map((d) => <button type="button" key={d.id} className={`rp-def ${selected === d.id ? "is-on" : ""}`} onClick={() => choose(d.id)}><span><strong>{d.name}</strong><small>{projectName(d.project_id)} · {d.sensors.length} เซนเซอร์</small>{d.schedule !== "none" && <small className="rp-def-schedule"><CalendarClock size={12} aria-hidden="true" />ส่ง{scheduleLabel(d)}</small>}</span></button>)}
             {definitions.length === 0 && <p className="rp-dim">ยังไม่มีรายงานที่บันทึกไว้</p>}
           </aside>
           <div className="rp-main">
@@ -317,6 +390,25 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
                 <p className="rp-dim">เซนเซอร์เหล่านี้อยู่ในรายงานแต่ออกรายงานไม่ได้แล้ว (ถอนการลงทะเบียน หรือเปลี่ยนเป็นอุปกรณ์สวมใส่/roaming) จะไม่อยู่ในผลรายงาน{canWrite ? " · กด × เพื่อนำออก แล้วบันทึก" : ""}</p>
                 <ul>{form.sensors.filter((k) => !byKey.has(k)).map((k) => <li key={k}><span className="rp-mono">{refOf(k).external_id}</span>{canWrite && <button type="button" aria-label={`นำ ${refOf(k).external_id} ออกจากรายงาน`} onClick={() => edit({ sensors: form.sensors.filter((x) => x !== k) })}>×</button>}</li>)}</ul>
               </div>}
+              <div className="rp-schedule">
+                <h3><CalendarClock size={15} aria-hidden="true" />ส่งรายงานอัตโนมัติ</h3>
+                <div className="rp-schedule-row">
+                  <label>ความถี่<select value={form.schedule} onChange={(e) => edit({ schedule: e.target.value as Form["schedule"] })} disabled={!canWrite}>
+                    <option value="none">ไม่ส่งอัตโนมัติ</option><option value="daily">ทุกวัน · ข้อมูลของเมื่อวาน</option><option value="weekly">ทุกสัปดาห์ · ข้อมูล 7 วันก่อนหน้า</option>
+                  </select></label>
+                  {form.schedule === "weekly" && <label>วัน<select value={form.weekday} onChange={(e) => edit({ weekday: e.target.value })} disabled={!canWrite}>{WEEKDAYS.map((d, i) => <option key={d} value={String(i + 1)}>{d}</option>)}</select></label>}
+                  {form.schedule !== "none" && <label>เวลา (เวลาไทย)<input type="time" value={form.time} onChange={(e) => edit({ time: e.target.value })} disabled={!canWrite} required /></label>}
+                </div>
+                <fieldset className="rp-channels"><legend>ช่องทางส่ง (ใช้ทั้งส่งอัตโนมัติและปุ่มส่งตอนนี้)</legend>
+                  {channels.filter((c) => c.project_id === null || c.project_id === (form.project_id || null) || form.channels.includes(c.id)).map((c) => {
+                    const unavailable = !c.enabled ? "ปิดใช้งานอยู่" : c.kind === "email" && !emailAvailable ? "server ยังไม่ตั้งค่า SMTP" : c.project_id !== null && c.project_id !== (form.project_id || null) ? "เป็นของโปรเจคอื่น" : "";
+                    const on = form.channels.includes(c.id);
+                    return <label key={c.id} className={`${on ? "is-on" : ""} ${unavailable ? "is-off" : ""}`}><input type="checkbox" checked={on} disabled={!canWrite || (!on && !!unavailable)} onChange={() => edit({ channels: on ? form.channels.filter((x) => x !== c.id) : [...form.channels, c.id] })} /><KindIcon kind={c.kind} />{c.name}{unavailable && <small>{unavailable}</small>}</label>;
+                  })}
+                  {channels.length === 0 && <p className="rp-dim">ยังไม่มีช่องทางส่ง เพิ่มได้ที่หน้าการแจ้งเตือน (Webhook, LINE หรืออีเมล)</p>}
+                </fieldset>
+                {(() => { const d = definitions.find((x) => x.id === selected); return d?.next_run_at && !dirty ? <p className="rp-dim">ส่งครั้งถัดไป {thaiTime(d.next_run_at)} · ข้อความ LINE มีลิงก์กลับมาที่รายงานนี้ · อีเมลแนบไฟล์ CSV รายชั่วโมง</p> : null; })()}
+              </div>
               {canWrite && <div className="rp-actions">
                 {selected && <button type="button" className="rp-btn" disabled={busy || !dirty} onClick={() => void save(false)}><Save size={15} aria-hidden="true" />บันทึกการแก้ไข</button>}
                 <button type="button" className="rp-btn" disabled={busy || !form.name.trim() || form.sensors.length === 0 || (!wholeWorkspace && !form.project_id)} onClick={() => void save(true)}><Plus size={15} aria-hidden="true" />{selected ? "บันทึกเป็นรายงานใหม่" : "บันทึกรายงาน"}</button>
@@ -328,8 +420,17 @@ export default function ReportsPage({ me, getToken, refresh, onUnauthorized }: {
               <div className="rp-actions">
                 <button type="button" className="rp-btn primary" disabled={busy || (!selected && form.sensors.length === 0)} onClick={() => void run()}>{busy ? "กำลังคำนวณ…" : "ดูรายงาน"}</button>
                 <button type="button" className="rp-btn" disabled={!summary} onClick={() => window.print()}><Printer size={15} aria-hidden="true" />พิมพ์ / บันทึก PDF</button>
+                {selected && canWrite && <button type="button" className="rp-btn" disabled={busy || dirty || form.channels.length === 0} title={dirty ? "บันทึกการแก้ไขก่อนส่ง" : form.channels.length === 0 ? "เลือกช่องทางส่งก่อน" : "ส่งรายงานช่วงวันที่ที่เลือกไปยังช่องทางของรายงานนี้"} onClick={() => void sendNow()}><Send size={15} aria-hidden="true" />ส่งตอนนี้</button>}
               </div>
             </div>
+            {selected && <div className="rp-card rp-runs rp-noprint">
+              <div className="rp-runs-head"><h2>ประวัติการส่ง</h2><button type="button" className="rp-icon-btn" onClick={() => void loadRuns(selected)} title="โหลดใหม่" aria-label="โหลดประวัติการส่งใหม่"><RefreshCw size={14} /></button></div>
+              {runs.length === 0 ? <p className="rp-dim">ยังไม่เคยส่งรายงานนี้</p> : <ul className="rp-run-list">{runs.map((run) => <li key={run.id}>
+                <div><strong>{thaiDay(bangkokDay(run.period_from))}{bangkokDay(run.period_from) !== addDays(bangkokDay(run.period_to), -1) && ` – ${thaiDay(addDays(bangkokDay(run.period_to), -1))}`}</strong><small>{run.trigger === "schedule" ? "ตามตาราง" : "ส่งตอนนี้"} · {thaiTime(run.created_at)}{run.status === "queued" && " · กำลังส่ง"}</small></div>
+                <ul className="rp-deliveries">{run.deliveries.map((d) => <li key={d.id} className={`is-${d.status}`}><KindIcon kind={d.channel_kind} /><span>{d.channel_name || "ช่องทางถูกลบ"} · {DELIVERY_LABEL[d.status]}{d.attempts > 1 && ` (ลอง ${d.attempts} ครั้ง)`}</span>{d.last_error && <small>{d.last_error}</small>}</li>)}
+                  {run.deliveries.length === 0 && <li className="is-skipped"><span>ไม่มีช่องทางที่ยังใช้ได้</span></li>}</ul>
+              </li>)}</ul>}
+            </div>}
             {summary && (
               <article className="rp-report" aria-label="ผลรายงาน">
                 <header className="rp-report-head">

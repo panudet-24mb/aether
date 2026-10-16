@@ -79,6 +79,74 @@ type ReportDefinition struct {
 	CreatedBy *string        `json:"created_by"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
+	// Schedule (docs/platform/reports.md, "Scheduled delivery"): none | daily | weekly, an ISO weekday for weekly,
+	// a local Bangkok time "HH:MM", the notification channels, and when the scheduler next sends it.
+	Schedule        string     `json:"schedule"`
+	ScheduleWeekday *int       `json:"schedule_weekday"`
+	ScheduleTime    *string    `json:"schedule_time"`
+	Channels        []string   `json:"channels"`
+	NextRunAt       *time.Time `json:"next_run_at"`
+}
+
+// ReportManualPerHour is how many reports one workspace may send by hand in an hour.
+const ReportManualPerHour = 10
+
+// ReportMaxChannels is how many channels one report goes to.
+const ReportMaxChannels = 10
+
+// ReportOmitted is a saved report's sensor left out of a run, and why (sensor_not_found, personal_sensor, ...).
+type ReportOmitted struct {
+	ReportSensor
+	Reason string `json:"reason"`
+}
+
+// ReportRun is one sending of a saved report: the period it covers and its deliveries, one per channel.
+type ReportRun struct {
+	ID         string           `json:"id"`
+	ReportID   string           `json:"report_id"`
+	ProjectID  *string          `json:"project_id"`
+	PeriodFrom time.Time        `json:"period_from"`
+	PeriodTo   time.Time        `json:"period_to"`
+	Trigger    string           `json:"trigger"` // schedule | manual
+	Status     string           `json:"status"`  // queued | done
+	CreatedBy  *string          `json:"created_by"`
+	CreatedAt  time.Time        `json:"created_at"`
+	FinishedAt *time.Time       `json:"finished_at"`
+	Deliveries []ReportDelivery `json:"deliveries"`
+}
+
+// ReportDelivery is a run's delivery to one channel: queued | sent | failed | skipped.
+type ReportDelivery struct {
+	ID            string     `json:"id"`
+	ChannelID     *string    `json:"channel_id"`
+	ChannelName   string     `json:"channel_name"`
+	ChannelKind   string     `json:"channel_kind"`
+	Status        string     `json:"status"`
+	Attempts      int        `json:"attempts"`
+	LastError     *string    `json:"last_error"`
+	NextAttemptAt time.Time  `json:"next_attempt_at"`
+	SentAt        *time.Time `json:"sent_at"`
+}
+
+// ReportDeliveryJob is a claimed delivery with what sending it needs. FailReason ends it without sending; Skip ends
+// it as skipped; RetryReason leaves it for the usual backoff.
+type ReportDeliveryJob struct {
+	Delivery    ReportDelivery
+	Run         ReportRun
+	Channel     NotificationChannel
+	SecretEnc   string
+	FailReason  string
+	RetryReason string
+}
+
+// ReportRunContent is what a run's messages are made of: the report as it is now, the sensors that still resolve
+// (and the ones left out), the workspace's name.
+type ReportRunContent struct {
+	Run        ReportRun
+	Definition ReportDefinition
+	Sensors    []ReportSensorInfo
+	Omitted    []ReportOmitted
+	Workspace  string
 }
 
 // ValidReportWindow checks a report range: from before to, at most ReportMaxWindow.

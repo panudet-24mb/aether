@@ -1,18 +1,17 @@
 package httpapi
 
 import (
+	"aether/backend/internal/alerts"
 	"aether/backend/internal/app"
 	"aether/backend/internal/domain"
 	"aether/backend/internal/reports"
 	"aether/backend/internal/security"
 	"bufio"
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,11 +23,6 @@ import (
 // summary are reads sent as POST (the sensor list is a body; CORS allows GET and POST only), so a member with read
 // access to the reports module may run them (accessGate, readPost). Saved reports are written by owner / admin /
 // operator. Wearables and roaming tags are refused by the repository (personal_sensor): they belong to the privacy export.
-
-const reportTimeLayout = "2006-01-02 15:04:05"
-
-// streamRefreshEvery is the longest a streaming export goes without moving its write deadline (streamWriteWindow).
-const streamRefreshEvery = 5 * time.Second
 
 // reportWindow parses an RFC 3339 range and checks it (domain.ValidReportWindow).
 func reportWindow(from, to string) (time.Time, time.Time, error) {
@@ -47,26 +41,12 @@ func reportRanges(temp, hum reports.Range) error {
 	return domain.ValidReportRange(hum.Min, hum.Max, domain.ReportHumLow, domain.ReportHumHigh)
 }
 
-// reportNumber formats a CSV number; an absent value is an empty cell. Numbers never go through csvCell: a negative
-// temperature must stay a number, and a cell holding only a number cannot be a formula.
-func reportNumber(v *float64) string {
-	if v == nil {
-		return ""
-	}
-	return strconv.FormatFloat(*v, 'f', -1, 64)
-}
-
 type reportSummaryItem struct {
 	domain.ReportSensorInfo
 	reports.Summary
 }
 
-type reportOmitted struct {
-	domain.ReportSensor
-	Reason string `json:"reason"`
-}
-
-func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
+func reportRoutes(r fiber.Router, s *app.Service, reads *readLog, sender *alerts.Sender) {
 	exports, summaries := newExportSlots(), newExportSlots()
 	principal := func(c fiber.Ctx) domain.Principal { return c.Locals("principal").(domain.Principal) }
 	writer := func(c fiber.Ctx) (domain.Principal, error) {
@@ -188,7 +168,7 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 		defer cancel()
 		var temp, hum reports.Range
 		var infos []domain.ReportSensorInfo
-		omitted := []reportOmitted{}
+		omitted := []domain.ReportOmitted{}
 		var report fiber.Map
 		if in.ReportID != "" {
 			if len(in.Sensors) > 0 || in.Temp != nil || in.Hum != nil {
@@ -209,10 +189,13 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 				got, e := s.Repo.ResolveReportSensors(ctx, p, []domain.ReportSensor{sensor})
 				var reason domain.ReasonError
 				switch {
+				case e == nil && def.ProjectID != nil && (got[0].ProjectID == nil || !strings.EqualFold(*got[0].ProjectID, *def.ProjectID)):
+					// As when it is sent: a project report shows only its project's sensors.
+					omitted = append(omitted, domain.ReportOmitted{ReportSensor: sensor, Reason: "sensor_outside_project"})
 				case e == nil:
 					infos = append(infos, got[0])
 				case errors.As(e, &reason):
-					omitted = append(omitted, reportOmitted{ReportSensor: sensor, Reason: reason.Reason})
+					omitted = append(omitted, domain.ReportOmitted{ReportSensor: sensor, Reason: reason.Reason})
 				default:
 					return e
 				}
@@ -278,6 +261,11 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 			TempMax   *float64              `json:"temp_max"`
 			HumMin    *float64              `json:"hum_min"`
 			HumMax    *float64              `json:"hum_max"`
+			// The schedule replaces the stored one like every other field: leaving it out means "none".
+			Schedule        string   `json:"schedule"`
+			ScheduleWeekday *int     `json:"schedule_weekday"`
+			ScheduleTime    *string  `json:"schedule_time"`
+			Channels        []string `json:"channels"`
 		}
 		if e := body(c, &in, 16*1024); e != nil {
 			return e
@@ -303,8 +291,12 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 		if e := reportRanges(reports.Range{Min: in.TempMin, Max: in.TempMax}, reports.Range{Min: in.HumMin, Max: in.HumMax}); e != nil {
 			return e
 		}
-		out, e := s.Repo.SaveReportDefinition(c.Context(), p, domain.ReportDefinition{ID: id, ProjectID: in.ProjectID, Name: name, Kind: "environment", Sensors: sensors,
-			TempMin: in.TempMin, TempMax: in.TempMax, HumMin: in.HumMin, HumMax: in.HumMax}, create)
+		def := domain.ReportDefinition{ID: id, ProjectID: in.ProjectID, Name: name, Kind: "environment", Sensors: sensors,
+			TempMin: in.TempMin, TempMax: in.TempMax, HumMin: in.HumMin, HumMax: in.HumMax}
+		if e := reportSchedule(&def, in.Schedule, in.ScheduleWeekday, in.ScheduleTime, in.Channels, time.Now()); e != nil {
+			return e
+		}
+		out, e := s.Repo.SaveReportDefinition(c.Context(), p, def, create)
 		if e != nil {
 			return e
 		}
@@ -319,6 +311,58 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 			return domain.ErrInvalid
 		}
 		return save(c, c.Params("id"), false)
+	})
+	// Send a saved report now to its channels, for [from, to) or by default yesterday (Bangkok). The worker delivers
+	// it within its next pass; 429 too_many_sends past domain.ReportManualPerHour per workspace and hour.
+	r.Post("/reports/definitions/:id/send", func(c fiber.Ctx) error {
+		var in struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		}
+		if e := body(c, &in, 1024); e != nil {
+			return e
+		}
+		p, e := writer(c)
+		if e != nil {
+			return e
+		}
+		if !security.ValidID(c.Params("id")) {
+			return domain.ErrInvalid
+		}
+		from, to := reports.LastFullDay(time.Now(), reports.Bangkok())
+		if in.From != "" || in.To != "" {
+			if from, to, e = reportWindow(in.From, in.To); e != nil {
+				return e
+			}
+		}
+		run, e := s.Repo.SendReportNow(c.Context(), p, strings.ToLower(c.Params("id")), from, to)
+		if e != nil {
+			return e
+		}
+		return c.Status(202).JSON(run)
+	})
+	r.Get("/reports/definitions/:id/runs", func(c fiber.Ctx) error {
+		if !security.ValidID(c.Params("id")) {
+			return domain.ErrInvalid
+		}
+		out, e := s.Repo.ListReportRuns(c.Context(), principal(c), strings.ToLower(c.Params("id")))
+		if e != nil {
+			return e
+		}
+		return c.JSON(fiber.Map{"items": out})
+	})
+	// The channels a report may go to, for the editor: names and kinds only (configs are credentials in practice),
+	// and whether this server can send email at all. Readable with the reports module, not only the alerts one.
+	r.Get("/reports/channels", func(c fiber.Ctx) error {
+		list, e := s.Repo.ListChannels(c.Context(), principal(c))
+		if e != nil {
+			return e
+		}
+		items := make([]fiber.Map, 0, len(list))
+		for _, ch := range list {
+			items = append(items, fiber.Map{"id": ch.ID, "name": ch.Name, "kind": ch.Kind, "enabled": ch.Enabled, "project_id": ch.ProjectID})
+		}
+		return c.JSON(fiber.Map{"items": items, "email_available": sender.SMTP.Configured()})
 	})
 	r.Post("/reports/definitions/:id/delete", func(c fiber.Ctx) error {
 		p, e := writer(c)
@@ -335,77 +379,58 @@ func reportRoutes(r fiber.Router, s *app.Service, reads *readLog) {
 	})
 }
 
-// streamReportCSV writes the header, every sensor's rows and a last row that says whether the file is whole:
-// `#END,<data rows>` when it is, `#INCOMPLETE,<reason>` when reading stopped part way (reason `timeout` when the
-// 30-minute budget ran out, `stream_failed` otherwise). The status was sent with the first byte, so this row is how a
-// short file shows itself. refresh moves the write deadline forward before the first row of every sensor and whenever
-// more than streamRefreshEvery passed since it last did, so neither a slow query nor a slow reader cuts the file.
+// streamReportCSV writes the CSV of an export (reports.WriteCSV) from the repository's rows.
 func streamReportCSV(ctx context.Context, s *app.Service, p domain.Principal, infos []domain.ReportSensorInfo, from, to time.Time, resolution string, w *bufio.Writer, refresh func()) error {
-	last := time.Now()
-	touch := func(force bool) {
-		if force || time.Since(last) > streamRefreshEvery {
-			refresh()
-			last = time.Now()
-		}
-	}
-	touch(true)
-	if _, e := w.WriteString("\ufeff"); e != nil {
-		return e
-	}
-	cw := csv.NewWriter(w)
-	head := []string{"เวลา", "เซนเซอร์", "gateway", "external_id"}
-	if resolution == "raw" {
-		head = append(head, "temperature", "humidity", "battery")
-	} else {
-		head = append(head, "n", "t_avg", "t_min", "t_max", "h_avg", "h_min", "h_max")
-	}
-	if e := cw.Write(head); e != nil {
-		return e
-	}
 	sensors := make([]domain.ReportSensor, len(infos))
 	for i, info := range infos {
 		sensors[i] = domain.ReportSensor{GatewayID: info.GatewayID, ExternalID: info.ExternalID}
 	}
-	loc, rows, current := reports.Bangkok(), 0, -1
-	e := s.Repo.StreamReport(ctx, p, sensors, from, to, resolution, func(i int, row domain.ReportRow) error {
-		touch(i != current)
-		current = i
-		info := infos[i]
-		cells := []string{row.At.In(loc).Format(reportTimeLayout), csvCell(info.Name), csvCell(info.GatewayName), csvCell(info.ExternalID)}
-		if resolution == "raw" {
-			cells = append(cells, reportNumber(row.Temperature), reportNumber(row.Humidity), reportNumber(row.Battery))
-		} else {
-			cells = append(cells, strconv.Itoa(row.N), reportNumber(row.TAvg), reportNumber(row.TMin), reportNumber(row.TMax), reportNumber(row.HAvg), reportNumber(row.HMin), reportNumber(row.HMax))
+	return reports.WriteCSV(ctx, w, infos, resolution, func(emit func(int, domain.ReportRow) error) error {
+		return s.Repo.StreamReport(ctx, p, sensors, from, to, resolution, emit)
+	}, refresh)
+}
+
+// reportSchedule checks and sets a report's schedule: none, daily at "HH:MM" or weekly on an ISO weekday at "HH:MM"
+// (Bangkok), with up to domain.ReportMaxChannels channels; a schedule needs at least one. next_run_at is its next
+// occurrence after now. Channels exist, are enabled and fit the report's project: the repository checks that.
+func reportSchedule(d *domain.ReportDefinition, kind string, weekday *int, at *string, channels []string, now time.Time) error {
+	if kind == "" {
+		kind = "none"
+	}
+	s := reports.Schedule{Kind: kind}
+	if weekday != nil {
+		s.Weekday = *weekday
+	}
+	if at != nil {
+		s.Time = *at
+	}
+	if !s.Valid() || (kind == "none" && (weekday != nil || at != nil)) {
+		return domain.Because(domain.ErrInvalid, "invalid_schedule")
+	}
+	if len(channels) > domain.ReportMaxChannels {
+		return domain.Because(domain.ErrInvalid, "invalid_channels")
+	}
+	seen := map[string]bool{}
+	d.Channels = []string{}
+	for _, ch := range channels {
+		ch = strings.ToLower(ch)
+		if !security.ValidID(ch) || seen[ch] {
+			return domain.Because(domain.ErrInvalid, "invalid_channels")
 		}
-		if e := cw.Write(cells); e != nil {
-			return e
-		}
-		if rows++; rows%refreshRows == 0 {
-			cw.Flush()
-			return cw.Error()
-		}
+		seen[ch] = true
+		d.Channels = append(d.Channels, ch)
+	}
+	d.Schedule, d.ScheduleWeekday, d.ScheduleTime, d.NextRunAt = kind, nil, nil, nil
+	if kind == "none" {
 		return nil
-	})
-	touch(true)
-	marker := []string{"#END", strconv.Itoa(rows)}
-	if e != nil {
-		reason := "stream_failed"
-		if errors.Is(e, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			reason = "timeout"
-		}
-		marker = []string{"#INCOMPLETE", reason}
 	}
-	// A broken connection fails these writes too; the error that matters is the stream's.
-	werr := cw.Write(marker)
-	cw.Flush()
-	if werr == nil {
-		werr = cw.Error()
+	if len(d.Channels) == 0 {
+		return domain.Because(domain.ErrInvalid, "no_channels")
 	}
-	if ferr := w.Flush(); werr == nil {
-		werr = ferr
+	next := s.Next(now, reports.Bangkok())
+	d.ScheduleTime, d.NextRunAt = at, &next
+	if kind == "weekly" {
+		d.ScheduleWeekday = weekday
 	}
-	if e != nil {
-		return e
-	}
-	return werr
+	return nil
 }

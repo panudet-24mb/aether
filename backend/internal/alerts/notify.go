@@ -221,12 +221,17 @@ func (s *Sender) Send(ctx context.Context, ch domain.NotificationChannel, secret
 }
 
 func (s *Sender) sendWebhook(ctx context.Context, target, secret string, payload Payload) error {
-	if e := s.validateWebhookURL(target); e != nil {
-		return errors.New("webhook url rejected")
-	}
 	// Third parties do not need internal actor ids.
 	payload.Alert.AckedBy, payload.Alert.ResolvedBy = nil, nil
 	body, _ := json.Marshal(payload)
+	return s.postWebhook(ctx, target, secret, payload.Event.EventType, body)
+}
+
+// postWebhook posts a JSON body, signed with the channel secret (X-Aether-Signature) when it has one.
+func (s *Sender) postWebhook(ctx context.Context, target, secret, event string, body []byte) error {
+	if e := s.validateWebhookURL(target); e != nil {
+		return errors.New("webhook url rejected")
+	}
 	if u, e := url.Parse(target); e == nil && s.Allowed[hostPort(u)] {
 		ctx = context.WithValue(ctx, allowPrivateKey{}, true)
 	}
@@ -236,7 +241,7 @@ func (s *Sender) sendWebhook(ctx context.Context, target, secret string, payload
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Aether-Alerts/1")
-	req.Header.Set("X-Aether-Event", payload.Event.EventType)
+	req.Header.Set("X-Aether-Event", event)
 	if secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(body)
@@ -259,11 +264,15 @@ func (s *Sender) sendWebhook(ctx context.Context, target, secret string, payload
 
 // LINE Messaging API push (https://developers.line.biz/en/reference/messaging-api/#send-push-message).
 func (s *Sender) sendLine(ctx context.Context, token, to, text string) error {
-	if token == "" || to == "" {
-		return errors.New("line channel incomplete")
-	}
 	if len(text) > 5000 {
 		text = text[:5000]
+	}
+	return s.pushLine(ctx, token, to, text)
+}
+
+func (s *Sender) pushLine(ctx context.Context, token, to, text string) error {
+	if token == "" || to == "" {
+		return errors.New("line channel incomplete")
 	}
 	body, _ := json.Marshal(map[string]any{"to": to, "messages": []map[string]string{{"type": "text", "text": text}}})
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.line.me/v2/bot/message/push", bytes.NewReader(body))
@@ -285,16 +294,21 @@ func (s *Sender) sendLine(ctx context.Context, token, to, text string) error {
 }
 
 func (s *Sender) sendEmail(ctx context.Context, config map[string]string, payload Payload) error {
+	subject := strings.ReplaceAll(strings.ReplaceAll(payload.Alert.Title, "\r", " "), "\n", " ")
+	return s.mail(ctx, config, func(to string) []byte {
+		return []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Aether] %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", s.SMTP.From, to, subject, payload.Text))
+	})
+}
+
+// mail sends one message built for its To header to the channel's recipients (config["to"], filled from the
+// directory for a "members" audience).
+func (s *Sender) mail(ctx context.Context, config map[string]string, message func(to string) []byte) error {
 	if !s.SMTP.Configured() {
 		return errors.New("smtp not configured")
 	}
 	to := recipients(config)
 	if len(to) == 0 {
 		return errors.New("no recipients")
-	}
-	subject := strings.ReplaceAll(strings.ReplaceAll(payload.Alert.Title, "\r", " "), "\n", " ")
-	message := func(to string) []byte {
-		return []byte(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: [Aether] %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s\r\n", s.SMTP.From, to, subject, payload.Text))
 	}
 	client, closeConn, e := s.dialSMTP(ctx)
 	if e != nil {

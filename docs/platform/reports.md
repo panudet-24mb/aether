@@ -8,7 +8,8 @@ Added 2026-10-16. The "รายงาน" page (sidebar group OPERATE) has two 
   overall and per day, data coverage, excursions out of range, and hourly charts. Sets of sensors and ranges can be
   saved as reports. "พิมพ์ / บันทึก PDF" prints the report on A4 through the browser (no PDF on the server).
 
-Scheduled delivery (email, LINE) is not built yet.
+A saved report can also be **sent**: on a schedule (daily or weekly) or by hand, to the workspace's notification
+channels (webhook, LINE, email). See "Scheduled delivery".
 
 ## What is reportable
 
@@ -113,6 +114,84 @@ admin and operator write (with `reports`
 module access `write`), everyone with the module reads. Every sensor is resolved on save like an export, so a
 wearable cannot be saved. At most 200 per workspace (409 `too_many_reports`, counted by a definer function so a
 project-limited writer cannot pass it). Writes are audited (`report.created`, `report.updated`, `report.deleted`).
+
+## Scheduled delivery
+
+Migration `00050_report_schedules.sql`. A saved report has a schedule and channels:
+
+- `schedule`: `none`, `daily` or `weekly`; `schedule_weekday` (ISO, 1 = Monday, weekly only); `schedule_time`, a
+  local Asia/Bangkok time `HH:MM`. A **daily** report sent at day D covers the Bangkok calendar day before D; a
+  **weekly** one covers the seven Bangkok days ending where D begins. `next_run_at` is the next occurrence.
+- `channels`: up to 10 notification channels (the ones of the alerts page). On save each must be enabled and be a
+  workspace channel or one of the report's project, as for alert rules (`invalid_channels`); a schedule needs at
+  least one (`no_channels`); a bad time or weekday is `invalid_schedule`. Saving replaces the schedule like every
+  other field: a request without it means `none`.
+
+`core.report_runs` holds one row per report sent (period, `schedule` or `manual`, `queued` until every delivery
+settled, then `done`); `core.report_deliveries` one row per run and channel (`queued`, `sent`, `failed`, `skipped`,
+attempts, last error). Both carry the report's project and take the definitions' project policies under FORCE RLS.
+Runs older than 180 days are pruned by the alerts worker's prune pass, their deliveries with them.
+
+**Worker.** `internal/reportjobs` runs in every API process next to the alerts worker, every 30 s, for every active
+workspace:
+
+1. Due reports (`next_run_at <= now`) are claimed `FOR UPDATE SKIP LOCKED`; each gets one run for its **latest**
+   due occurrence and `next_run_at` moves to the next one. After downtime the periods missed in between are not
+   caught up. A scheduled period (its start and end) has at most one run (`report_runs_schedule_once`), so replicas
+   ticking at the same moment send it once, and switching a report from daily to weekly still sends the first weekly
+   period although it starts on the same day as a daily one. Each report is queued in its own savepoint: one that
+   cannot be queued is logged and retried ten minutes later, without holding up or rolling back the others. Saving a
+   report without changing its schedule keeps `next_run_at`, so an edit never skips a period that is already due.
+2. Queued deliveries are claimed like alert notifications (`FOR UPDATE SKIP LOCKED`, hidden for five minutes while
+   being sent), one run at a time: a claim is rendered once (at most 60 s) and sent to each of its channels (at most
+   20 s each, 10 channels), 260 s at worst, inside the five minutes, so another replica never sends it again. A
+   workspace gets at most five runs per pass. Deliveries are retried with the same backoff (30 s doubling up to 30 min), `failed` after 5 attempts. A channel
+   removed or disabled since, or a project channel of another project than the report's, fails the delivery. Email on
+   a server without SMTP (`SMTP_HOST` empty) is `skipped` with `smtp_not_configured`. Every delivery of a **demo
+   workspace** is `skipped` (its data is fictional); its reports still show on screen.
+3. Each run is rendered once: the summary of every sensor over the period (the numbers of the reports page) and the
+   hourly CSV of the export (same writer and guards, ending with `#END`). The sensors are resolved again when sent:
+   one no longer a fixed sensor is left out, and so is, for a project report, a sensor whose gateway has moved to
+   another project or out of every project (`sensor_outside_project`), so its readings never reach the first
+   project's channels or members. The report on screen applies the same rule.
+
+**What each channel receives.**
+
+- **Email**: `multipart/mixed` with a `multipart/alternative` (plain text, then an HTML table: per sensor coverage,
+  min / max / avg temperature and humidity, minutes out of range, number of excursions) and the CSV attached
+  (`aether-report-<first day>-<last day>-1h.csv`). An attachment over 4 MB is left out and the message says so (an
+  hourly CSV of 50 sensors over a week is under 1 MB). The subject is RFC 2047 encoded. Recipients are resolved like
+  alert emails: a hand-written list, or the `members` audience, resolved at sending time by
+  `core.report_recipients` (the report's sibling of `core.alert_recipients`): owners, members who see every project
+  and, for a project report, that project's members, of the channel's roles, not erased, without the reports module
+  set to `none`; each a blind copy.
+- **LINE**: one text message of at most 5000 as LINE counts text, in UTF-16 code units (a Thai letter is one, an
+  emoji such as 🍎 two; https://developers.line.biz/en/docs/messaging-api/text-character-count/): report name, period, ranges, one line per sensor (sensors
+  that do not fit are counted, "…และอีก N เซนเซอร์"), and last a link
+  `${APP_ORIGIN}/?reports&report=<id>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>`. The reports page opens that report on the
+  summary tab and runs it for those days (after signing in if needed), once: the parameters are then removed from the
+  address.
+- **Webhook**: JSON `{schema: "aether.report.v1", sent_at, workspace, report, run, temp, hum, sensors, omitted, link}`
+  with `X-Aether-Event: report` and the channel's HMAC in `X-Aether-Signature`, as alert webhooks.
+
+**API.**
+
+- Schedule fields on `POST /reports/definitions` and `/{id}/update` (owner, admin, operator with reports `write`;
+  audited like every save).
+- `POST /reports/definitions/{id}/send` `{from?, to?}`: send now to the report's channels, by default for yesterday
+  (Bangkok), else for `[from, to)` (RFC 3339, at most 31 days). 202 with the queued run; delivered by the worker's next
+  pass. At most 10 per workspace and hour (`429 too_many_sends`, counted over every project by a definer function).
+  Needs write access; audited (`report.sent`).
+- `GET /reports/definitions/{id}/runs`: the last 20 runs with each channel's status, attempts and last error,
+  readable by whoever can read the report.
+- `GET /reports/channels`: the channels for the editor (id, name, kind, enabled, project; no configuration) and
+  `email_available`, readable with the reports module (the alerts page's list needs the alerts module). A member
+  whose alerts module is `none` therefore still sees the channels' names and kinds here, never their targets or
+  secrets.
+
+The page's editor has a "ส่งรายงานอัตโนมัติ" section (frequency, weekday, time, channels with their kind; a disabled
+channel, an email channel without SMTP or another project's channel cannot be picked), a "ส่งตอนนี้" button (sends the
+days selected for the summary) and "ประวัติการส่ง" with every run's per-channel status and error.
 
 ## Privacy
 

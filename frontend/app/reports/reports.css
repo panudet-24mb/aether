@@ -64,6 +64,8 @@
 .rp-def span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rp-def strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .rp-def small { font-size: 11.5px; color: var(--color-muted); }
+.rp-def small.rp-def-schedule { display: inline-flex; align-items: center; gap: 4px; color: var(--color-accent); }
+.rp-def small.rp-def-schedule svg { margin: 0; }
 .rp-def:hover:not(.is-on) { background: var(--color-panel-raised); }
 .rp-def.is-on { border-color: var(--color-accent-dark); background: var(--color-accent-faint); }
 .rp-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -81,6 +83,31 @@
 .rp-missing li { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border: 1px solid var(--color-warning-dark); border-radius: 14px; }
 .rp-missing li button { width: 22px; height: 22px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--color-muted); font-size: 15px; line-height: 1; cursor: pointer; }
 .rp-missing li button:hover { background: var(--color-panel-raised); color: var(--color-ink); }
+.rp-schedule { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.rp-schedule h3 { display: flex; align-items: center; gap: 7px; font-size: 13.5px; }
+.rp-schedule-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.rp-schedule-row label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--color-muted); }
+.rp-schedule-row select, .rp-schedule-row input { height: 34px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-paper); color: var(--color-ink); font: inherit; font-size: 13px; color-scheme: dark; }
+.rp-channels { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.rp-channels legend { font-size: 12.5px; color: var(--color-muted); margin-bottom: 6px; padding: 0; }
+.rp-channels label { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid var(--color-border); border-radius: 18px; font-size: 13px; color: var(--color-muted); cursor: pointer; }
+.rp-channels label.is-on { color: var(--color-accent); border-color: var(--color-accent-dark); background: var(--color-accent-faint); }
+.rp-channels label.is-off { opacity: .6; cursor: not-allowed; }
+.rp-channels label small { font-size: 11px; color: var(--color-warning); }
+.rp-channels input { accent-color: var(--color-accent); margin: 0; }
+.rp-runs-head { display: flex; align-items: center; justify-content: space-between; }
+.rp-icon-btn { height: 30px; width: 32px; min-height: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border); border-radius: 7px; background: var(--color-panel-raised); color: var(--color-ink); cursor: pointer; }
+.rp-run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rp-run-list > li { display: flex; flex-direction: column; gap: 6px; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-paper); }
+.rp-run-list > li > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.rp-run-list strong { font-size: 13px; font-weight: 500; }
+.rp-run-list small { font-size: 11.5px; color: var(--color-muted); }
+.rp-deliveries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rp-deliveries li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--color-muted); }
+.rp-deliveries li small { flex-basis: 100%; padding-left: 20px; overflow-wrap: anywhere; }
+.rp-deliveries li.is-sent { color: var(--color-accent); }
+.rp-deliveries li.is-failed { color: var(--color-danger); }
+.rp-deliveries li.is-skipped { color: var(--color-warning); }
 .rp-run { flex-direction: row; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
 
 /* The report itself: what prints. */

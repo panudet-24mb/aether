@@ -85,6 +85,13 @@ type Repository interface {
 	GetReportDefinition(context.Context, domain.Principal, string) (domain.ReportDefinition, error)
 	SaveReportDefinition(ctx context.Context, p domain.Principal, d domain.ReportDefinition, create bool) (domain.ReportDefinition, error)
 	DeleteReportDefinition(context.Context, domain.Principal, string) error
+	// Scheduled delivery of saved reports (migration 00050): manual sends, run history, and the worker's side.
+	SendReportNow(ctx context.Context, p domain.Principal, id string, from, to time.Time) (domain.ReportRun, error)
+	ListReportRuns(context.Context, domain.Principal, string) ([]domain.ReportRun, error)
+	ScheduleDueReports(ctx context.Context, tenant string, now time.Time) (int, error)
+	ClaimReportDeliveries(ctx context.Context, tenant string, limit int, now time.Time) ([]domain.ReportDeliveryJob, error)
+	FinishReportDelivery(ctx context.Context, tenant, id, outcome, message string) error
+	ReportRunContent(ctx context.Context, tenant, runID string) (domain.ReportRunContent, error)
 	// Asset registry: every gateway and active device with its record, maintenance plans and history.
 	ListAssets(context.Context, domain.Principal) ([]domain.AssetRow, error)
 	GetAsset(context.Context, domain.Principal, string, string) (domain.AssetDetail, error)

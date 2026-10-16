@@ -930,6 +930,11 @@ type recipientProblem struct{ fail, retry string }
 // memberRecipients resolves a "members" email for one alert inside a savepoint. A lookup error rolls back only
 // the savepoint and is retried with the usual backoff; a list longer than the cap is cut, owners first, and logged.
 func memberRecipients(tx *gorm.DB, alert string, config map[string]string) ([]string, recipientProblem, error) {
+	return directoryRecipients(tx, `SELECT email FROM core.alert_recipients(?::uuid, ?::text[])`, alert, config, "no member can see this alert's project")
+}
+
+// directoryRecipients runs a recipients function (core.alert_recipients, core.report_recipients) for one subject.
+func directoryRecipients(tx *gorm.DB, query, subject string, config map[string]string, none string) ([]string, recipientProblem, error) {
 	roles, ok := alerts.MemberRoles(config)
 	if !ok {
 		return nil, recipientProblem{fail: "members channel has invalid roles"}, nil
@@ -938,8 +943,8 @@ func memberRecipients(tx *gorm.DB, alert string, config map[string]string) ([]st
 		return nil, recipientProblem{}, e
 	}
 	var to []string
-	if e := tx.Raw(`SELECT email FROM core.alert_recipients(?::uuid, ?::text[])`, alert, pgArray(roles)).Scan(&to).Error; e != nil {
-		slog.Warn("alert email: recipient lookup failed", "alert", alert)
+	if e := tx.Raw(query, subject, pgArray(roles)).Scan(&to).Error; e != nil {
+		slog.Warn("email: recipient lookup failed", "subject", subject)
 		if rb := tx.RollbackTo("recipients").Error; rb != nil {
 			return nil, recipientProblem{}, rb
 		}
@@ -949,10 +954,10 @@ func memberRecipients(tx *gorm.DB, alert string, config map[string]string) ([]st
 		return nil, recipientProblem{}, e
 	}
 	if len(to) == 0 {
-		return nil, recipientProblem{fail: "no member can see this alert's project"}, nil
+		return nil, recipientProblem{fail: none}, nil
 	}
 	if len(to) > alerts.MaxMemberRecipients {
-		slog.Warn("alert email: members truncated", "alert", alert, "members", len(to), "limit", alerts.MaxMemberRecipients)
+		slog.Warn("email: members truncated", "subject", subject, "members", len(to), "limit", alerts.MaxMemberRecipients)
 		to = to[:alerts.MaxMemberRecipients]
 	}
 	return to, recipientProblem{}, nil
@@ -996,6 +1001,10 @@ func (r *Repository) PruneAlertData(ctx context.Context, tenant string) error {
 			return e
 		}
 		if e := tx.Exec(`DELETE FROM core.device_events e WHERE e.id IN (SELECT id FROM core.device_events WHERE event_type<>? ORDER BY occurred_at DESC,id DESC OFFSET 5000) AND NOT EXISTS(SELECT 1 FROM core.alerts a WHERE a.event_id=e.id)`, domain.EventAction).Error; e != nil {
+			return e
+		}
+		// Report runs are kept 180 days; their deliveries go with them (docs/platform/reports.md).
+		if e := tx.Exec(`DELETE FROM core.report_runs WHERE created_at<now()-interval '180 days'`).Error; e != nil {
 			return e
 		}
 		// Settled commands are kept 90 days (the audit log keeps who sent them for as long as it lives).

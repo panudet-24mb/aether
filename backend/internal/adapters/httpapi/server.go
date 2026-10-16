@@ -240,6 +240,7 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 	topologyRoutes(secured, service)
 	systemRoutes(secured, cfg.OpsStatusFile, cfg.OpsStatusTenant)
 	assetRoutes(secured, service)
+	reportRoutes(secured, service, reads)
 	commandRoutes(secured, service)
 	edgeRoutes(secured, service, cfg)
 	tuyaCloudRoutes(secured, service)

@@ -39,9 +39,10 @@ func assetDate(s string) (string, bool) {
 	return s, e == nil && d.Format("2006-01-02") == s
 }
 
-// csvCell neutralises formula injection: Excel and Sheets execute a cell that starts with = + - @.
+// csvCell neutralises formula injection: Excel and Sheets execute a cell that starts with = + - @, and also one that
+// starts with a tab or carriage return followed by one of them (OWASP CSV injection).
 func csvCell(s string) string {
-	if s != "" && strings.ContainsAny(s[:1], "=+-@") {
+	if s != "" && strings.ContainsAny(s[:1], "=+-@\t\r") {
 		return "'" + s
 	}
 	return s

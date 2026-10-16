@@ -321,6 +321,6 @@ Migration `00023_member_access.sql` supersedes the owner/admin scope rule above:
 
 `core.member_access` stores per-module restrictions: `none`, `read`, `write`. The owner or an unrestricted admin manages them via `/members/{user_id}/access`. Changes apply to the next API request in an existing session; navigation refreshes every 30 seconds. Write never elevates the base role: viewers remain read-only and operators retain their existing operational actions.
 
-Feature APIs for floor plans, automation, assets, alerts and studio enforce module restrictions. Shared telemetry/inventory APIs remain readable within the user's project scope because several pages use them; hiding Overview is not a blanket denial of telemetry access.
+Feature APIs for floor plans, automation, assets, alerts, studio and reports enforce module restrictions. Reports (`/reports/*`, docs/platform/reports.md) has one exception to "read means GET only": `POST /reports/export` and `POST /reports/summary` are reads that carry their sensor list in a body, so `read` runs them; saving a report still needs `write` and the owner, admin or operator role. Shared telemetry/inventory APIs remain readable within the user's project scope because several pages use them; hiding Overview is not a blanket denial of telemetry access.
 
 Devices inherit the project of their registered gateway. Moving a gateway moves the scope of its devices. Project automations validate their referenced devices and gateways on save, enable and execution, and read conditions only within their project.

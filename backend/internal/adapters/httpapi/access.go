@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-var accessModules = map[string]bool{"live": true, "connect": true, "alerts": true, "assets": true, "floorplan": true, "automation": true, "studio": true, "team": true, "control": true}
+var accessModules = map[string]bool{"live": true, "connect": true, "alerts": true, "assets": true, "floorplan": true, "automation": true, "studio": true, "team": true, "control": true, "reports": true}
 
 // routeHead is the first segment after /api/v1/, normalised the way a router might match it: lower case,
 // duplicate and trailing slashes ignored. The gate must classify exactly what the router dispatches, or a
@@ -28,6 +28,18 @@ func routeHead(path string) string {
 	return parts[0]
 }
 
+// readPost names the POST routes that only read: a report export or summary carries its sensor list in a body
+// (CORS allows GET and POST only), so read access to the reports module runs them. Every other POST is a write.
+func readPost(path string) bool {
+	parts := []string{}
+	for _, part := range strings.Split(strings.ToLower(path), "/") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "reports" && (parts[3] == "export" || parts[3] == "summary")
+}
+
 // These are restrictions on the existing role, never an elevation of that role.
 func moduleFor(path, method string) string {
 	head := routeHead(path)
@@ -41,6 +53,8 @@ func moduleFor(path, method string) string {
 		return "team"
 	case "assets":
 		return "assets"
+	case "reports":
+		return "reports"
 	case "alerts", "rules", "channels", "events":
 		return "alerts"
 	case "studio":
@@ -84,7 +98,7 @@ func accessGate(s *app.Service) fiber.Handler {
 			return e
 		}
 		level := access[module]
-		if level == "none" || (level == "read" && c.Method() != "GET") {
+		if level == "none" || (level == "read" && c.Method() != "GET" && !(c.Method() == "POST" && readPost(c.Path()))) {
 			return domain.ErrForbidden
 		}
 		return c.Next()

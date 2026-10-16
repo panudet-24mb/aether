@@ -28,6 +28,7 @@ still names a registered route):
 | Members | `GET /members`, `GET /members/:id/access` (the member) |
 | Devices and readings | `GET /devices`, `GET /devices/:id/state` and `/controls` (the device), `GET /gateways/:id/packets` (the gateway), `GET /discovery`, `GET /live`, `POST /studio/render`, `GET /studio/sources`, `GET /presence/:external` (the tag) |
 | Assets and plans | `GET /assets`, `GET /assets/:kind/:id`, `GET /assets/export.csv`, `GET /sites/:id`, `GET /twin/sites/:id/state` (digital twin; people as counts, pseudonyms or names, see `digital-twin.md`; with names `twin_live_named`, logged on every request) |
+| Reports (docs/platform/reports.md) | `GET /reports/sensors`, `POST /reports/export` (own row per export, written before the CSV streams), `POST /reports/summary`; fixed sensors only, a wearable or roaming tag is refused with `personal_sensor` |
 | Digital twin history | `GET /twin/sites/:id/timeline` (with names `twin_timeline_named`, every request), `GET /twin/sites/:id/replay` (the site; a replay with pseudonyms or names is `twin_replay_people`, logged on every request), `GET /twin/people/:external/trail` (the tag, every request) |
 | Learned signals | `GET /signals`, `GET /signals/sessions/:id` |
 | Events and alerts | `GET /events` (`?external_id=` → the tag), `GET /alerts`, `GET /alerts/summary`, `GET /notifications` |

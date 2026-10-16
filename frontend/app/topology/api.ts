@@ -291,14 +291,14 @@ type Settled<T> = { status: "fulfilled"; value: T } | { status: "rejected"; reas
 
 export function createClient(getToken: () => string, refresh: () => Promise<boolean>) {
   let slow: { at: number; gateways: Settled<Gateway[]>; sources: Settled<Source[]>; devices: Settled<Device[]>; settings: Settled<MQTTSettings>; catalog: Settled<CatalogResponse>; removed: Settled<Device[]>; projects: Settled<Project[]> } | null = null;
-  async function call<T>(path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+  async function call<T>(path: string, body?: unknown, extraHeaders?: Record<string, string>, timeoutMs = 15000): Promise<T> {
     const send = () =>
       fetch(`${API}/api/v1${path}`, {
         method: body === undefined ? "GET" : "POST",
         headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json", ...extraHeaders },
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: "no-store",
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     let r = await send();
     if (r.status === 401 && (await refresh())) r = await send();
@@ -324,7 +324,8 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
   return {
     /** Generic helpers for pages that share this authenticated client. */
     raw: <T,>(path: string) => call<T>(path),
-    post: <T,>(path: string, body: unknown) => call<T>(path, body),
+    /** timeoutMs: for the few calls the server gives longer than an ordinary request (default 15 s). */
+    post: <T,>(path: string, body: unknown, timeoutMs?: number) => call<T>(path, body, undefined, timeoutMs),
     /** Authenticated binary GET (e.g. a floor's scanned plan); returns null when the resource does not exist. */
     blob: async (path: string): Promise<Blob | null> => {
       const send = () => fetch(`${API}/api/v1${path}`, { headers: { Authorization: `Bearer ${getToken()}` }, cache: "no-store", signal: AbortSignal.timeout(15000) });
@@ -335,15 +336,15 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
       return r.blob();
     },
     /** Authenticated download of an export: GET, or POST when a body is given. Saved under `name`. Exports can be
-     *  large (a tag's whole history), so the wait is longer than for ordinary calls. */
-    download: async (path: string, name: string, body?: unknown): Promise<void> => {
+     *  large (a tag's whole history), so the wait is longer than for ordinary calls; timeoutMs lengthens it further. */
+    download: async (path: string, name: string, body?: unknown, timeoutMs = 90000): Promise<void> => {
       const send = () =>
         fetch(`${API}/api/v1${path}`, {
           method: body === undefined ? "GET" : "POST",
           headers: { Authorization: `Bearer ${getToken()}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
           body: body === undefined ? undefined : JSON.stringify(body),
           cache: "no-store",
-          signal: AbortSignal.timeout(90000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
       let r = await send();
       if (r.status === 401 && (await refresh())) r = await send();

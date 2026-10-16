@@ -58,6 +58,11 @@ var readRules = map[string]readRule{
 	"GET /api/v1/assets":               {resource: "assets", kind: "device_list", subject: everything},
 	"GET /api/v1/assets/:kind/:id":     {resource: "asset", kind: "asset", subject: param("id")},
 	"GET /api/v1/assets/export.csv":    {resource: "assets_export", kind: "device_list", subject: everything},
+	// Reports name sensors and carry their readings (fixed sensors only; wearables are refused). The export logs
+	// itself before it streams.
+	"GET /api/v1/reports/sensors":      {resource: "report_sensors", kind: "device_list", subject: everything},
+	"POST /api/v1/reports/export":      {resource: "reports_export", kind: "sensor_history", subject: everything, handled: true},
+	"POST /api/v1/reports/summary":     {resource: "reports_summary", kind: "sensor_history", subject: everything},
 	"GET /api/v1/sites/:id":            {resource: "site", kind: "site", subject: param("id")},
 	"GET /api/v1/twin/sites/:id/state": {resource: "twin_live", kind: "site", subject: param("id")},
 	// The twin's history: where people were (replay with pseudonyms or names is logged on every request, see twin.go),

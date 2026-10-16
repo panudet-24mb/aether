@@ -7,6 +7,7 @@ import (
 	"aether/backend/internal/app"
 	"aether/backend/internal/config"
 	"aether/backend/internal/realtime"
+	"aether/backend/internal/reportjobs"
 	"aether/backend/internal/security"
 	"context"
 	"log/slog"
@@ -82,6 +83,8 @@ func main() {
 	// The twin's replay reads 5-minute buckets (core.sample_rollup), kept up to date here, never on the ingest path.
 	go repo.RunSampleRollup(workerCtx, time.Minute)
 	go (&alerts.Worker{Store: repo, Sender: httpapi.NewSender(cfg), Secrets: service.Secrets, LegacySecrets: service.LegacySecrets, Interval: 15 * time.Second}).Run(workerCtx)
+	// Saved reports on their schedule and sent by hand (docs/platform/reports.md): runs queued and delivered here.
+	go (&reportjobs.Worker{Store: repo, Sender: httpapi.NewSender(cfg), Secrets: service.Secrets, LegacySecrets: service.LegacySecrets, Origin: cfg.Origin, Interval: 30 * time.Second}).Run(workerCtx)
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 	go func() {

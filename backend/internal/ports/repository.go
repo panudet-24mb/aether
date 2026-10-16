@@ -7,6 +7,7 @@ import (
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/automation"
 	"aether/backend/internal/domain"
+	"aether/backend/internal/reports"
 	"aether/backend/internal/signals"
 	"aether/backend/internal/studio"
 	"context"
@@ -75,6 +76,22 @@ type Repository interface {
 	SetSiteModelTransform(context.Context, domain.Principal, string, domain.ModelTransform) (*domain.SiteModel, error)
 	DeleteSiteModel(context.Context, domain.Principal, string) error
 	Presence(context.Context, domain.Principal, string) (domain.Presence, error)
+	// Reports and data export (docs/platform/reports.md): fixed sensors only, never wearables or roaming tags.
+	ReportSensors(context.Context, domain.Principal) ([]domain.ReportSensorInfo, error)
+	ResolveReportSensors(context.Context, domain.Principal, []domain.ReportSensor) ([]domain.ReportSensorInfo, error)
+	StreamReport(ctx context.Context, p domain.Principal, sensors []domain.ReportSensor, from, to time.Time, resolution string, emit func(int, domain.ReportRow) error) error
+	ReportBuckets(ctx context.Context, p domain.Principal, sensors []domain.ReportSensor, from, to time.Time) ([][]reports.Bucket, string, error)
+	ListReportDefinitions(context.Context, domain.Principal) ([]domain.ReportDefinition, error)
+	GetReportDefinition(context.Context, domain.Principal, string) (domain.ReportDefinition, error)
+	SaveReportDefinition(ctx context.Context, p domain.Principal, d domain.ReportDefinition, create bool) (domain.ReportDefinition, error)
+	DeleteReportDefinition(context.Context, domain.Principal, string) error
+	// Scheduled delivery of saved reports (migration 00050): manual sends, run history, and the worker's side.
+	SendReportNow(ctx context.Context, p domain.Principal, id string, from, to time.Time) (domain.ReportRun, error)
+	ListReportRuns(context.Context, domain.Principal, string) ([]domain.ReportRun, error)
+	ScheduleDueReports(ctx context.Context, tenant string, now time.Time) (int, error)
+	ClaimReportDeliveries(ctx context.Context, tenant string, limit int, now time.Time) ([]domain.ReportDeliveryJob, error)
+	FinishReportDelivery(ctx context.Context, tenant, id, outcome, message string) error
+	ReportRunContent(ctx context.Context, tenant, runID string) (domain.ReportRunContent, error)
 	// Asset registry: every gateway and active device with its record, maintenance plans and history.
 	ListAssets(context.Context, domain.Principal) ([]domain.AssetRow, error)
 	GetAsset(context.Context, domain.Principal, string, string) (domain.AssetDetail, error)

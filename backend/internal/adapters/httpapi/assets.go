@@ -3,6 +3,7 @@ package httpapi
 import (
 	"aether/backend/internal/app"
 	"aether/backend/internal/domain"
+	"aether/backend/internal/reports"
 	"aether/backend/internal/security"
 	"bytes"
 	"encoding/csv"
@@ -39,13 +40,8 @@ func assetDate(s string) (string, bool) {
 	return s, e == nil && d.Format("2006-01-02") == s
 }
 
-// csvCell neutralises formula injection: Excel and Sheets execute a cell that starts with = + - @.
-func csvCell(s string) string {
-	if s != "" && strings.ContainsAny(s[:1], "=+-@") {
-		return "'" + s
-	}
-	return s
-}
+// csvCell neutralises formula injection (reports.CSVCell).
+func csvCell(s string) string { return reports.CSVCell(s) }
 
 func assetRoutes(r fiber.Router, s *app.Service) {
 	principal := func(c fiber.Ctx) domain.Principal { return c.Locals("principal").(domain.Principal) }

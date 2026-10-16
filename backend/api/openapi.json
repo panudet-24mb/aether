@@ -8962,6 +8962,684 @@
      }
     }
    }
+  },
+  "/api/v1/reports/sensors": {
+   "get": {
+    "summary": "Fixed sensors the caller may report on: live registrations on live gateways, not wearables or roaming tags, of a profile that can carry temperature or humidity; narrowed to the caller's projects. Logged in the read-access log.",
+    "operationId": "get__api_v1_reports_sensors",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/ReportSensorInfo"
+           }
+          },
+          "max_sensors": {
+           "type": "integer"
+          },
+          "max_days": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/reports/export": {
+   "post": {
+    "summary": "Data export as UTF-8 CSV with a BOM, streamed. A read sent as POST: a member with read access to the reports module may run it. Columns: เวลา (Asia/Bangkok, 2006-01-02 15:04:05), เซนเซอร์, gateway, external_id, then raw: temperature, humidity, battery (from core.sensor_samples, the rollup's reading rules; rows with none of the three left out) or 5m/1h/1d: n, t_avg, t_min, t_max, h_avg, h_min, h_max (from core.sample_rollup; averages are means of the 5-minute averages; 1d = Bangkok calendar day). Text cells starting with = + - @ are neutralised. Rows by sensor in request order, then time; the last row is a marker: `#END,<data rows>` for a whole file, `#INCOMPLETE,<timeout|stream_failed>` when reading stopped after the response began (a short file never looks whole). raw lists only samples of 5-minute buckets the rollup holds, i.e. from times the tag was a fixed sensor (never its worn or roaming past), so the newest few minutes are not in it yet; raw is capped at 120 sensor-days (sensors x started days, ~38 MB at SAMPLE_MIN_INTERVAL_SEC=30): 400 raw_too_large. Logged in the read-access log on its own row (subject: sensor count and resolution). 400 reasons (error): invalid_range (from/to not RFC 3339 or from >= to), window_too_long (> 31 days), no_sensors, too_many_sensors (> 50), duplicate_sensor, invalid_sensor, personal_sensor (a wearable or roaming tag: personal data, use the privacy export), sensor_not_registered (no live registration: may be anyone's tag); 404 sensor_not_found (not in this workspace or outside the caller's projects); 429 when two exports of the workspace (four per process) are running.",
+    "operationId": "post__api_v1_reports_export",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "CSV ending with an #END or #INCOMPLETE marker row",
+      "content": {
+       "text/csv": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "sensors",
+         "from",
+         "to",
+         "resolution"
+        ],
+        "additionalProperties": false,
+        "properties": {
+         "from": {
+          "type": "string",
+          "format": "date-time"
+         },
+         "to": {
+          "type": "string",
+          "format": "date-time"
+         },
+         "sensors": {
+          "type": "array",
+          "items": {
+           "$ref": "#/components/schemas/ReportSensor"
+          }
+         },
+         "resolution": {
+          "type": "string",
+          "enum": [
+           "raw",
+           "5m",
+           "1h",
+           "1d"
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/reports/summary": {
+   "post": {
+    "summary": "Summary report from core.sample_rollup (fixed sensors only): per sensor overall and per Bangkok day min/max/avg, coverage, excursions out of the allowed range, minutes out of range and an hourly series. Either sensors (+ optional temp/hum ranges) or report_id (a saved report: its sensors and ranges; sensors that are gone, outside the caller's projects or no longer fixed are listed in omitted with their reason; 400 report_or_sensors when both are given). A read sent as POST, like the export. 400 reasons (error): invalid_range (from/to not RFC 3339 or from >= to), window_too_long (> 31 days), no_sensors, too_many_sensors (> 50), duplicate_sensor, invalid_sensor, personal_sensor (a wearable or roaming tag: personal data, use the privacy export), sensor_not_registered (no live registration: may be anyone's tag); 404 sensor_not_found (not in this workspace or outside the caller's projects); 429 when two exports of the workspace (four per process) are running. Also 400 invalid_limits.",
+    "operationId": "post__api_v1_reports_summary",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "from": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "to": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "generated_at": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "time_zone": {
+           "type": "string",
+           "enum": [
+            "Asia/Bangkok"
+           ]
+          },
+          "temp": {
+           "$ref": "#/components/schemas/ReportRange"
+          },
+          "hum": {
+           "$ref": "#/components/schemas/ReportRange"
+          },
+          "report": {
+           "type": "object",
+           "nullable": true,
+           "properties": {
+            "id": {
+             "type": "string",
+             "format": "uuid"
+            },
+            "name": {
+             "type": "string"
+            },
+            "project_id": {
+             "type": "string",
+             "format": "uuid",
+             "nullable": true
+            }
+           }
+          },
+          "sensors": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/ReportSensorSummary"
+           }
+          },
+          "omitted": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "gateway_id": {
+              "type": "string"
+             },
+             "external_id": {
+              "type": "string"
+             },
+             "reason": {
+              "type": "string",
+              "enum": [
+               "sensor_not_found",
+               "personal_sensor",
+               "sensor_not_registered"
+              ]
+             }
+            }
+           }
+          },
+          "workspace": {
+           "type": "string",
+           "description": "The workspace's name, for the printed report's header"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "from",
+         "to"
+        ],
+        "additionalProperties": false,
+        "properties": {
+         "from": {
+          "type": "string",
+          "format": "date-time"
+         },
+         "to": {
+          "type": "string",
+          "format": "date-time"
+         },
+         "report_id": {
+          "type": "string",
+          "format": "uuid"
+         },
+         "sensors": {
+          "type": "array",
+          "items": {
+           "$ref": "#/components/schemas/ReportSensor"
+          }
+         },
+         "temp": {
+          "$ref": "#/components/schemas/ReportRange"
+         },
+         "hum": {
+          "$ref": "#/components/schemas/ReportRange"
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/reports/definitions": {
+   "get": {
+    "summary": "Saved summary reports. A member limited to projects sees workspace reports (sensors on other projects' gateways left out) and their projects' reports.",
+    "operationId": "get__api_v1_reports_definitions",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/ReportDefinition"
+           }
+          },
+          "limit": {
+           "type": "integer"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "summary": "Create a saved report (owner/admin/operator with reports write access). Every sensor must resolve as for an export (404 sensor_not_found, 400 personal_sensor / sensor_not_registered); 400 invalid_name, invalid_limits; 409 too_many_reports past 200 per workspace. A project report may only hold sensors on that project's gateways (400 sensor_outside_project). Schedule: none, daily or weekly at a local Bangkok time, to the given channels; 400 invalid_schedule, invalid_channels, no_channels. next_run_at is the next occurrence.",
+    "operationId": "post__api_v1_reports_definitions",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "201": {
+      "description": "Created",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReportDefinition"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReportDefinitionInput"
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/reports/definitions/{id}": {
+   "get": {
+    "summary": "One saved report",
+    "operationId": "get__api_v1_reports_definitions__id",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReportDefinition"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/reports/definitions/{id}/update": {
+   "post": {
+    "summary": "Replace a saved report (owner/admin/operator); a member limited to projects may only change their projects' reports (403 for a workspace report) A project report may only hold sensors on that project's gateways (400 sensor_outside_project). Sensors the editor cannot see (a gateway moved out of their projects) are kept as stored. Schedule: none, daily or weekly at a local Bangkok time, to the given channels; 400 invalid_schedule, invalid_channels, no_channels. next_run_at is the next occurrence.",
+    "operationId": "post__api_v1_reports_definitions__id_update",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReportDefinition"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReportDefinitionInput"
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/reports/definitions/{id}/delete": {
+   "post": {
+    "summary": "Delete a saved report (owner/admin/operator)",
+    "operationId": "post__api_v1_reports_definitions__id_delete",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Success"
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/reports/definitions/{id}/send": {
+   "post": {
+    "summary": "Send a saved report now to its channels (owner/admin/operator with reports write access). Default period: yesterday (Bangkok calendar day); or from/to (RFC 3339, at most 31 days). Queued for the delivery worker (within about 30 s). 400 no_channels, invalid_range, window_too_long; 429 too_many_sends past 10 per workspace and hour. Audited (report.sent).",
+    "operationId": "post__api_v1_reports_definitions__id_send",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "Queued",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReportRun"
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+         "from": {
+          "type": "string",
+          "format": "date-time"
+         },
+         "to": {
+          "type": "string",
+          "format": "date-time"
+         }
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/reports/definitions/{id}/runs": {
+   "get": {
+    "summary": "The last 20 runs of a saved report (scheduled and manual) with each channel's delivery status, attempts and last error. Deliveries are retried with the backoff of alert notifications (failed after 5 attempts); email on a server without SMTP is skipped (smtp_not_configured), and so is every delivery of a demo workspace.",
+    "operationId": "get__api_v1_reports_definitions__id_runs",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/ReportRun"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid"
+      }
+     }
+    ]
+   }
+  },
+  "/api/v1/reports/channels": {
+   "get": {
+    "summary": "Notification channels for the report editor: id, name, kind, enabled, project_id (no configuration), and whether this server can send email (SMTP configured). Readable with the reports module.",
+    "operationId": "get__api_v1_reports_channels",
+    "security": [
+     {
+      "bearerAuth": []
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Success",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "items": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "string",
+              "format": "uuid"
+             },
+             "name": {
+              "type": "string"
+             },
+             "kind": {
+              "type": "string",
+              "enum": [
+               "webhook",
+               "line",
+               "email"
+              ]
+             },
+             "enabled": {
+              "type": "boolean"
+             },
+             "project_id": {
+              "type": "string",
+              "format": "uuid",
+              "nullable": true
+             }
+            }
+           }
+          },
+          "email_available": {
+           "type": "boolean"
+          }
+         }
+        }
+       }
+      }
+     },
+     "default": {
+      "description": "Rejected; 400 invalid input, 401 credentials, 403 authorization/origin or detail=password_change_required, 404 inaccessible resource, 409 conflict/quota, 429 rate limit, 500 internal.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
@@ -11068,6 +11746,511 @@
      },
      "backup": {
       "$ref": "#/components/schemas/BackupStatus"
+     }
+    }
+   },
+   "ReportSensor": {
+    "type": "object",
+    "required": [
+     "gateway_id",
+     "external_id"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "external_id": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Compared and returned in lower case"
+     }
+    }
+   },
+   "ReportSensorInfo": {
+    "type": "object",
+    "properties": {
+     "gateway_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "external_id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "gateway_name": {
+      "type": "string"
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "profile_id": {
+      "type": "string"
+     }
+    }
+   },
+   "ReportRange": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "min": {
+      "type": "number",
+      "nullable": true
+     },
+     "max": {
+      "type": "number",
+      "nullable": true
+     }
+    },
+    "description": "Allowed range; either end may be null (open). Temperature -100..200 °C, humidity 0..100 %, min <= max (400 invalid_limits)."
+   },
+   "ReportStats": {
+    "type": "object",
+    "nullable": true,
+    "properties": {
+     "min": {
+      "type": "number"
+     },
+     "max": {
+      "type": "number"
+     },
+     "avg": {
+      "type": "number",
+      "description": "Mean of the 5-minute averages"
+     }
+    }
+   },
+   "ReportSensorSummary": {
+    "allOf": [
+     {
+      "$ref": "#/components/schemas/ReportSensorInfo"
+     },
+     {
+      "type": "object",
+      "properties": {
+       "buckets": {
+        "type": "integer",
+        "description": "5-minute buckets with a temperature or humidity"
+       },
+       "expected_buckets": {
+        "type": "integer",
+        "description": "5-minute slots in the range that have closed (the rollup runs every minute; slots younger than 2 minutes are not expected yet)"
+       },
+       "coverage_pct": {
+        "type": "number"
+       },
+       "temperature": {
+        "$ref": "#/components/schemas/ReportStats"
+       },
+       "humidity": {
+        "$ref": "#/components/schemas/ReportStats"
+       },
+       "days": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "date": {
+           "type": "string",
+           "format": "date",
+           "description": "Asia/Bangkok calendar day"
+          },
+          "buckets": {
+           "type": "integer"
+          },
+          "expected": {
+           "type": "integer"
+          },
+          "coverage_pct": {
+           "type": "number"
+          },
+          "temperature": {
+           "$ref": "#/components/schemas/ReportStats"
+          },
+          "humidity": {
+           "$ref": "#/components/schemas/ReportStats"
+          }
+         }
+        }
+       },
+       "excursions": {
+        "type": "array",
+        "description": "Runs of consecutive 5-minute buckets with t_max > max or t_min < min (same for humidity); a missing bucket ends a run. At most 500 per sensor.",
+        "items": {
+         "type": "object",
+         "properties": {
+          "metric": {
+           "type": "string",
+           "enum": [
+            "temperature",
+            "humidity"
+           ]
+          },
+          "direction": {
+           "type": "string",
+           "enum": [
+            "high",
+            "low"
+           ]
+          },
+          "start": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "end": {
+           "type": "string",
+           "format": "date-time",
+           "description": "End of the last bucket"
+          },
+          "duration_min": {
+           "type": "integer"
+          },
+          "peak": {
+           "type": "number",
+           "description": "Highest t_max (high) or lowest t_min (low) of the run"
+          }
+         }
+        }
+       },
+       "excursions_truncated": {
+        "type": "boolean"
+       },
+       "minutes_out_of_range": {
+        "type": "object",
+        "properties": {
+         "temperature": {
+          "type": "integer"
+         },
+         "humidity": {
+          "type": "integer"
+         }
+        },
+        "description": "Distinct out-of-range buckets x 5, every bucket counted even past the excursion cap"
+       },
+       "series": {
+        "type": "array",
+        "description": "Hourly avg/min/max for the chart",
+        "items": {
+         "type": "object",
+         "properties": {
+          "at": {
+           "type": "string",
+           "format": "date-time"
+          },
+          "t_avg": {
+           "type": "number",
+           "nullable": true
+          },
+          "t_min": {
+           "type": "number",
+           "nullable": true
+          },
+          "t_max": {
+           "type": "number",
+           "nullable": true
+          },
+          "h_avg": {
+           "type": "number",
+           "nullable": true
+          },
+          "h_min": {
+           "type": "number",
+           "nullable": true
+          },
+          "h_max": {
+           "type": "number",
+           "nullable": true
+          }
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   "ReportDefinitionInput": {
+    "type": "object",
+    "required": [
+     "name",
+     "sensors"
+    ],
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true,
+      "description": "null = workspace report (needs full project scope)"
+     },
+     "sensors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+       "$ref": "#/components/schemas/ReportSensor"
+      }
+     },
+     "temp_min": {
+      "type": "number",
+      "nullable": true
+     },
+     "temp_max": {
+      "type": "number",
+      "nullable": true
+     },
+     "hum_min": {
+      "type": "number",
+      "nullable": true
+     },
+     "hum_max": {
+      "type": "number",
+      "nullable": true
+     },
+     "schedule": {
+      "type": "string",
+      "enum": [
+       "none",
+       "daily",
+       "weekly"
+      ],
+      "description": "Replaced like every other field: left out means none"
+     },
+     "schedule_weekday": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7,
+      "nullable": true,
+      "description": "ISO weekday (1 = Monday), weekly only"
+     },
+     "schedule_time": {
+      "type": "string",
+      "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+      "nullable": true,
+      "description": "Local Asia/Bangkok time"
+     },
+     "channels": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "Notification channels: enabled, workspace channels or the report's project's (400 invalid_channels); a schedule needs at least one (400 no_channels)"
+     }
+    }
+   },
+   "ReportDefinition": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true,
+      "description": "null = workspace report (needs full project scope)"
+     },
+     "sensors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+       "$ref": "#/components/schemas/ReportSensor"
+      }
+     },
+     "temp_min": {
+      "type": "number",
+      "nullable": true
+     },
+     "temp_max": {
+      "type": "number",
+      "nullable": true
+     },
+     "hum_min": {
+      "type": "number",
+      "nullable": true
+     },
+     "hum_max": {
+      "type": "number",
+      "nullable": true
+     },
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "environment"
+      ]
+     },
+     "created_by": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "schedule": {
+      "type": "string",
+      "enum": [
+       "none",
+       "daily",
+       "weekly"
+      ],
+      "description": "Replaced like every other field: left out means none"
+     },
+     "schedule_weekday": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7,
+      "nullable": true,
+      "description": "ISO weekday (1 = Monday), weekly only"
+     },
+     "schedule_time": {
+      "type": "string",
+      "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+      "nullable": true,
+      "description": "Local Asia/Bangkok time"
+     },
+     "channels": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "description": "Notification channels: enabled, workspace channels or the report's project's (400 invalid_channels); a schedule needs at least one (400 no_channels)"
+     },
+     "next_run_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     }
+    }
+   },
+   "ReportDelivery": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "channel_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "channel_name": {
+      "type": "string",
+      "description": "Empty when the channel was deleted"
+     },
+     "channel_kind": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "queued",
+       "sent",
+       "failed",
+       "skipped"
+      ]
+     },
+     "attempts": {
+      "type": "integer"
+     },
+     "last_error": {
+      "type": "string",
+      "nullable": true
+     },
+     "next_attempt_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "sent_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     }
+    }
+   },
+   "ReportRun": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "report_id": {
+      "type": "string",
+      "format": "uuid"
+     },
+     "project_id": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "period_from": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "period_to": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "trigger": {
+      "type": "string",
+      "enum": [
+       "schedule",
+       "manual"
+      ]
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "queued",
+       "done"
+      ]
+     },
+     "created_by": {
+      "type": "string",
+      "format": "uuid",
+      "nullable": true
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "finished_at": {
+      "type": "string",
+      "format": "date-time",
+      "nullable": true
+     },
+     "deliveries": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/ReportDelivery"
+      }
      }
     }
    }

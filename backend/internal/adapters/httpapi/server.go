@@ -29,6 +29,11 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 )
 
+// liveHistoryPerSensor caps the samples GET /live returns per sensor. The overview re-polls it on every live
+// signal, and at 200 a busy workspace (~300 sensors) answered ~11 MB, which through Cloudflare outlasted the
+// browser's 15 s timeout, so the page showed no data at all.
+const liveHistoryPerSensor = 40
+
 type readiness interface{ Ready(context.Context) error }
 
 func proxyHeader(cfg config.Config) string {
@@ -346,14 +351,14 @@ func NewWithHub(cfg config.Config, service *app.Service, health readiness, hub *
 				return e
 			}
 			view := minew.Project(g, packets)
-			history, e := service.Repo.StreamHistory(c.Context(), principal, g.ID, time.Now().Add(-window), 200)
+			history, e := service.Repo.StreamHistory(c.Context(), principal, g.ID, time.Now().Add(-window), liveHistoryPerSensor)
 			if e != nil {
 				return e
 			}
 			view.Sensors = history
 			views = append(views, view)
 		}
-		return c.JSON(fiber.Map{"gateways": views, "server_time": time.Now().UTC(), "deployment_mode": cfg.Mode, "history_scope": "persisted_latest_200_per_sensor_in_range", "range": c.Query("range", "24h")})
+		return c.JSON(fiber.Map{"gateways": views, "server_time": time.Now().UTC(), "deployment_mode": cfg.Mode, "history_scope": "persisted_latest_40_per_sensor_in_range", "range": c.Query("range", "24h")})
 	})
 	secured.Get("/gateways", func(c fiber.Ctx) error {
 		out, e := service.Repo.ListGateways(c.Context(), c.Locals("principal").(domain.Principal))

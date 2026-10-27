@@ -6,8 +6,8 @@
 #   infra/prod/create-owner.sh --email owner@example.org --name "ชื่อผู้ดูแล" \
 #       --tenant "โรงพยาบาลตัวอย่าง" [--new-workspace] [--password-file PATH] [--env-file FILE] [--project NAME]
 #
-# --new-workspace: the server already has accounts; create a separate workspace for a new email. Give it its own
-# --password-file, or it reuses the first owner's generated password file.
+# --new-workspace: the server already has accounts; create a separate workspace for a new email. It needs its own
+# --password-file (generated there if missing), so a new owner never gets the first owner's password.
 #
 # With no --password-file the script generates one at <secrets-dir>/owner-password.txt (0600) and
 # tells you where it is, without printing it.
@@ -24,13 +24,16 @@ while [ $# -gt 0 ]; do
 		--new-workspace) COMMAND="create-workspace"; shift ;;
 		--env-file) ENV_FILE="$2"; shift 2 ;;
 		--project|-p) PROJECT="$2"; shift 2 ;;
-		-h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,13p' "$0"; exit 0 ;;
 		*) echo "unknown argument: $1" >&2; exit 1 ;;
 	esac
 done
 [ -n "$EMAIL" ] && [ -n "$NAME" ] && [ -n "$TENANT" ] || {
 	echo "usage: create-owner.sh --email ADDRESS --name NAME --tenant WORKSPACE" >&2; exit 1; }
 require_env
+if [ "$COMMAND" = create-workspace ] && [ -z "$PWFILE" ]; then
+	echo "--new-workspace needs its own --password-file (e.g. <secrets-dir>/<workspace>-owner-password.txt)" >&2; exit 1
+fi
 
 SECRETS="$(grep '^AETHER_SECRETS_DIR=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$PWFILE" ] || PWFILE="$SECRETS/owner-password.txt"
@@ -62,4 +65,8 @@ if [ "$COMMAND" = bootstrap ] && [ -n "$TENANT_ID" ] && [ -z "$(env_get OPS_STAT
 		END { if (!done) print "OPS_STATUS_TENANT=" v }' "$ENV_FILE" > "$tmp")
 	mv "$tmp" "$ENV_FILE"
 	echo "backup status on the web: owners of workspace $TENANT_ID (OPS_STATUS_TENANT in $ENV_FILE); run 'up -d api' to apply"
+fi
+if [ "$COMMAND" = create-workspace ] && [ -z "$(env_get OPS_STATUS_TENANT)" ]; then
+	echo "warning: OPS_STATUS_TENANT is not set, so this workspace's owners also see the server's backup status;" >&2
+	echo "         set it to the first workspace: setup.py <flags used at install> --ops-status-tenant <tenant-uuid>" >&2
 fi

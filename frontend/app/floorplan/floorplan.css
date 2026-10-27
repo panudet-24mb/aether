@@ -175,3 +175,20 @@
 .fp-asset.is-on .fp-door-frame { stroke: var(--color-ink); }
 .fp-asset-meta.is-warn { fill: var(--color-warning); }
 .fp-asset-meta.is-occupied { fill: var(--color-accent); }
+
+/* Import is the usual way to start a floor, so it reads as an action, not one more icon. */
+.topo.fp .fp-import { border-color: var(--color-accent); color: var(--color-accent); font-weight: 600; }
+.topo.fp .fp-import:hover:not(:disabled) { background: color-mix(in oklab, var(--color-accent) 12%, var(--color-panel-raised)); }
+.fp-start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; pointer-events: none; }
+.fp-start-card { pointer-events: auto; width: min(460px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--color-border); border-radius: 12px; background: color-mix(in oklab, var(--color-panel) 94%, transparent); box-shadow: 0 12px 32px rgb(0 0 0 / 0.18); }
+.fp-start-card h2 { font-size: 16px; color: var(--color-ink); margin-bottom: 2px; }
+.fp-start-card p { font-size: 12.5px; color: var(--color-muted); text-align: center; }
+.fp-start-opt { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-panel-raised); color: var(--color-ink); font: inherit; text-align: left; white-space: normal; cursor: pointer; transition: border-color var(--dur-short) var(--ease-out), background var(--dur-short) var(--ease-out); }
+.fp-start-opt:hover:not(:disabled) { border-color: var(--color-accent); }
+.fp-start-opt:disabled { opacity: 0.55; cursor: default; }
+.fp-start-opt > svg { flex-shrink: 0; color: var(--color-muted); }
+.fp-start-opt span { display: flex; flex-direction: column; gap: 3px; }
+.fp-start-opt strong { font-size: 14px; }
+.fp-start-opt small { font-size: 12px; color: var(--color-muted); line-height: 1.5; }
+.fp-start-opt.is-main { border-color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 10%, var(--color-panel-raised)); }
+.fp-start-opt.is-main > svg { color: var(--color-accent); }

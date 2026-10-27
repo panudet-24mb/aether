@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Building2, Copy, DoorOpen, DraftingCompass, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Trash2, Undo2, Cpu } from "lucide-react";
+import { Box, Building2, Copy, DoorOpen, DraftingCompass, FileUp, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Trash2, Undo2, Cpu } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "../topology/topology.css";
@@ -356,9 +356,10 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
         <button type="button" className={`topo-btn ${showGrid ? "is-on" : ""}`} aria-pressed={showGrid} onClick={() => setShowGrid((v) => !v)} title="แสดงตาราง (ช่องละ 1 ม.)" aria-label="แสดงตาราง"><Grid3x3 size={15} /></button>
         <button type="button" className={`topo-btn ${showCoverage ? "is-on" : ""}`} aria-pressed={showCoverage} onClick={() => setShowCoverage((v) => !v)} title="วงรัศมี 10 ม. รอบ gateway (ค่าประมาณสำหรับวางแผน)" aria-label="แสดงรัศมี gateway"><Radar size={15} /></button>
         <button type="button" className="topo-btn" onClick={() => { if (draft) setBoxes({ ...boxes, [floorId]: fitBox(draft) }); setResetKey((k) => k + 1); }} title="พอดีจอ" aria-label="พอดีจอ"><Maximize2 size={15} /></button>
-        <button type="button" className="topo-btn" disabled={!floor || busy} onClick={() => fileRef.current?.click()} title="ใส่ภาพผัง (สแกน / CAD export) ไว้วาดทับ" aria-label="ใส่ภาพผัง"><ImagePlus size={15} /></button>
+        <span className="topo-bar-sep" aria-hidden="true" />
+        <button type="button" className="topo-btn fp-import" disabled={!draft || busy} onClick={() => dxfRef.current?.click()} title="สร้างผนังและโซนของชั้นนี้จากไฟล์ CAD (.dxf) · DWG ต้อง Save As เป็น DXF ก่อน"><FileUp size={15} /> นำเข้าแบบ CAD (.dxf)</button>
+        <button type="button" className="topo-btn" disabled={!floor || busy} onClick={() => fileRef.current?.click()} title="ใส่ภาพผัง (สแกน / CAD export เป็น PNG, JPG) ไว้เป็นพื้นหลังสำหรับวาดทับ"><ImagePlus size={15} /> ใส่ภาพผัง</button>
         <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadImage(f); }} />
-        <button type="button" className="topo-btn" disabled={!draft || busy} onClick={() => dxfRef.current?.click()} title="นำเข้า CAD (DXF) · ผนังและโซนจากไฟล์ .dxf · DWG ต้อง export เป็น DXF ก่อน" aria-label="นำเข้า CAD (DXF)"><DraftingCompass size={15} /></button>
         <input ref={dxfRef} type="file" accept=".dxf,application/dxf,image/vnd.dxf" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) setDxf({ file: f, token: Date.now() }); }} />
         <span className="fp-spacer" />
         <button type="button" className={`topo-btn ${dirty ? "primary" : ""}`} disabled={!dirty || busy} onClick={() => void save()} title="บันทึก (Ctrl/⌘ S)"><Save size={15} /> {busy ? "กำลังบันทึก…" : dirty ? `บันทึก${dirtyFloors.length > 1 ? ` ${dirtyFloors.length} ชั้น` : ""}` : "บันทึกแล้ว"}</button>
@@ -429,6 +430,22 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
             </div>
           )}
           {draft && mode === "2d" && <Editor2D draft={draft} tool={tool} itemType={itemType} selection={selection} snap={snap} showGrid={showGrid} showCoverage={showCoverage} assets={assets} imageURL={imageURL?.floor === floorId && hasImage ? imageURL.url : null} readOnly={false} box={box} onBox={(b) => setBoxes((all) => ({ ...all, [floorId]: b }))} onSelect={setSelection} onChange={change} onToolDone={() => setTool("select")} />}
+          {draft && mode === "2d" && tool === "select" && !hasImage && !draft.layout.walls.length && !draft.layout.zones.length && !draft.layout.items.length && (
+            <div className="fp-start">
+              <div className="fp-start-card">
+                <h2>ชั้นนี้ยังว่าง · เริ่มจากแบบที่มีอยู่</h2>
+                <button type="button" className="fp-start-opt is-main" disabled={busy} onClick={() => dxfRef.current?.click()}>
+                  <DraftingCompass size={22} />
+                  <span><strong>นำเข้าแบบ CAD (.dxf)</strong><small>ได้ผนังและโซนพร้อมใช้ทั้ง 2D และ 3D · DWG ต้อง Save As เป็น DXF ก่อน</small></span>
+                </button>
+                <button type="button" className="fp-start-opt" disabled={busy} onClick={() => fileRef.current?.click()}>
+                  <ImagePlus size={22} />
+                  <span><strong>ใส่ภาพผัง (PNG / JPG)</strong><small>ใช้เป็นพื้นหลังแล้ววาดผนังและโซนทับ</small></span>
+                </button>
+                <p>หรือวาดเองด้วยเครื่องมือในแถบด้านบน</p>
+              </div>
+            </div>
+          )}
           {draft && mode === "3d" && <View3D floors={floors3D} activeId={floorId} assets={assets} selection={selection} explode={explode} isolate={isolate} snap={snap} readOnly={false} resetKey={resetKey} onSelect={setSelection} onPickFloor={(id) => { setFloorId(id); setSelection(null); }} onMove={move3D} />}
           {draft && <div className="fp-hint">{mode === "3d" ? "ลากเพื่อหมุน · เลื่อนล้อเพื่อซูม · คลิกขวาลากเพื่อเลื่อน · ลากอุปกรณ์ของชั้นที่เลือกเพื่อย้าย · คลิกชั้นอื่นเพื่อสลับ" : tool === "wall" ? "คลิกทีละจุด · Shift ล็อกแนวตั้ง/นอน · Enter หรือดับเบิลคลิกเพื่อจบ · Backspace ลบจุดล่าสุด" : tool === "zone" ? "คลิกทีละมุมของโซน · คลิกจุดแรกหรือ Enter เพื่อปิดรูป" : tool === "rect" ? "ลากเพื่อสร้างห้องสี่เหลี่ยม" : tool === "measure" ? "คลิกสองจุดเพื่อวัดระยะ" : tool === "item" ? "คลิกบนผังเพื่อวาง" : "ลากเพื่อย้าย · ลากจุดสี่เหลี่ยมเพื่อปรับรูป · ดับเบิลคลิกขอบเพื่อเพิ่มจุด · Alt คลิกจุดเพื่อลบ · Delete ลบ"}</div>}
         </div>

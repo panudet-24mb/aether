@@ -170,6 +170,14 @@ sudo cat /opt/aether/.secrets/prod/owner-password.txt   # อ่านครั�
 
 ถ้าต้องการกำหนดรหัสเอง: เขียนไฟล์ 0600 แล้วส่งด้วย `--password-file /path/to/file`
 
+**workspace ถัดไป (tenant ใหม่ของลูกค้ารายอื่น):** `bootstrap` ใช้ได้ครั้งเดียวต่อเครื่อง ครั้งต่อไปจะได้ `conflict` ให้เพิ่ม `--new-workspace` และใช้อีเมลใหม่กับไฟล์รหัสผ่านของตัวเอง ไม่อย่างนั้นจะใช้ไฟล์รหัสผ่านของ owner คนแรกซ้ำ:
+
+```sh
+sudo sh infra/prod/create-owner.sh --env-file .env.prod --new-workspace     --email admin@customer.example --name "ชื่อผู้ดูแล" --tenant "ชื่อ workspace"     --password-file /opt/aether/.secrets/prod/customer-owner-password.txt
+```
+
+workspace ใหม่แยกข้อมูลกันด้วย RLS เหมือน workspace แรก และไม่เปลี่ยน `OPS_STATUS_TENANT`
+
 จากนั้นเปิด `https://aether.hospital.local` แล้วเข้าสู่ระบบ เมนูซ้ายจะมี ภาพรวม / การแจ้งเตือน / เชื่อมต่ออุปกรณ์ / ผังอาคาร / Dashboard Studio / Automation Studio / อุปกรณ์ทั้งหมด
 
 ผู้ใช้คนอื่นเพิ่มจากในเว็บที่หน้า **ทีม**

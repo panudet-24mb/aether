@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Building2, Copy, DoorOpen, DraftingCompass, FileUp, FolderKanban, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Trash2, Undo2, Cpu } from "lucide-react";
+import { Box, Building2, Copy, DoorOpen, DraftingCompass, FileUp, FolderKanban, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Tag, Trash2, Undo2, Cpu } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "../topology/topology.css";
@@ -76,6 +76,8 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
   const [showCoverage, setShowCoverage] = useState(false);
   const [explode, setExplode] = useState(0.4);
   const [isolate, setIsolate] = useState(false);
+  // 3D: name every placed device, or only gateways and devices that are selected or alerting (the default).
+  const [allLabels, setAllLabels] = useState(false);
   const [panels, setPanels] = useState({ left: true, right: true });
   const [boxes, setBoxes] = useState<Record<string, ViewBox>>({});
   const [resetKey, setResetKey] = useState(0);
@@ -128,6 +130,24 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
     const first = async () => { await loadSites(); };
     void first();
   }, [loadSites]);
+
+  // Open on a project instead of an empty "เลือกโปรเจค": the last one used here, else one that already has a
+  // building, else the first. Unassigned buildings ("none") only when there is no project at all.
+  useEffect(() => {
+    if (project || !snapshot || sites === null) return;
+    const ids = (snapshot.projects ?? []).map((p) => p.id);
+    let last = "";
+    try { last = localStorage.getItem("aether.floorplan.project") ?? ""; } catch {}
+    const pick = ids.includes(last) || (last === "none" && sites.some((s) => !s.project_id)) ? last
+      : ids.find((id) => sites.some((s) => s.project_id === id)) ?? ids[0] ?? (sites.some((s) => !s.project_id) ? "none" : "");
+    if (!pick) return;
+    const t = setTimeout(() => setProject(pick), 0);
+    return () => clearTimeout(t);
+  }, [project, snapshot, sites]);
+
+  useEffect(() => {
+    if (project) try { localStorage.setItem("aether.floorplan.project", project); } catch {}
+  }, [project]);
 
   useEffect(() => {
     if (!siteId) return;
@@ -348,6 +368,7 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
           <div className="fp-tools">
             <label className="fp-slider" title="ระยะห่างระหว่างชั้น"><Layers size={14} /><input type="range" min={0} max={1.5} step={0.05} value={explode} onChange={(e) => setExplode(Number(e.target.value))} aria-label="ระยะห่างระหว่างชั้น" /></label>
             <button type="button" className={`topo-btn ${isolate ? "is-on" : ""}`} aria-pressed={isolate} onClick={() => setIsolate((v) => !v)} title="แสดงเฉพาะชั้นที่เลือก"><Layers size={15} /> เฉพาะชั้นนี้</button>
+            <button type="button" className={`topo-btn ${allLabels ? "is-on" : ""}`} aria-pressed={allLabels} onClick={() => setAllLabels((v) => !v)} title="แสดงชื่อและค่าของอุปกรณ์ทุกตัว · ปิดไว้จะแสดงเฉพาะ gateway อุปกรณ์ที่เลือก และอุปกรณ์ที่มีการแจ้งเตือน"><Tag size={15} /> ป้ายชื่อทั้งหมด</button>
           </div>
         )}
         <span className="topo-bar-sep" aria-hidden="true" />
@@ -451,7 +472,7 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
               </div>
             </div>
           )}
-          {draft && mode === "3d" && <View3D floors={floors3D} activeId={floorId} assets={assets} selection={selection} explode={explode} isolate={isolate} snap={snap} readOnly={false} resetKey={resetKey} onSelect={setSelection} onPickFloor={(id) => { setFloorId(id); setSelection(null); }} onMove={move3D} />}
+          {draft && mode === "3d" && <View3D floors={floors3D} activeId={floorId} assets={assets} selection={selection} explode={explode} isolate={isolate} snap={snap} readOnly={false} resetKey={resetKey} deviceLabels={allLabels ? "all" : "important"} onSelect={setSelection} onPickFloor={(id) => { setFloorId(id); setSelection(null); }} onMove={move3D} />}
           {draft && <div className="fp-hint">{mode === "3d" ? "ลากเพื่อหมุน · เลื่อนล้อเพื่อซูม · คลิกขวาลากเพื่อเลื่อน · ลากอุปกรณ์ของชั้นที่เลือกเพื่อย้าย · คลิกชั้นอื่นเพื่อสลับ" : tool === "wall" ? "คลิกทีละจุด · Shift ล็อกแนวตั้ง/นอน · Enter หรือดับเบิลคลิกเพื่อจบ · Backspace ลบจุดล่าสุด" : tool === "zone" ? "คลิกทีละมุมของโซน · คลิกจุดแรกหรือ Enter เพื่อปิดรูป" : tool === "rect" ? "ลากเพื่อสร้างห้องสี่เหลี่ยม" : tool === "measure" ? "คลิกสองจุดเพื่อวัดระยะ" : tool === "item" ? "คลิกบนผังเพื่อวาง" : "ลากเพื่อย้าย · ลากจุดสี่เหลี่ยมเพื่อปรับรูป · ดับเบิลคลิกขอบเพื่อเพิ่มจุด · Alt คลิกจุดเพื่อลบ · Delete ลบ"}</div>}
         </div>
 

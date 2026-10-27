@@ -61,6 +61,9 @@ export type BuildOptions = {
   people?: boolean;
   /** Sprite labels of floors, zones and items (floor plan). Default true. */
   labels?: boolean;
+  /** Which placed devices get a name label: "all" (default), or "important": gateways and devices that are
+   *  selected, alerting or missing, so a floor with dozens of sensors stays readable. */
+  deviceLabels?: "all" | "important";
   /** Zone tint from live data (SOS, PIR occupancy, headcount). Default true; the twin paints zones itself. */
   liveZones?: boolean;
   /** Glass walls with accent edges (the twin's dark stage). Default false. */
@@ -195,7 +198,7 @@ export function buildBuilding(content: THREE.Group, opts: BuildOptions): { pulse
         ring.userData.part = key;
         g.add(ring);
       }
-      if (isActive) {
+      if (isActive && (opts.deviceLabels !== "important" || p.asset_kind === "gateway" || selected || !a || a.alert || a.sos)) {
         const name = label(a ? (a.summary && p.asset_kind === "device" ? `${a.name} · ${a.summary}` : a.name) : "ไม่พบอุปกรณ์", a?.online ? "#e6f2ee" : "#f6c177", 0.85);
         name.position.set(p.x, p.z + 0.62, p.y);
         name.userData.part = key;

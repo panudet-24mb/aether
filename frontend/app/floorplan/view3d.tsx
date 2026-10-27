@@ -22,6 +22,7 @@ export default function View3D({
   onPickFloor,
   onMove,
   autoRotate = false,
+  deviceLabels = "all",
 }: {
   floors: Floor3D[];
   activeId: string;
@@ -39,6 +40,8 @@ export default function View3D({
   onMove: (key: string, x: number, y: number) => void;
   /** A slow orbit around the building, for a wall display nobody touches (app/display). */
   autoRotate?: boolean;
+  /** Which placed devices are named (buildBuilding). */
+  deviceLabels?: "all" | "important";
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const three = useRef<{ scene: THREE.Scene; camera: THREE.PerspectiveCamera; renderer: THREE.WebGLRenderer; controls: OrbitControls; content: THREE.Group; pulses: THREE.Mesh[] } | null>(null);
@@ -187,8 +190,8 @@ export default function View3D({
   useEffect(() => {
     const state = three.current;
     if (!state) return;
-    state.pulses = buildBuilding(state.content, { floors, activeId, assets, selection, explode, isolate }).pulses;
-  }, [floors, activeId, assets, selection, explode, isolate]);
+    state.pulses = buildBuilding(state.content, { floors, activeId, assets, selection, explode, isolate, deviceLabels }).pulses;
+  }, [floors, activeId, assets, selection, explode, isolate, deviceLabels]);
 
   useEffect(() => {
     const state = three.current;

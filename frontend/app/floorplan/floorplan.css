@@ -192,3 +192,4 @@
 .fp-start-opt small { font-size: 12px; color: var(--color-muted); line-height: 1.5; }
 .fp-start-opt.is-main { border-color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 10%, var(--color-panel-raised)); }
 .fp-start-opt.is-main > svg { color: var(--color-accent); }
+.fp-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }

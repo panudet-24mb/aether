@@ -1,0 +1,16 @@
+/* โปรเจค · built on the ทีมและสิทธิ์ page (team.css): its bar, table and alerts. */
+.pj .pj-actions { margin-left: auto; }
+.pj-section { padding: 14px 16px 6px; }
+.pj-section > h2 { font-size: 13px; margin: 0 0 8px; color: var(--color-ink); }
+.pj-section > h2 small { font-size: 12px; font-weight: 400; }
+.pj-section .tm-table { border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden; }
+.pj-section .tm-table thead th { position: static; }
+.pj-hint { font-size: 12px; color: var(--color-muted); line-height: 1.6; margin: 0 0 8px; }
+.pj-name { display: inline-flex; align-items: center; gap: 8px; }
+.pj-name i { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.pj-name strong, .pj-gw { font-weight: 500; }
+.pj-desc { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.pj-select { max-width: 220px; }
+.pj-first { border: 1px dashed var(--color-border); border-radius: 10px; padding: 36px 20px; }
+.pj-next { padding: 6px 16px 20px; font-size: 12.5px; color: var(--color-muted); }
+.pj-link { background: none; border: 0; padding: 0; color: var(--color-accent); font: inherit; text-decoration: underline; cursor: pointer; }

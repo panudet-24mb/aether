@@ -1,6 +1,6 @@
 # Milesight LoRaWAN through a UG65 (phase 1: ingest and display)
 
-Status 2026-10-26: implemented and tested with synthetic uplinks. **Not yet verified with real hardware.**
+Status 2026-10-27: a real GS301 delivers through a real UG65 (firmware 60.0.0.43) with the gateway's codec on; raw frames, the other models and downlinks are still unverified on hardware.
 - The synthetic uplinks use the frame examples from Milesight's own READMEs.
 - The gateway model and the four Milesight profiles stay `Verified: false` until an uplink captured from the real UG65 replaces the synthetic fixtures.
 
@@ -49,7 +49,7 @@ The collector subscribes to `aether/lora/+/#` (`backend/internal/adapters/milesi
 
 | The UG65 sends | Aether |
 |---|---|
-| A **codec's output**, e.g. `{"battery":100,"leakage_status":"leak"}` | Uses these values as they are. |
+| A **codec's output**, e.g. `{"battery":100,"leakage_status":"leak"}`. A real UG65 on 60.0.0.43 adds `devEUI`, `deviceName` and `applicationID` next to the values. | Uses the values. The added fields are metadata, not readings: the name is kept for discovery and the model, and a `devEUI` there must match the topic's. |
 | Its own **envelope** (no codec), with `devEUI`, `deviceName`, `fCnt`, `fPort`, `rxInfo[].rssi` / `loRaSNR` and the raw bytes in `data` | Keeps the names and radio figures. Decodes the raw bytes on port 85 for GS301, WS303, WS202 and VS330. The envelope's `devEUI` must match the topic's. |
 
 **How the model is chosen** (it matters for raw frames: channel `0x03` means a leak on a WS303 and PIR on a WS202):
@@ -90,6 +90,7 @@ An unknown channel ends the frame. Whatever was read before it is kept.
 | | `distance` (mm), `calibration_status` | `distance`, kept as a value | |
 | GS301 odor | `nh3`, `h2s` (ppm), `temperature` (°C), `humidity` (%) | same names | environment |
 | | `nh3_sensor_status` / `h2s_sensor_status` | kept as values | |
+| | `nh3` / `h2s` of 655.34 / 655.35 (or 65.534 / 65.535) | `*_sensor_status` "polarizing" / "device error". Milesight's codec divides the warm-up and fault codes like a reading, so a GS301 that has just been powered on would otherwise report 655 ppm. | |
 | All | `battery` (%) | `battery` | |
 | All (envelope only) | best `rssi` / `loRaSNR` | `rssi` (dBm), `snr` (dB) | |
 

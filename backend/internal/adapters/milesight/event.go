@@ -37,8 +37,13 @@ type envelope struct {
 	} `json:"rxInfo"`
 }
 
+// codecMeta are the fields a UG65 adds around a codec's output (seen on firmware 60.0.0.43: devEUI, deviceName,
+// applicationID). They describe the uplink, not the device's readings.
+var codecMeta = []string{"devEUI", "deviceName", "applicationID", "applicationName", "fPort", "fCnt", "time"}
+
 // ParseUplink reads one uplink. A payload carrying `data` and `devEUI` is the gateway's envelope; its DevEUI must be
-// the topic's. Anything else is a codec's output and is taken as the device's values.
+// the topic's. Anything else is a codec's output and is taken as the device's values, minus the metadata the gateway
+// put next to them; a DevEUI among that metadata must be the topic's too.
 func ParseUplink(m Message, b []byte) (Event, error) {
 	var obj map[string]json.RawMessage
 	if e := json.Unmarshal(b, &obj); e != nil || obj == nil {
@@ -46,6 +51,21 @@ func ParseUplink(m Message, b []byte) (Event, error) {
 	}
 	ev := Event{DevEUI: m.DevEUI}
 	if _, raw := obj["data"]; !raw || obj["devEUI"] == nil {
+		var meta envelope
+		_ = json.Unmarshal(b, &meta) // fields of another type than expected are left out, not fatal
+		if eui := strings.ToLower(strings.TrimSpace(meta.DevEUI)); eui != "" && eui != m.DevEUI {
+			return Event{}, domain.ErrInvalid
+		}
+		ev.DeviceName, ev.ApplicationName = clip(meta.DeviceName, 128), clip(meta.ApplicationName, 128)
+		if meta.FPort != nil && *meta.FPort >= 0 && *meta.FPort <= 255 {
+			ev.FPort = meta.FPort
+		}
+		if meta.FCnt != nil && *meta.FCnt >= 0 {
+			ev.FCnt = meta.FCnt
+		}
+		for _, k := range codecMeta {
+			delete(obj, k)
+		}
 		ev.Object = obj
 		return ev, nil
 	}

@@ -97,6 +97,22 @@ func TestLoRaWANIngest(t *testing.T) {
 		t.Fatal("an unknown model's raw frame was decoded")
 	}
 
+	// A real GS301 through a UG65 with its codec on, warming up: the name the gateway adds is kept, its metadata is
+	// not a reading, and the 655.34 ppm the codec makes of the warm-up status is a status, not a gas level.
+	const toilet = "24e124798e210951"
+	if e := capture(up(toilet), []byte(`{"h2s":655.34,"nh3":655.34,"devEUI":"24e124798e210951","battery":69,"humidity":58,"deviceName":"1F_Toilet_Male_Odor1","temperature":29.1,"applicationID":2}`)); e != nil {
+		t.Fatal(e)
+	}
+	if n := count(`SELECT count(*) FROM core.lorawan_devices WHERE gateway_id=$1 AND dev_eui=$2 AND name='1F_Toilet_Male_Odor1' AND model='GS301'`, g.ID, toilet); n != 1 {
+		t.Fatal("ug65 codec metadata: name or model not kept")
+	}
+	if n := count(`SELECT count(*) FROM core.sensor_samples WHERE gateway_id=$1 AND external_id=$2 AND reading->'metrics'->>'temperature'='29.1'
+      AND NOT reading->'metrics' ?| array['h2s','nh3','applicationID'] AND reading->'values'->>'h2s_sensor_status'='polarizing'`, g.ID, toilet); n != 1 {
+		var got string
+		_ = f.admin.QueryRowContext(ctx, `SELECT reading::text FROM core.sensor_samples WHERE gateway_id=$1 AND external_id=$2 ORDER BY received_at DESC LIMIT 1`, g.ID, toilet).Scan(&got)
+		t.Fatalf("ug65 codec sample: %s", got)
+	}
+
 	// Only LoRaWAN profiles fit a LoRaWAN gateway.
 	if _, e := f.service.CreateDevice(ctx, owner, g.ID, "ผิดชนิด", leak, "minew-s1-pending@1"); !errors.Is(e, domain.ErrInvalid) {
 		t.Fatalf("BLE profile on a LoRaWAN gateway: %v", e)

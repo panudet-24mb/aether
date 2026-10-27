@@ -181,6 +181,32 @@ func TestUplinks(t *testing.T) {
 			t.Fatalf("%s: %s %v %v", c.object, kind, metrics, values)
 		}
 	}
+	// A real GS301 behind a UG65 (firmware 60.0.0.43) with its codec on: the gateway adds devEUI, deviceName and
+	// applicationID around the values, and the codec divides the sensors' warm-up status like a reading (655.34).
+	real := Message{Kind: Up, DevEUI: "24e124798e210951"}
+	ev, e = ParseUplink(real, []byte(`{"h2s":655.34,"nh3":655.34,"devEUI":"24e124798e210951","battery":69,"humidity":58,"deviceName":"1F_Toilet_Male_Odor1","temperature":29.1,"applicationID":2}`))
+	if e != nil || ev.DeviceName != "1F_Toilet_Male_Odor1" || Model(ev) != "GS301" {
+		t.Fatalf("ug65 codec output: %v %+v", e, ev)
+	}
+	metrics, values, kind := reading(t, ev)
+	_, h2s := metrics["h2s"]
+	_, appID := metrics["applicationID"]
+	if kind != zigbee2mqtt.CategoryEnvironment || h2s || appID || values["h2s_sensor_status"] != "polarizing" || values["nh3_sensor_status"] != "polarizing" || values["deviceName"] != "" || metrics["temperature"] != 29.1 || metrics["battery"] != 69 {
+		t.Fatalf("ug65 codec reading: %s %v %v", kind, metrics, values)
+	}
+	if _, values, _ := reading(t, Event{Object: map[string]json.RawMessage{"h2s": json.RawMessage("65.535"), "nh3": json.RawMessage("0.5")}}); values["h2s_sensor_status"] != "device error" {
+		t.Fatalf("high-resolution sentinel: %v", values)
+	}
+	// Device information the same gateway sends after a join is never a reading.
+	if _, e := ParseUplink(real, []byte(`{"sn":"6798e21095170000","devEUI":"24e124798e210951","deviceName":"1F_Toilet_Male_Odor1","applicationID":2,"lorawan_class":0,"firmware_version":"v1.1","hardware_version":"v1.1"}`)); e != nil {
+		t.Fatal(e)
+	} else if props, _ := State(Event{Object: map[string]json.RawMessage{"sn": json.RawMessage(`"6798e21095170000"`), "lorawan_class": json.RawMessage("0"), "firmware_version": json.RawMessage(`"v1.1"`)}}); len(props) != 0 {
+		t.Fatalf("device information as readings: %v", props)
+	}
+	if _, e := ParseUplink(real, []byte(`{"battery":69,"devEUI":"24e124798e210952"}`)); !errors.Is(e, domain.ErrInvalid) {
+		t.Fatalf("codec output naming another device: %v", e)
+	}
+
 	_, features := State(Event{Object: Decode("GS301", frame(t, "047D0000 057D0100"))})
 	for _, f := range features {
 		if f.Unit != "ppm" {

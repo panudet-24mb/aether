@@ -2,6 +2,7 @@ package milesight
 
 import (
 	"aether/backend/internal/domain"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"math"
@@ -37,17 +38,17 @@ type envelope struct {
 	} `json:"rxInfo"`
 }
 
-// ParseUplink reads one uplink. A payload carrying `data` and `devEUI` is the gateway's envelope; its DevEUI must be
-// the topic's. Anything else is a codec's output and is taken as the device's values.
+// ParseUplink reads one uplink. A payload whose `data` is a string next to a `devEUI` is the gateway's envelope; its
+// DevEUI must be the topic's. Anything else is a codec's output and is taken as the device's values, minus the
+// metadata the gateway put next to them (codecOutput).
 func ParseUplink(m Message, b []byte) (Event, error) {
 	var obj map[string]json.RawMessage
 	if e := json.Unmarshal(b, &obj); e != nil || obj == nil {
 		return Event{}, domain.ErrInvalid
 	}
 	ev := Event{DevEUI: m.DevEUI}
-	if _, raw := obj["data"]; !raw || obj["devEUI"] == nil {
-		ev.Object = obj
-		return ev, nil
+	if data := bytes.TrimSpace(obj["data"]); len(data) == 0 || data[0] != '"' || obj["devEUI"] == nil {
+		return codecOutput(ev, obj)
 	}
 	var w envelope
 	if e := json.Unmarshal(b, &w); e != nil || w.Data == nil || strings.ToLower(strings.TrimSpace(w.DevEUI)) != m.DevEUI {
@@ -72,6 +73,29 @@ func ParseUplink(m Message, b []byte) (Event, error) {
 			}
 		}
 	}
+	return ev, nil
+}
+
+// codecOutput takes a codec's output as the device's values. A UG65 (firmware 60.0.0.43) adds devEUI, deviceName and
+// applicationID next to them: those are read by their exact names and removed, since they describe the uplink, not
+// the device. A devEUI there must be a string naming the topic's device.
+func codecOutput(ev Event, obj map[string]json.RawMessage) (Event, error) {
+	if raw, ok := obj["devEUI"]; ok {
+		var eui string
+		if json.Unmarshal(raw, &eui) != nil || strings.ToLower(strings.TrimSpace(eui)) != ev.DevEUI {
+			return Event{}, domain.ErrInvalid
+		}
+	}
+	if raw, ok := obj["deviceName"]; ok {
+		var name string
+		if json.Unmarshal(raw, &name) == nil {
+			ev.DeviceName = clip(name, 128)
+		}
+	}
+	for _, k := range []string{"devEUI", "deviceName", "applicationID"} {
+		delete(obj, k)
+	}
+	ev.Object = obj
 	return ev, nil
 }
 

@@ -1,10 +1,10 @@
-// Local, one-time account provisioning. No HTTP bootstrap or permanent bootstrap secret.
+// Local account provisioning: the one-time first owner, and further workspaces with their own owner. No HTTP
+// bootstrap or permanent bootstrap secret; whoever runs this already holds the database credentials.
 package main
 
 import (
 	"aether/backend/internal/adapters/postgres"
 	"aether/backend/internal/app"
-	"aether/backend/internal/security"
 	"context"
 	"fmt"
 	"os"
@@ -21,6 +21,7 @@ func main() {
 
 const usage = `usage:
   admin bootstrap           one-time owner (DATABASE_URL, ADMIN_EMAIL, ADMIN_NAME, TENANT_NAME, ADMIN_PASSWORD_FILE)
+  admin create-workspace    another workspace and its owner, a new email (same variables as bootstrap)
   admin export-erasures     the erasure ledger as JSON lines on stdout (MIGRATION_DATABASE_URL)
   admin reapply-erasures    re-applies a ledger read from stdin after a restore (MIGRATION_DATABASE_URL)
   admin erase-user [--force] <uuid>   erases an identity in every workspace it belongs to; --force also when it is
@@ -33,7 +34,7 @@ func run() error {
 			return privacyCommand(os.Args[1], os.Args[2:])
 		}
 	}
-	if len(os.Args) != 2 || os.Args[1] != "bootstrap" {
+	if len(os.Args) != 2 || (os.Args[1] != "bootstrap" && os.Args[1] != "create-workspace") {
 		return fmt.Errorf("%s", usage)
 	}
 	path := os.Getenv("ADMIN_PASSWORD_FILE")
@@ -53,13 +54,9 @@ func run() error {
 		return e
 	}
 	defer repo.Close()
-	s, e := app.New(repo, security.NewTokens([]byte(security.RandomToken()), "aether"), false)
-	if e != nil {
-		return e
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	a, e := s.Register(ctx, os.Getenv("ADMIN_EMAIL"), strings.TrimRight(string(password), "\r\n"), os.Getenv("ADMIN_NAME"), os.Getenv("TENANT_NAME"), true)
+	a, e := app.ProvisionOwner(ctx, repo, os.Args[1] == "create-workspace", os.Getenv("ADMIN_EMAIL"), strings.TrimRight(string(password), "\r\n"), os.Getenv("ADMIN_NAME"), os.Getenv("TENANT_NAME"))
 	clear(password)
 	if e != nil {
 		return e

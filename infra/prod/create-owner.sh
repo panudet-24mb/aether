@@ -1,32 +1,39 @@
 #!/bin/sh
-# Create the first owner account. Public registration is disabled in production, so this is the
-# only way in. The password is read from a 0600 file and piped into the container over stdin: it
-# never appears in argv, in `ps`, in the shell history or in any log.
+# Create the first owner account, or with --new-workspace another workspace with its own owner. Public
+# registration is disabled in production, so this is the only way in. The password is read from a 0600 file and
+# piped into the container over stdin: it never appears in argv, in `ps`, in the shell history or in any log.
 #
 #   infra/prod/create-owner.sh --email owner@example.org --name "ชื่อผู้ดูแล" \
-#       --tenant "โรงพยาบาลตัวอย่าง" [--password-file PATH] [--env-file FILE] [--project NAME]
+#       --tenant "โรงพยาบาลตัวอย่าง" [--new-workspace] [--password-file PATH] [--env-file FILE] [--project NAME]
+#
+# --new-workspace: the server already has accounts; create a separate workspace for a new email. It needs its own
+# --password-file (generated there if missing), so a new owner never gets the first owner's password.
 #
 # With no --password-file the script generates one at <secrets-dir>/owner-password.txt (0600) and
 # tells you where it is, without printing it.
 # shellcheck source=_common.sh
 . "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
-EMAIL=""; NAME=""; TENANT=""; PWFILE=""
+EMAIL=""; NAME=""; TENANT=""; PWFILE=""; COMMAND="bootstrap"
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--email) EMAIL="$2"; shift 2 ;;
 		--name) NAME="$2"; shift 2 ;;
 		--tenant) TENANT="$2"; shift 2 ;;
 		--password-file) PWFILE="$2"; shift 2 ;;
+		--new-workspace) COMMAND="create-workspace"; shift ;;
 		--env-file) ENV_FILE="$2"; shift 2 ;;
 		--project|-p) PROJECT="$2"; shift 2 ;;
-		-h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+		-h|--help) sed -n '2,13p' "$0"; exit 0 ;;
 		*) echo "unknown argument: $1" >&2; exit 1 ;;
 	esac
 done
 [ -n "$EMAIL" ] && [ -n "$NAME" ] && [ -n "$TENANT" ] || {
 	echo "usage: create-owner.sh --email ADDRESS --name NAME --tenant WORKSPACE" >&2; exit 1; }
 require_env
+if [ "$COMMAND" = create-workspace ] && [ -z "$PWFILE" ]; then
+	echo "--new-workspace needs its own --password-file (e.g. <secrets-dir>/<workspace>-owner-password.txt)" >&2; exit 1
+fi
 
 SECRETS="$(grep '^AETHER_SECRETS_DIR=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$PWFILE" ] || PWFILE="$SECRETS/owner-password.txt"
@@ -44,18 +51,22 @@ fi
 OUT="$(dc run --rm -T --no-deps \
 	-e ADMIN_EMAIL="$EMAIL" -e ADMIN_NAME="$NAME" -e TENANT_NAME="$TENANT" \
 	--entrypoint /bin/sh api -c \
-	'umask 077; cat > /tmp/owner-password; ADMIN_PASSWORD_FILE=/tmp/owner-password /app/admin bootstrap; s=$?; rm -f /tmp/owner-password; exit $s' \
+	'umask 077; cat > /tmp/owner-password; ADMIN_PASSWORD_FILE=/tmp/owner-password /app/admin '"$COMMAND"'; s=$?; rm -f /tmp/owner-password; exit $s' \
 	< "$PWFILE")"
 echo "$OUT"
 
 # Backup/PITR health is about the whole deployment: record this first workspace as the one whose owners see it
 # (OPS_STATUS_TENANT), unless one is already set. `up -d api` applies it.
 TENANT_ID="$(printf '%s\n' "$OUT" | sed -n 's/.*tenant_id=\([0-9a-f-]\{36\}\).*/\1/p' | tail -n 1)"
-if [ -n "$TENANT_ID" ] && [ -z "$(env_get OPS_STATUS_TENANT)" ]; then
+if [ "$COMMAND" = bootstrap ] && [ -n "$TENANT_ID" ] && [ -z "$(env_get OPS_STATUS_TENANT)" ]; then
 	tmp="$ENV_FILE.tmp.$$"
 	(umask 077; awk -v v="$TENANT_ID" 'BEGIN { done = 0 }
 		index($0, "OPS_STATUS_TENANT=") == 1 { print "OPS_STATUS_TENANT=" v; done = 1; next } { print }
 		END { if (!done) print "OPS_STATUS_TENANT=" v }' "$ENV_FILE" > "$tmp")
 	mv "$tmp" "$ENV_FILE"
 	echo "backup status on the web: owners of workspace $TENANT_ID (OPS_STATUS_TENANT in $ENV_FILE); run 'up -d api' to apply"
+fi
+if [ "$COMMAND" = create-workspace ] && [ -z "$(env_get OPS_STATUS_TENANT)" ]; then
+	echo "warning: OPS_STATUS_TENANT is not set, so this workspace's owners also see the server's backup status;" >&2
+	echo "         set it to the first workspace: setup.py <flags used at install> --ops-status-tenant <tenant-uuid>" >&2
 fi

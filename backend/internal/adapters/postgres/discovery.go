@@ -60,6 +60,22 @@ func (r *Repository) DiscoverDevices(ctx context.Context, p domain.Principal, ga
     AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=l.tenant_id AND lower(d.external_id)=l.device_id AND d.removed_at IS NULL)
 ) found ORDER BY source,description,external_id LIMIT 500`, gateway, gateway).Scan(&out).Error
 		}
+		// A Milesight LoRaWAN gateway lists every device it forwarded an uplink for that is not registered yet (source
+		// "lorawan"), regardless of the window like Zigbee: a LoRaWAN device joined the gateway's network server on
+		// purpose. The model is the catalog model its names or decoded fields matched; the description is its names.
+		if len(model) == 1 && model[0] == domain.LoRaWANGatewayModel {
+			return tx.Raw(`SELECT w.gateway_id,w.dev_eui AS external_id,w.last_seen,'lorawan' AS source,coalesce(s.name,'') AS stream_name,
+    w.model,CASE WHEN w.model<>'' THEN 'Milesight' ELSE '' END AS vendor,
+    concat_ws(' · ',nullif(w.name,''),nullif(w.application_name,'')) AS description,
+    coalesce(smp.reading->>'kind','') AS kind,w.rssi
+  FROM core.lorawan_devices w JOIN core.gateways g ON g.tenant_id=w.tenant_id AND g.id=w.gateway_id AND g.revoked_at IS NULL
+  LEFT JOIN core.sensor_streams s ON s.gateway_id=w.gateway_id AND s.external_id=w.dev_eui
+  LEFT JOIN LATERAL (SELECT reading FROM core.sensor_samples WHERE gateway_id=s.gateway_id AND external_id=s.external_id
+    ORDER BY received_at DESC,event_key LIMIT 1) smp ON true
+  WHERE w.gateway_id=?
+    AND NOT EXISTS (SELECT 1 FROM core.devices d WHERE d.tenant_id=w.tenant_id AND lower(d.external_id)=w.dev_eui AND d.removed_at IS NULL)
+  ORDER BY w.last_seen DESC,w.dev_eui LIMIT 500`, gateway).Scan(&out).Error
+		}
 		// A Tuya Cloud gateway lists the devices its last sync found that are not registered yet (source
 		// "tuya_cloud"); no key is involved, and a device registered through an Edge is excluded like any other.
 		if len(model) == 1 && model[0] == domain.TuyaCloudGatewayModel {

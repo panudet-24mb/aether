@@ -103,6 +103,22 @@ func discoveryRoutes(r fiber.Router, s *app.Service) {
 					}
 					continue
 				}
+				// A LoRaWAN device registers as the catalog profile its names or decoded fields matched, else as the generic
+				// LoRaWAN profile, which reads whatever the gateway's payload codec decodes.
+				if d.Source == "lorawan" {
+					d.Profile = domain.DeviceProfileByID(domain.LoRaWANGenericProfile)
+					for _, profile := range domain.DeviceProfiles {
+						if profile.Radio == "lorawan" && d.Model != "" && strings.EqualFold(profile.Model, d.Model) {
+							d.Profile = &profile
+							break
+						}
+					}
+					if kept < discoveryPerGateway {
+						kept++
+						out = append(out, d)
+					}
+					continue
+				}
 				if d.Model == "" {
 					d.Model = streamModel(d.StreamName)
 				}

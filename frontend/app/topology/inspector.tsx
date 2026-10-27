@@ -9,7 +9,7 @@ import EdgePanel, { TuyaDeviceStatus, type EdgeClient } from "./edge-installer";
 import TuyaCloudPanel, { CLOUD_STATE_LABEL, TuyaCloudDeviceStatus, type TuyaCloudClient } from "./tuya-cloud-panel";
 import type { Discovery, Device, GatewayCreated, MQTTCredentials, MQTTSettings, Project, Reading } from "./api";
 import { isZigbeeReading } from "../live/measurements";
-import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, suggestProfile, switchGangs, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL } from "./catalog";
+import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, LORAWAN_GATEWAY_MODEL, suggestProfile, switchGangs, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL } from "./catalog";
 import { gatewayHealthLabel } from "./nodes";
 import { CopyButton, Step } from "./panel-bits";
 import { isFresh, type DeviceEntity, type GatewayEntity, type Topology, currentGateway } from "./model";
@@ -188,7 +188,21 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
   // A Zigbee2MQTT bridge is configured in its configuration.yaml, not in a gateway app: it needs the server URL
   // and its base_topic instead of the three fixed Minew topics.
   const z2m = g.gateway.model === Z2M_GATEWAY_MODEL;
-  const mqttFields: [string, string][] = settings && z2m
+  // A Milesight UG65 publishes from its embedded network server (Network Server → Application → Data Transmission →
+  // MQTT): broker, credentials and the uplink topic, in which the gateway fills in $deveui for each device.
+  const lora = g.gateway.model === LORAWAN_GATEWAY_MODEL;
+  const mqttFields: [string, string][] = settings && lora
+    ? [
+        ["Broker Address", settings.host],
+        ["Broker Port", String(settings.port)],
+        ["TLS", settings.tls ? "เปิด · CA signed / Self signed: อัปโหลด CA ของ broker" : "ปิด"],
+        ["Client ID", `gw-${id}`],
+        ["Username", `gw-${id}`],
+        ["Uplink Data topic", `aether/lora/${id}/$deveui/up`],
+        ["Downlink Data topic", `aether/lora/${id}/$deveui/down`],
+        ["QoS", "1"],
+      ]
+    : settings && z2m
     ? [
         ["Server", `${settings.tls ? "mqtts" : "mqtt"}://${settings.host}:${settings.port}`],
         ["base_topic", `aether/z2m/${id}`],
@@ -283,8 +297,8 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
         <ol className="topo-steps">
           <Step done={hasAccount} active={!hasAccount} label="1 · บัญชี MQTT" detail={hasAccount ? `revision ${g.state!.revision}` : "สร้างบัญชีเพื่อรับ username / password"} />
           <Step done={applied} active={hasAccount && !applied} label="2 · Broker รับบัญชี" detail={applied ? "provisioner ตั้งค่าแล้ว" : hasAccount ? "กำลังรอ provisioner…" : undefined} />
-          <Step done={!!g.lastPacketAt} active={applied && !g.lastPacketAt} label={z2m ? "3 · Zigbee2MQTT เชื่อมต่อ" : "3 · รับ packet แรก"} detail={g.lastPacketAt ? `ล่าสุด ${new Date(g.lastPacketAt).toLocaleString("th-TH")}` : z2m ? "ใส่ค่าใน configuration.yaml ของ Zigbee2MQTT แล้วรีสตาร์ต" : "นำค่าไปตั้งในแอป Gateway Config แล้วรอ"} />
-          <Step done={g.decodedSensors > 0} active={!!g.lastPacketAt && g.decodedSensors === 0} label={z2m ? "4 · อุปกรณ์ Zigbee รายงานสถานะ" : "4 · ถอดรหัสอุปกรณ์"} detail={z2m ? `${g.decodedSensors} อุปกรณ์ · pair อุปกรณ์ใน Zigbee2MQTT ก่อน` : `${g.decodedSensors} sensor · ${g.nearbyDevices} BLE ใกล้เคียง`} />
+          <Step done={!!g.lastPacketAt} active={applied && !g.lastPacketAt} label={z2m ? "3 · Zigbee2MQTT เชื่อมต่อ" : lora ? "3 · UG65 ส่ง uplink แรก" : "3 · รับ packet แรก"} detail={g.lastPacketAt ? `ล่าสุด ${new Date(g.lastPacketAt).toLocaleString("th-TH")}` : z2m ? "ใส่ค่าใน configuration.yaml ของ Zigbee2MQTT แล้วรีสตาร์ต" : lora ? "ตั้ง Network Server → Application → Data Transmission → MQTT ใน UG65 ตามค่าด้านบน" : "นำค่าไปตั้งในแอป Gateway Config แล้วรอ"} />
+          <Step done={g.decodedSensors > 0} active={!!g.lastPacketAt && g.decodedSensors === 0} label={z2m ? "4 · อุปกรณ์ Zigbee รายงานสถานะ" : lora ? "4 · อุปกรณ์ LoRaWAN ส่งค่า" : "4 · ถอดรหัสอุปกรณ์"} detail={z2m ? `${g.decodedSensors} อุปกรณ์ · pair อุปกรณ์ใน Zigbee2MQTT ก่อน` : lora ? `${g.decodedSensors} อุปกรณ์ · เพิ่มอุปกรณ์ใน Network Server ของ UG65 (ใส่ payload codec หรือให้ Aether ถอดค่าเองสำหรับ GS301 / WS303 / WS202)` : `${g.decodedSensors} sensor · ${g.nearbyDevices} BLE ใกล้เคียง`} />
         </ol>
       ) : (
         <ol className="topo-steps">
@@ -317,6 +331,11 @@ function GatewayPanel({ g, topology, credentials, httpToken, busy, p }: { g: Gat
               </button>
               <small>คัดลอกไฟล์ CA ของ broker (ca.crt) ไปไว้ที่ /app/data/aether-ca.crt บนเครื่อง Zigbee2MQTT ด้วย · ต้องใช้ Zigbee2MQTT 2.x ขึ้นไป</small>
             </>
+          )}
+          {credentials.uplink_topic && (
+            <small>
+              ใน UG65: Network Server → Application → Data Transmission → MQTT ใส่ username / password นี้ และ Uplink Data topic <code>{credentials.uplink_topic}</code> · เปิด TLS แล้วอัปโหลด CA ของ broker (ca.crt) · Network Server ของ UG65 ต้องเปิด (Embedded NS) และ Packet Forwarder ไม่ต้องชี้ไปที่อื่น
+            </small>
           )}
           <button type="button" className="topo-btn" onClick={() => download(`aether-gateway-${id}.json`, credentials)}>
             <Download size={15} /> ดาวน์โหลดค่าตั้งค่าและรหัสผ่าน
@@ -474,7 +493,9 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
   const [learned, setLearned] = useState<LearnedSignal[]>([]);
   const reg = d.registrations[0];
   const profile = reg ? deviceProfile(reg.profile_id) : undefined;
-  const suggested = !profile ? suggestProfile({ model: d.model, kind: d.kind, hasBeacon: !!d.reading?.beacon, hasPIR: d.reading?.metrics?.motion != null, zigbee: d.reading?.frames?.includes("z2m-state@1") || d.heard.some((h) => topology.gateways.some((g) => g.gateway.id === h.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL)) }) : undefined;
+  // A LoRaWAN device reaches Aether through a Milesight gateway; its readings carry that frame next to the generic one.
+  const lorawan = !!d.reading?.frames?.includes("milesight-up@1") || d.heard.some((h) => topology.gateways.some((g) => g.gateway.id === h.gatewayId && g.gateway.model === LORAWAN_GATEWAY_MODEL));
+  const suggested = !profile ? suggestProfile({ model: d.model, kind: d.kind, hasBeacon: !!d.reading?.beacon, hasPIR: d.reading?.metrics?.motion != null, zigbee: !lorawan && (d.reading?.frames?.includes("z2m-state@1") || d.heard.some((h) => topology.gateways.some((g) => g.gateway.id === h.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL))), lorawan }) : undefined;
   const shown = profile ?? suggested;
   // A Zigbee switch only reports when it is switched: its own availability, not freshness, says whether it is online.
   const fresh = d.reportedOffline != null ? !d.reportedOffline : isFresh(d.reading?.received_at, topology.serverTime);
@@ -497,7 +518,7 @@ function DevicePanel({ d, topology, busy, p }: { d: DeviceEntity; topology: Topo
     <>
       <header className="topo-inspector-head">
         <div>
-          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : "Minew"} ${d.model}` : r ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : "BLE"} · ${kind}` : zigbee ? "Zigbee" : tuya ? "Tuya Wi‑Fi" : "BLE"}</span>
+          <span className="topo-kicker">DEVICE · {shown ? `${shown.brand} ${shown.model}` : d.model ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : lorawan ? "LoRaWAN" : "Minew"} ${d.model}` : r ? `${zigbee ? "Zigbee" : tuya ? "Tuya" : lorawan ? "LoRaWAN" : "BLE"} · ${kind}` : zigbee ? "Zigbee" : tuya ? "Tuya Wi‑Fi" : lorawan ? "LoRaWAN" : "BLE"}</span>
           <h2>{d.name}</h2>
         </div>
         <span className={`topo-chip ${reg ? (fresh ? "health-receiving" : "health-ready") : "health-none"}`}>{reg ? (fresh ? "online" : d.reportedOffline ? "offline" : r ? "รอข้อมูลใหม่" : "ลงทะเบียนแล้ว") : "ยังไม่ adopt"}</span>

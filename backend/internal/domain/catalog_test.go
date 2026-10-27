@@ -35,6 +35,16 @@ func TestProfileAllowedOn(t *testing.T) {
 		{TuyaWiFiProfile, TuyaCloudGatewayModel, false},
 		{"minew-s1-pending@1", TuyaCloudGatewayModel, false},
 		{"retired-profile@1", TuyaCloudGatewayModel, false},
+		// LoRaWAN devices live only under a LoRaWAN (Milesight) gateway, which takes nothing else.
+		{"milesight-ws303@1", LoRaWANGatewayModel, true},
+		{"milesight-vs330@1", LoRaWANGatewayModel, true},
+		{"milesight-vs330@1", "minew-mg3", false},
+		{LoRaWANGenericProfile, LoRaWANGatewayModel, true},
+		{"milesight-ws303@1", "minew-mg3", false},
+		{"milesight-ws303@1", Z2MGatewayModel, false},
+		{"minew-s1-pending@1", LoRaWANGatewayModel, false},
+		{"tuya-ts001x-switch@1", LoRaWANGatewayModel, false},
+		{"retired-profile@1", LoRaWANGatewayModel, false},
 	}
 	for _, c := range cases {
 		if got := ProfileAllowedOn(c.profile, c.gateway); got != c.want {

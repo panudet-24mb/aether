@@ -10,18 +10,20 @@ func TestRenderPerModel(t *testing.T) {
 		{ID: "11111111-1111-4111-8111-111111111111", Hash: "$7$h1", Revision: 1, Model: "minew-mg3"},
 		{ID: "22222222-2222-4222-8222-222222222222", Hash: "$7$h2", Revision: 3, Model: "zigbee2mqtt"},
 		{ID: "44444444-4444-4444-8444-444444444444", Hash: "$7$h4", Revision: 1, Model: "aether-edge"},
+		{ID: "66666666-6666-4666-8666-666666666666", Hash: "$7$h6", Revision: 1, Model: "milesight-ug65"},
 	}
 	p, a := render("aether-ingest:$7$ingest\n", "# base\n", accounts)
-	if p != "aether-ingest:$7$ingest\ngw-11111111-1111-4111-8111-111111111111:$7$h1\ngw-22222222-2222-4222-8222-222222222222:$7$h2\ngw-44444444-4444-4444-8444-444444444444:$7$h4\n" {
+	if p != "aether-ingest:$7$ingest\ngw-11111111-1111-4111-8111-111111111111:$7$h1\ngw-22222222-2222-4222-8222-222222222222:$7$h2\ngw-44444444-4444-4444-8444-444444444444:$7$h4\ngw-66666666-6666-4666-8666-666666666666:$7$h6\n" {
 		t.Fatalf("passwords:\n%s", p)
 	}
 	// The Minew block is exactly what the provisioner has always written.
 	minew := "\nuser gw-11111111-1111-4111-8111-111111111111\ntopic write /aether/gateways/11111111-1111-4111-8111-111111111111/status\ntopic write /aether/gateways/11111111-1111-4111-8111-111111111111/response\ntopic read /aether/gateways/11111111-1111-4111-8111-111111111111/action\n"
 	z2m := "\nuser gw-22222222-2222-4222-8222-222222222222\ntopic readwrite aether/z2m/22222222-2222-4222-8222-222222222222/#\n"
 	edge := "\nuser gw-44444444-4444-4444-8444-444444444444\ntopic write aether/edge/44444444-4444-4444-8444-444444444444/#\ntopic read aether/edge/44444444-4444-4444-8444-444444444444/+/set\n"
-	ingest := "# base\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\ntopic read aether/edge/+/#\n"
-	commander := "\nuser aether-commander\ntopic write aether/z2m/+/+/set\ntopic write aether/edge/+/+/set\n"
-	if a != ingest+commander+minew+z2m+edge {
+	ingest := "# base\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\ntopic read aether/edge/+/#\ntopic read aether/lora/+/#\n"
+	lora := "\nuser gw-66666666-6666-4666-8666-666666666666\ntopic readwrite aether/lora/66666666-6666-4666-8666-666666666666/#\n"
+	commander :="\nuser aether-commander\ntopic write aether/z2m/+/+/set\ntopic write aether/edge/+/+/set\n"
+	if a != ingest+commander+minew+z2m+edge+lora {
 		t.Fatalf("acl:\n%s", a)
 	}
 	// A Zigbee2MQTT account never gets the Minew topics, and no account reaches another gateway's tree.
@@ -31,6 +33,10 @@ func TestRenderPerModel(t *testing.T) {
 	// An Edge reads nothing but its own devices' command topics: no other gateway's tree, no wildcard read.
 	if strings.Count(a, "aether/edge/44444444") != 2 || strings.Contains(a, "topic read aether/edge/44444444-4444-4444-8444-444444444444/#") {
 		t.Fatalf("edge isolation:\n%s", a)
+	}
+	// A Milesight LoRaWAN gateway account never gets the Minew topics and reaches only its own tree.
+	if strings.Count(a, "aether/lora/66666666") != 1 || strings.Contains(a, "gw-66666666-6666-4666-8666-666666666666\ntopic write /aether") {
+		t.Fatalf("lora isolation:\n%s", a)
 	}
 }
 

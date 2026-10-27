@@ -1,7 +1,7 @@
 "use client";
 import { type DragEvent, type KeyboardEvent, useState } from "react";
-import { Bluetooth, GripVertical, Router, Search, Thermometer } from "lucide-react";
-import { DEVICE_PROFILES, GATEWAY_MODELS, formatMAC } from "./catalog";
+import { Bluetooth, Filter, GripVertical, Router, Search, Thermometer } from "lucide-react";
+import { DEVICE_PROFILES, GATEWAY_MODELS, deviceKindLabel, formatMAC } from "./catalog";
 import type { DeviceEntity } from "./model";
 import { useShowSimulated } from "../demo-mode";
 
@@ -45,14 +45,46 @@ export default function Palette({
   const q = norm(query);
   const list = discovered.filter((d) => !q || norm(d.external).includes(q) || norm(d.name).includes(q));
 
+  // Brand and type filters for the catalog cards. "gateway" is a type of its own; every other type is a profile kind.
+  const [brand, setBrand] = useState("");
+  const [type, setType] = useState("");
+  const brands = [...new Set([...GATEWAY_MODELS, ...DEVICE_PROFILES].map((x) => x.brand))].sort((a, b) => a.localeCompare(b));
+  const kinds = [...new Set(DEVICE_PROFILES.flatMap((p) => p.kinds ?? []))];
+  const gateways = GATEWAY_MODELS.filter((m) => (!brand || m.brand === brand) && (!type || type === "gateway"));
+  const profiles = DEVICE_PROFILES.filter((p) => (!brand || p.brand === brand) && (!type || p.kinds?.includes(type)));
+  const profileBrands = [...new Set(profiles.map((p) => p.brand))];
+  const filtered = !!(brand || type);
+
   return (
     <aside className="topo-palette" aria-label="อุปกรณ์ที่ลากวางได้">
+      <section className="topo-palette-filters" aria-label="กรองแบรนด์และประเภท">
+        <h2>
+          <Filter size={15} /> กรองอุปกรณ์
+          {filtered && (
+            <button type="button" className="topo-filter-clear" onClick={() => { setBrand(""); setType(""); }}>
+              ล้าง
+            </button>
+          )}
+        </h2>
+        <select aria-label="แบรนด์" value={brand} onChange={(e) => setBrand(e.target.value)}>
+          <option value="">ทุกแบรนด์</option>
+          {brands.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <select aria-label="ประเภทอุปกรณ์" value={type} onChange={(e) => setType(e.target.value)}>
+          <option value="">ทุกประเภท</option>
+          <option value="gateway">Gateway</option>
+          {kinds.map((k) => <option key={k} value={k}>{deviceKindLabel(k)}</option>)}
+        </select>
+        {filtered && gateways.length === 0 && profiles.length === 0 && <span className="topo-empty">ไม่มีรุ่นที่ตรงกับตัวกรองนี้</span>}
+      </section>
+
+      {gateways.length > 0 && (
       <section>
         <h2>
-          <Router size={15} /> Gateway
+          <Router size={15} /> Gateway {filtered && <span className="topo-count">{gateways.length}</span>}
         </h2>
         <p>ลากลง canvas หรือคลิก เพื่อสร้าง gateway ใหม่</p>
-        {GATEWAY_MODELS.map((m) => (
+        {gateways.map((m) => (
           <div key={m.id} className="topo-card" draggable onDragStart={(e) => startDrag(e, { kind: "gateway", model: m.id })} title={m.description} role="button" tabIndex={0} aria-label={`เพิ่ม ${m.label} ลง canvas`} onClick={() => onAddGateway(m.id)} onKeyDown={activate(() => onAddGateway(m.id))}>
             <GripVertical size={14} className="topo-grip" />
             <span className="topo-card-icon">{m.image ? <img className="topo-photo" src={m.image} alt="" /> : m.logo ? <img src={m.logo} alt="" /> : <Router size={18} />}</span>
@@ -63,25 +95,36 @@ export default function Palette({
           </div>
         ))}
       </section>
+      )}
 
+      {profiles.length > 0 && (
       <section>
         <h2>
-          <Thermometer size={15} /> อุปกรณ์ตาม profile
+          <Thermometer size={15} /> อุปกรณ์ตาม profile {filtered && <span className="topo-count">{profiles.length}</span>}
         </h2>
         <p>ลากหรือคลิกเพื่อวาง แล้วโยงเส้นไป gateway ใดก็ได้ ไม่จำกัดแบรนด์</p>
-        {DEVICE_PROFILES.map((p) => (
-          <div key={p.id} className="topo-card" draggable onDragStart={(e) => startDrag(e, { kind: "profile", profile: p.id })} title={p.description} role="button" tabIndex={0} aria-label={`เพิ่ม ${p.brand} ${p.model} ลง canvas`} onClick={() => onAddProfile(p.id)} onKeyDown={activate(() => onAddProfile(p.id))}>
-            <GripVertical size={14} className="topo-grip" />
-            <span className="topo-card-icon">{p.image ? <img className="topo-photo" src={p.image} alt="" /> : <Thermometer size={18} />}</span>
-            <span>
-              <strong>
-                {p.brand} {p.model}
-              </strong>
-              <small>{p.radio === "ble" ? "BLE" : "ทุก transport"}</small>
-            </span>
+        {profileBrands.map((b) => (
+          <div key={b} className="topo-brand-group" role="group" aria-label={b}>
+            <h3 className="topo-brand">{b}</h3>
+            {profiles.filter((p) => p.brand === b).map((p) => (
+              <div key={p.id} className="topo-card" draggable onDragStart={(e) => startDrag(e, { kind: "profile", profile: p.id })} title={p.description} role="button" tabIndex={0} aria-label={`เพิ่ม ${p.brand} ${p.model} ลง canvas`} onClick={() => onAddProfile(p.id)} onKeyDown={activate(() => onAddProfile(p.id))}>
+                <GripVertical size={14} className="topo-grip" />
+                <span className="topo-card-icon">{p.image ? <img className="topo-photo" src={p.image} alt="" /> : <Thermometer size={18} />}</span>
+                <span>
+                  <strong>
+                    {p.brand} {p.model}
+                  </strong>
+                  <small>
+                    {p.radio === "ble" ? "BLE" : p.radio === "lorawan" ? "LoRaWAN" : "ทุก transport"}
+                    {p.kinds?.length ? ` · ${p.kinds.map(deviceKindLabel).join(", ")}` : ""}
+                  </small>
+                </span>
+              </div>
+            ))}
           </div>
         ))}
       </section>
+      )}
 
       <section className="topo-discovered">
         <h2>

@@ -85,6 +85,9 @@ export type MQTTCredentials = MQTTSettings & {
   base_topic?: string;
   server?: string;
   z2m_yaml?: string;
+  /** Milesight LoRaWAN gateways: the uplink and downlink topics, with the gateway's own $deveui variable. */
+  uplink_topic?: string;
+  downlink_topic?: string;
 };
 export type GatewayCreated = { gateway: Gateway; token: string; capture_path: string };
 export type Me = { user_id: string; tenant_id: string; role: string; deployment_mode: string; /** Module access levels ("none" | "read" | "write"). */ permissions?: Record<string, string>; /** Set when the member sees only some projects. */ project_ids?: string[] | null };

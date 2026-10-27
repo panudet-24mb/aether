@@ -86,7 +86,15 @@ func (r *Repository) saveLoRaWANUplink(tx *gorm.DB, tenant, gateway string, m mi
 	if d.FriendlyName == "" {
 		d.FriendlyName = ev.DevEUI
 	}
-	return r.ingestDefinedState(tx, tenant, gateway, d, features, nil, converted, m.Topic, milesight.FrameUplink, false, now)
+	if e := r.ingestDefinedState(tx, tenant, gateway, d, features, nil, converted, m.Topic, milesight.FrameUplink, false, now); e != nil {
+		return e
+	}
+	// A stream first created before the gateway sent a name is named after its DevEUI; the name replaces it once known.
+	if ev.DeviceName == "" {
+		return nil
+	}
+	return tx.Exec(`UPDATE core.sensor_streams SET name=? WHERE tenant_id=? AND gateway_id=? AND external_id=? AND name=external_id`,
+		ev.DeviceName, tenant, gateway, ev.DevEUI).Error
 }
 
 // loraModel is the catalog model of a device: the profile it is registered with wins, then the model an earlier uplink

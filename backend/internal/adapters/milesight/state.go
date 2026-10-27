@@ -120,16 +120,15 @@ func State(ev Event) (map[string]any, []zigbee2mqtt.Feature) {
 // gasSentinel recognises a GS301 gas reading that is really a sensor status. The sensor sends 0xFFFE while it
 // polarizes after power-on and 0xFFFF on a fault; Aether's own decoder turns them into a status, but the codec on a
 // UG65 (seen on a GS301, firmware 1.1) divides them like a reading: 655.34 / 655.35 ppm, or 65.534 / 65.535 on the
-// high-resolution H2S channel. A real reading never comes near: the sensors' ranges end at 100 ppm.
+// /1000 H2S channel. On /100 those values lie far above the sensors' 100 ppm range; on /1000 they are the uint16's
+// top two codes, which no reading uses. The comparison is exact: JSON parsing and the division round alike.
 func gasSentinel(key string, v float64) (string, bool) {
-	if key != "nh3" && key != "h2s" {
-		return "", false
-	}
-	for _, scale := range []float64{100, 1000} {
+	scales := map[string][]float64{"nh3": {100}, "h2s": {100, 1000}}[key]
+	for _, scale := range scales {
 		switch {
-		case math.Abs(v-0xFFFE/scale) < 1e-9:
+		case v == 0xFFFE/scale:
 			return "polarizing", true
-		case math.Abs(v-0xFFFF/scale) < 1e-9:
+		case v == 0xFFFF/scale:
 			return "device error", true
 		}
 	}

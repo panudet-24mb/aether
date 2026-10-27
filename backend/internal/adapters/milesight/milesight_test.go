@@ -183,8 +183,8 @@ func TestUplinks(t *testing.T) {
 	}
 	// A real GS301 behind a UG65 (firmware 60.0.0.43) with its codec on: the gateway adds devEUI, deviceName and
 	// applicationID around the values, and the codec divides the sensors' warm-up status like a reading (655.34).
-	real := Message{Kind: Up, DevEUI: "24e124798e210951"}
-	ev, e = ParseUplink(real, []byte(`{"h2s":655.34,"nh3":655.34,"devEUI":"24e124798e210951","battery":69,"humidity":58,"deviceName":"1F_Toilet_Male_Odor1","temperature":29.1,"applicationID":2}`))
+	ug65 := Message{Kind: Up, DevEUI: "24e124798e210951"}
+	ev, e = ParseUplink(ug65, []byte(`{"h2s":655.34,"nh3":655.34,"devEUI":"24e124798e210951","battery":69,"humidity":58,"deviceName":"1F_Toilet_Male_Odor1","temperature":29.1,"applicationID":2}`))
 	if e != nil || ev.DeviceName != "1F_Toilet_Male_Odor1" || Model(ev) != "GS301" {
 		t.Fatalf("ug65 codec output: %v %+v", e, ev)
 	}
@@ -194,17 +194,41 @@ func TestUplinks(t *testing.T) {
 	if kind != zigbee2mqtt.CategoryEnvironment || h2s || appID || values["h2s_sensor_status"] != "polarizing" || values["nh3_sensor_status"] != "polarizing" || values["deviceName"] != "" || metrics["temperature"] != 29.1 || metrics["battery"] != 69 {
 		t.Fatalf("ug65 codec reading: %s %v %v", kind, metrics, values)
 	}
-	if _, values, _ := reading(t, Event{Object: map[string]json.RawMessage{"h2s": json.RawMessage("65.535"), "nh3": json.RawMessage("0.5")}}); values["h2s_sensor_status"] != "device error" {
-		t.Fatalf("high-resolution sentinel: %v", values)
+	// The codes on either scale are statuses; a reading next to them stays a reading.
+	for _, c := range []struct{ object, h2s, nh3 string }{
+		{`{"h2s":655.35,"nh3":655.33}`, "device error", ""},
+		{`{"h2s":65.534,"nh3":0.5}`, "polarizing", ""},
+		{`{"h2s":65.53,"nh3":65.534}`, "", ""},
+		{`{"h2s":100,"nh3":655.35}`, "", "device error"},
+	} {
+		var obj map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(c.object), &obj)
+		props, _ := State(Event{Object: obj})
+		if props["h2s_sensor_status"] != nilIfEmpty(c.h2s) || props["nh3_sensor_status"] != nilIfEmpty(c.nh3) {
+			t.Fatalf("%s: %v", c.object, props)
+		}
+		if _, gas := props["h2s"]; gas == (c.h2s != "") {
+			t.Fatalf("%s: h2s kept as a reading %v", c.object, props)
+		}
 	}
-	// Device information the same gateway sends after a join is never a reading.
-	if _, e := ParseUplink(real, []byte(`{"sn":"6798e21095170000","devEUI":"24e124798e210951","deviceName":"1F_Toilet_Male_Odor1","applicationID":2,"lorawan_class":0,"firmware_version":"v1.1","hardware_version":"v1.1"}`)); e != nil {
+	// Device information the same gateway sends after a join is never a reading, metadata included.
+	ev, e = ParseUplink(ug65, []byte(`{"sn":"6798e21095170000","devEUI":"24E124798E210951","deviceName":"1F_Toilet_Male_Odor1","applicationID":2,"lorawan_class":0,"firmware_version":"v1.1","hardware_version":"v1.1"}`))
+	if e != nil {
 		t.Fatal(e)
-	} else if props, _ := State(Event{Object: map[string]json.RawMessage{"sn": json.RawMessage(`"6798e21095170000"`), "lorawan_class": json.RawMessage("0"), "firmware_version": json.RawMessage(`"v1.1"`)}}); len(props) != 0 {
+	}
+	if props, _ := State(ev); len(props) != 0 || ev.DeviceName != "1F_Toilet_Male_Odor1" {
 		t.Fatalf("device information as readings: %v", props)
 	}
-	if _, e := ParseUplink(real, []byte(`{"battery":69,"devEUI":"24e124798e210952"}`)); !errors.Is(e, domain.ErrInvalid) {
-		t.Fatalf("codec output naming another device: %v", e)
+	// A devEUI that names another device, or is not a string, is refused.
+	for _, b := range []string{`{"battery":69,"devEUI":"24e124798e210952"}`, `{"battery":69,"devEUI":42}`} {
+		if _, e := ParseUplink(ug65, []byte(b)); !errors.Is(e, domain.ErrInvalid) {
+			t.Fatalf("%s: %v", b, e)
+		}
+	}
+	// A codec whose output has an object under "data" is codec output, not an envelope.
+	ev, e = ParseUplink(ug65, []byte(`{"data":{"temp":21.5},"devEUI":"24e124798e210951","applicationID":2}`))
+	if e != nil || ev.Raw != nil || ev.Object["data"] == nil {
+		t.Fatalf("codec output with a data object: %v %+v", e, ev)
 	}
 
 	_, features := State(Event{Object: Decode("GS301", frame(t, "047D0000 057D0100"))})
@@ -220,4 +244,11 @@ func TestUplinks(t *testing.T) {
 			t.Fatalf("%s: %v", b, e)
 		}
 	}
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

@@ -49,7 +49,7 @@ The collector subscribes to `aether/lora/+/#` (`backend/internal/adapters/milesi
 
 | The UG65 sends | Aether |
 |---|---|
-| A **codec's output**, e.g. `{"battery":100,"leakage_status":"leak"}`. A real UG65 on 60.0.0.43 adds `devEUI`, `deviceName` and `applicationID` next to the values. | Uses the values. The added fields are metadata, not readings: the name is kept for discovery and the model, and a `devEUI` there must match the topic's. |
+| A **codec's output**, e.g. `{"battery":100,"leakage_status":"leak"}`. A real UG65 on 60.0.0.43 adds `devEUI`, `deviceName` and `applicationID` next to the values. | Uses the values. Those three fields are metadata, not readings: the name is kept for discovery, the model and the stream's name, and a `devEUI` there must be a string matching the topic's. An object under `data` is codec output too; only a string `data` with a `devEUI` is the envelope. |
 | Its own **envelope** (no codec), with `devEUI`, `deviceName`, `fCnt`, `fPort`, `rxInfo[].rssi` / `loRaSNR` and the raw bytes in `data` | Keeps the names and radio figures. Decodes the raw bytes on port 85 for GS301, WS303, WS202 and VS330. The envelope's `devEUI` must match the topic's. |
 
 **How the model is chosen** (it matters for raw frames: channel `0x03` means a leak on a WS303 and PIR on a WS202):

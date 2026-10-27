@@ -100,6 +100,9 @@ func TestLoRaWANIngest(t *testing.T) {
 	// A real GS301 through a UG65 with its codec on, warming up: the name the gateway adds is kept, its metadata is
 	// not a reading, and the 655.34 ppm the codec makes of the warm-up status is a status, not a gas level.
 	const toilet = "24e124798e210951"
+	if e := capture(up(toilet), []byte(`{"battery":70,"humidity":57,"temperature":29}`)); e != nil { // no name yet
+		t.Fatal(e)
+	}
 	if e := capture(up(toilet), []byte(`{"h2s":655.34,"nh3":655.34,"devEUI":"24e124798e210951","battery":69,"humidity":58,"deviceName":"1F_Toilet_Male_Odor1","temperature":29.1,"applicationID":2}`)); e != nil {
 		t.Fatal(e)
 	}
@@ -111,6 +114,16 @@ func TestLoRaWANIngest(t *testing.T) {
 		var got string
 		_ = f.admin.QueryRowContext(ctx, `SELECT reading::text FROM core.sensor_samples WHERE gateway_id=$1 AND external_id=$2 ORDER BY received_at DESC LIMIT 1`, g.ID, toilet).Scan(&got)
 		t.Fatalf("ug65 codec sample: %s", got)
+	}
+	// The stream first named after the DevEUI takes the gateway's name, and a later uplink without one keeps it.
+	if e := capture(up(toilet), []byte(`{"battery":69,"humidity":58,"temperature":29.2}`)); e != nil {
+		t.Fatal(e)
+	}
+	if n := count(`SELECT count(*) FROM core.sensor_streams WHERE gateway_id=$1 AND external_id=$2 AND name='1F_Toilet_Male_Odor1'`, g.ID, toilet); n != 1 {
+		t.Fatal("stream name not taken from the gateway")
+	}
+	if n := count(`SELECT count(*) FROM core.lorawan_devices WHERE gateway_id=$1 AND dev_eui=$2 AND name='1F_Toilet_Male_Odor1'`, g.ID, toilet); n != 1 {
+		t.Fatal("device name lost on an uplink without one")
 	}
 
 	// Only LoRaWAN profiles fit a LoRaWAN gateway.

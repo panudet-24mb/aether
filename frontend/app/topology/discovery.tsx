@@ -42,7 +42,10 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
         {devices.map((d) => {
           if (d.source === "tuya_cloud") return <TuyaCloudCard key={d.external_id} d={d} busy={busy} onAdopt={onAdopt} />;
           if (d.source === "tuya" || d.source === "tuya_ble" || d.source === "tuya_lan") return <TuyaCard key={d.external_id} d={d} busy={busy} onAdopt={onAdopt} />;
-          const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind, zigbee: d.source === "z2m" }) : undefined;
+          // LoRaWAN devices come from a Milesight gateway's network server (source "lorawan"); the description is the
+          // names they were given there.
+          const lorawan = d.source === "lorawan";
+          const suggestion = !d.profile ? suggestProfile({ model: d.model, kind: d.kind, zigbee: d.source === "z2m", lorawan }) : undefined;
           const profile = d.profile ?? suggestion;
           // Zigbee devices come from the coordinator's own list (source "z2m"); their model is the Z2M definition.
           const zigbee = d.source === "z2m";
@@ -51,9 +54,9 @@ export default function DiscoveryList({ items, gateways, gatewayId, serverTime, 
             <div className="topo-discovery-photo">{profile?.image ? <img src={profile.image} alt={label} /> : <Bluetooth size={30} />}</div>
             <div className="topo-discovery-info">
               <strong>{label}</strong>
-              <small>{zigbee && d.description ? `${d.description}${d.kind ? ` · ${ZIGBEE_KIND_LABEL[d.kind] ?? d.kind}` : ""}` : d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
-              <code>{formatMAC(d.external_id)}</code>
-              <small>{zigbee ? "pair อยู่กับ coordinator" : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{showSim && d.source === "simulated" ? " · SIM" : ""}</small>
+              <small>{(zigbee || lorawan) && d.description ? `${d.description}${d.kind ? ` · ${ZIGBEE_KIND_LABEL[d.kind] ?? d.kind}` : ""}` : d.profile ? "รุ่นที่อุปกรณ์รายงาน" : suggestion ? "รุ่นแนะนำ · กรุณาตรวจสอบกับตัวอุปกรณ์" : "เลือกยี่ห้อและรุ่นได้ตอนลงทะเบียน"}</small>
+              <code>{lorawan ? `DevEUI ${d.external_id.toUpperCase()}` : formatMAC(d.external_id)}</code>
+              <small>{zigbee ? "pair อยู่กับ coordinator" : lorawan ? `ส่งผ่าน UG65 ล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}` : isFresh(d.last_seen, serverTime) ? "เพิ่งตรวจพบ" : `พบล่าสุด ${new Date(d.last_seen).toLocaleString("th-TH")}`}{d.rssi != null ? ` · ${d.rssi} dBm` : ""}{showSim && d.source === "simulated" ? " · SIM" : ""}</small>
               <button type="button" className="topo-btn primary" disabled={busy} onClick={() => onAdopt(d.external_id, d.gateway_id)}>ลงทะเบียน</button>
             </div>
           </article>;

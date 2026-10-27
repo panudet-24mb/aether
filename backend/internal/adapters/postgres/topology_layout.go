@@ -88,7 +88,7 @@ func layoutGateways(tx *gorm.DB, nodes []string) (map[string]string, error) {
 	}
 	if len(externals) > 0 {
 		// Every place a device node on the canvas comes from: registrations first, then what gateways decoded or
-		// listed (Zigbee coordinator, Tuya import, Edge LAN scan). The most recent sighting wins among those. The
+		// listed (Zigbee coordinator, Tuya import, Edge LAN scan, LoRaWAN gateway). The most recent sighting wins among those. The
 		// lower() lookups use the expression indexes of migration 00041; Zigbee IEEE addresses are stored lower case.
 		var rows []struct {
 			Ext     string
@@ -105,6 +105,8 @@ func layoutGateways(tx *gorm.DB, nodes []string) (map[string]string, error) {
    WHERE t.tenant_id=core.tenant_id() AND t.removed_at IS NULL AND lower(t.tuya_id) = ANY(CAST(@ext AS text[]))
   UNION ALL SELECT lower(l.device_id), l.gateway_id, 2, l.last_seen FROM core.edge_lan_devices l
    WHERE l.tenant_id=core.tenant_id() AND lower(l.device_id) = ANY(CAST(@ext AS text[]))
+  UNION ALL SELECT w.dev_eui, w.gateway_id, 1, w.last_seen FROM core.lorawan_devices w
+   WHERE w.tenant_id=core.tenant_id() AND w.dev_eui = ANY(CAST(@ext AS text[]))
 ) c JOIN core.gateways g ON g.tenant_id=core.tenant_id() AND g.id=c.gateway AND g.revoked_at IS NULL
 ORDER BY ext, prio, at DESC`, map[string]any{"ext": pgArray(externals)}).Scan(&rows).Error
 		if e != nil {

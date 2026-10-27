@@ -216,6 +216,12 @@ func (r *Repository) saveZ2MState(tx *gorm.DB, tenant, gateway string, m zigbee2
 // and the events. The caller has already stored the settable values it carries. frame, when set, is stored next
 // to the generic zigbee2mqtt.FrameState so the source of the reading stays visible.
 func (r *Repository) ingestDeviceState(tx *gorm.DB, tenant, gateway string, d zigbee2mqtt.Device, features []zigbee2mqtt.Feature, settable map[string]json.RawMessage, payload []byte, topic, frame string, now time.Time) error {
+	return r.ingestDefinedState(tx, tenant, gateway, d, features, settable, payload, topic, frame, true, now)
+}
+
+// ingestDefinedState is ingestDeviceState for a device whose liveness may also be silence-based: reported=false
+// leaves the stream's liveness alone (a LoRaWAN sensor has no availability report; it is offline once quiet).
+func (r *Repository) ingestDefinedState(tx *gorm.DB, tenant, gateway string, d zigbee2mqtt.Device, features []zigbee2mqtt.Feature, settable map[string]json.RawMessage, payload []byte, topic, frame string, reported bool, now time.Time) error {
 	confirmed, e := confirmCommands(tx, tenant, gateway, d.IEEE, features, settable, now)
 	if e != nil {
 		return e
@@ -264,8 +270,10 @@ func (r *Repository) ingestDeviceState(tx *gorm.DB, tenant, gateway string, d zi
 			return e
 		}
 	}
-	if e := tx.Exec(`UPDATE core.sensor_streams SET liveness='reported' WHERE gateway_id=? AND external_id=? AND liveness<>'reported'`, gateway, d.IEEE).Error; e != nil {
-		return e
+	if reported {
+		if e := tx.Exec(`UPDATE core.sensor_streams SET liveness='reported' WHERE gateway_id=? AND external_id=? AND liveness<>'reported'`, gateway, d.IEEE).Error; e != nil {
+			return e
+		}
 	}
 	if e := tx.SavePoint("alert_events").Error; e != nil {
 		return e

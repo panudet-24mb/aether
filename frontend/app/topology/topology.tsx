@@ -23,7 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import "./topology.css";
 import { ApiError, createClientFrom, type Device, type GatewayCreated, type Layout, type MQTTCredentials, type Snapshot } from "./api";
 import { useLatest } from "./use-latest";
-import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, profileFitsGateway, profilesForBrand, suggestProfile, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
+import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, LORAWAN_GATEWAY_MODEL, profileFitsGateway, profilesForBrand, suggestProfile, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
 import ZigbeeCatalogSearch from "./zigbee-catalog";
 import Inspector, { type Selection } from "./inspector";
@@ -1127,7 +1127,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
                 <li>ขึ้นกับอินเทอร์เน็ตและ Tuya · <strong>ห้ามใช้กับ SOS หรืองานวิกฤต</strong> · ถ้าต้องการทำงานแม้เน็ตล่ม ใช้ Aether Edge หรือ Zigbee2MQTT</li>
               </ul>
             )}
-            <p className="topo-note">{gatewayDialogModel?.id === TUYA_CLOUD_GATEWAY_MODEL ? "หลังสร้าง ใส่ Access ID / Access Secret ของโปรเจกต์ Tuya IoT ในแถบขวา · ไม่มีบัญชี MQTT หรือ token" : gatewayDialogModel?.id === EDGE_GATEWAY_MODEL ? "หลังสร้าง ระบบจะแสดงคำสั่งติดตั้งหนึ่งบรรทัดในแถบขวา · ไม่ต้องตั้งค่า MQTT เอง" : gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? (gatewayDialogModel.id === Z2M_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที แล้วแสดงส่วน mqtt ของ configuration.yaml (มีรหัสผ่าน แสดงครั้งเดียว) ให้นำไปใส่ใน Zigbee2MQTT บนเครื่องในอาคาร" : "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา") : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
+            <p className="topo-note">{gatewayDialogModel?.id === TUYA_CLOUD_GATEWAY_MODEL ? "หลังสร้าง ใส่ Access ID / Access Secret ของโปรเจกต์ Tuya IoT ในแถบขวา · ไม่มีบัญชี MQTT หรือ token" : gatewayDialogModel?.id === EDGE_GATEWAY_MODEL ? "หลังสร้าง ระบบจะแสดงคำสั่งติดตั้งหนึ่งบรรทัดในแถบขวา · ไม่ต้องตั้งค่า MQTT เอง" : gatewayDialogModel?.transport === "mqtt" ? (topology.broker.configured ? (gatewayDialogModel.id === Z2M_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที แล้วแสดงส่วน mqtt ของ configuration.yaml (มีรหัสผ่าน แสดงครั้งเดียว) ให้นำไปใส่ใน Zigbee2MQTT บนเครื่องในอาคาร" : gatewayDialogModel.id === LORAWAN_GATEWAY_MODEL ? "ระบบจะออกบัญชี MQTT ให้ทันที (รหัสผ่านแสดงครั้งเดียว) แล้วแสดงค่าที่ต้องใส่ใน Network Server → Application → Data Transmission → MQTT ของ UG65" : "ระบบจะออกบัญชี MQTT ให้ทันที และแสดงรหัสผ่านครั้งเดียวในแถบขวา") : "server ยังไม่เปิดออกบัญชี MQTT อัตโนมัติ · สร้าง gateway ได้ก่อน") : "token สำหรับ HTTP Basic จะแสดงครั้งเดียวในแถบขวา"}</p>
             {dialogError && (
               <p className="topo-warn" role="alert">
                 {dialogError}
@@ -1161,7 +1161,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           busy={busy}
           error={dialogError}
           initialName={adopt.name || snapshot?.discovery?.find((x) => x.external_id === adopt.external && (x.source === "tuya" || x.source === "tuya_ble" || x.source === "tuya_cloud"))?.description || (adoptDevice?.name ?? "")}
-          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL), tuya: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === EDGE_GATEWAY_MODEL), tuyaCloud: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === TUYA_CLOUD_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
+          initialProfile={drafts.find((d) => d.id === adopt.draftId)?.profile ?? snapshot?.discovery?.find((x) => x.external_id === adopt.external && x.profile)?.profile?.id ?? suggestProfile({ model: adoptDevice?.model, kind: adoptDevice?.kind, hasBeacon: !!adoptDevice?.reading?.beacon, zigbee: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === Z2M_GATEWAY_MODEL), tuya: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === EDGE_GATEWAY_MODEL), tuyaCloud: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === TUYA_CLOUD_GATEWAY_MODEL), lorawan: topology.gateways.some((g) => g.gateway.id === adopt.gatewayId && g.gateway.model === LORAWAN_GATEWAY_MODEL) })?.id ?? DEVICE_PROFILES[0].id}
           onCancel={() => setAdopt(null)}
           onSubmit={(input) =>
             void action(async () => {

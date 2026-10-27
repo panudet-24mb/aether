@@ -24,7 +24,7 @@ type DeviceProfile struct {
 	Brand       string   `json:"brand"`
 	Model       string   `json:"model"`
 	Label       string   `json:"label"`
-	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | tuya-ble | tuya-cloud | any
+	Radio       string   `json:"radio"` // ble | zigbee | tuya-wifi | tuya-ble | tuya-cloud | lorawan | any
 	Description string   `json:"description"`
 	Image       string   `json:"image,omitempty"`
 	Kinds       []string `json:"kinds"`   // reading kinds the device is expected to produce
@@ -81,6 +81,15 @@ const TuyaCloudGatewayModel = "tuya-cloud"
 // devices behind a Tuya hub. Like TuyaWiFiProfile, what it can do comes from its data-point specification.
 const TuyaCloudProfile = "tuya-cloud-device@1"
 
+// LoRaWANGatewayModel is a Milesight UG65 running its embedded LoRaWAN network server. It connects out to this broker
+// with the gateway's account and publishes each uplink under aether/lora/<gateway id>/<DevEUI>/up
+// (docs/platform/milesight-lorawan.md).
+const LoRaWANGatewayModel = "milesight-ug65"
+
+// LoRaWANGenericProfile is the profile of a LoRaWAN device no more specific profile matches. Its readings come from
+// the payload codec the gateway runs, so any device with a codec works.
+const LoRaWANGenericProfile = "lorawan-device@1"
+
 // ButtonProfileIDs lists the profiles whose tags may raise a button event.
 func ButtonProfileIDs() []string {
 	out := []string{}
@@ -108,6 +117,9 @@ var GatewayModels = []GatewayModel{
 	{ID: EdgeGatewayModel, Brand: "Aether", Model: "Edge", Label: "Aether Edge (Tuya Wi‑Fi)", Transport: "mqtt", Description: "โปรแกรม Aether Edge บนเครื่องในอาคาร (เช่น Raspberry Pi) คุยกับอุปกรณ์ Tuya Wi‑Fi ในวง LAN ด้วย local key โดยตรง ไม่ใช้ Tuya cloud ขณะทำงาน · ส่งสถานะและรับคำสั่งผ่าน MQTT over TLS · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
 	// Tuya Cloud mode: a linked Tuya IoT project, no site host. Depends on the internet and Tuya; not for SOS.
 	{ID: TuyaCloudGatewayModel, Brand: "Tuya", Model: "Cloud", Label: "Tuya Cloud (ไม่ต้องติดตั้ง)", Transport: "cloud", Description: "เชื่อมโปรเจกต์ Tuya IoT ของคุณ Aether รับสถานะและสั่งงานผ่าน Tuya Cloud · อุปกรณ์ Wi‑Fi และอุปกรณ์ Zigbee/BLE ที่อยู่หลัง hub Tuya · ต้องมีอินเทอร์เน็ตและขึ้นกับ Tuya · ห้ามใช้กับ SOS · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
+	// Milesight UG65 with its embedded network server, publishing uplinks straight into this broker (no ChirpStack).
+	// Not yet verified with a captured uplink from the real gateway.
+	{ID: LoRaWANGatewayModel, Brand: "Milesight", Model: "UG65", Label: "Milesight UG65 (LoRaWAN)", Transport: "mqtt", Description: "LoRaWAN gateway (AS923-1) ใช้ Network Server ในตัวเครื่อง ส่ง uplink ของอุปกรณ์เข้า Aether ผ่าน MQTT over TLS โดยตรง ไม่ต้องมี ChirpStack · ใส่ payload codec ใน gateway หรือให้ Aether ถอดค่าเองสำหรับรุ่นที่รองรับ · ยังไม่ยืนยันกับเครื่องจริง", Verified: false},
 	{ID: "generic-http", Brand: "Generic", Model: "HTTP gateway", Label: "Generic HTTP", Transport: "http", Image: "/devices/generic-http-gateway.png", Description: "Gateway ทั่วไปที่ POST JSON เข้า Aether ด้วย HTTP Basic (gateway id + token)", Verified: false},
 }
 
@@ -156,6 +168,18 @@ var DeviceProfiles = []DeviceProfile{
 	// Any Tuya device of a linked Tuya Cloud project.
 	{ID: TuyaCloudProfile, Brand: "Tuya", Model: "Cloud device", Label: "อุปกรณ์ Tuya (ผ่าน Tuya Cloud)", Radio: "tuya-cloud", Kinds: []string{"tuya"}, Metrics: []string{"ตามจุดข้อมูล (DP) ที่อุปกรณ์ประกาศ"}, Verified: false, Actuator: true,
 		Description: "อุปกรณ์ Tuya ในโปรเจกต์ Tuya IoT ที่เชื่อมไว้ · สถานะมาจาก Message Service และสั่งงานผ่าน Tuya OpenAPI · ต้องมีอินเทอร์เน็ต · ยังไม่ยืนยันกับเครื่องจริง"},
+	// Milesight LoRaWAN sensors behind a UG65. Readings are the output of Milesight's payload codec on the gateway, or
+	// Aether's own decoding of the raw frame (adapters/milesight); see docs/platform/milesight-lorawan.md.
+	{ID: "milesight-gs301@1", Brand: "Milesight", Model: "GS301", Label: "Milesight GS301 · กลิ่น (NH₃ / H₂S)", Radio: "lorawan", Kinds: []string{"environment"}, Metrics: []string{"nh3 (ppm)", "h2s (ppm)", "temperature", "humidity", "battery"}, Verified: false,
+		Description: "Bathroom odor detector · วัดแอมโมเนีย (NH₃) ไฮโดรเจนซัลไฟด์ (H₂S) อุณหภูมิและความชื้น · LoRaWAN ผ่าน UG65 · ยังไม่ยืนยันกับเครื่องจริง"},
+	{ID: "milesight-ws303@1", Brand: "Milesight", Model: "WS303", Label: "Milesight WS303 · น้ำรั่ว", Radio: "lorawan", Kinds: []string{"leak"}, Metrics: []string{"leak (น้ำรั่ว / ปกติ)", "battery"}, Verified: false,
+		Description: "Mini water leak sensor · แจ้งเมื่อพบน้ำรั่ว · LoRaWAN ผ่าน UG65 · ยังไม่ยืนยันกับเครื่องจริง"},
+	{ID: "milesight-ws202@1", Brand: "Milesight", Model: "WS202", Label: "Milesight WS202 · PIR และแสง", Radio: "lorawan", Kinds: []string{"motion"}, Metrics: []string{"motion (PIR)", "daylight (สว่าง / มืด)", "battery"}, Verified: false, Occupancy: true,
+		Description: "PIR & light sensor · ตรวจจับคนเคลื่อนไหวและสภาพแสง · LoRaWAN ผ่าน UG65 · ยังไม่ยืนยันกับเครื่องจริง"},
+	{ID: "milesight-vs330@1", Brand: "Milesight", Model: "VS330", Label: "Milesight VS330 · ห้องน้ำมีคน / ว่าง", Radio: "lorawan", Kinds: []string{"motion"}, Metrics: []string{"occupancy (มีคน / ว่าง)", "distance (mm)", "calibration", "battery"}, Verified: false, Occupancy: true,
+		Description: "Bathroom occupancy sensor · วัดระยะด้วย ToF ติดในห้องน้ำแต่ละห้อง บอกว่ามีคนใช้หรือว่าง · LoRaWAN ผ่าน UG65 · ยังไม่ยืนยันกับเครื่องจริง"},
+	{ID: LoRaWANGenericProfile, Brand: "Generic", Model: "LoRaWAN device", Label: "อุปกรณ์ LoRaWAN ทั่วไป", Radio: "lorawan", Kinds: []string{}, Metrics: []string{"ตามค่าที่ payload codec ใน gateway ถอดออกมา"}, Verified: false,
+		Description: "อุปกรณ์ LoRaWAN รุ่นอื่นที่ใส่ payload codec ไว้ใน gateway · Aether อ่านค่าตัวเลข/สถานะที่ codec ส่งออกมา · ยังไม่ยืนยันกับเครื่องจริง"},
 	{ID: "generic-ble-beacon@1", Image: "/devices/generic-ble-beacon.png", Brand: "Generic", Model: "BLE beacon", Label: "Generic iBeacon / Eddystone", Radio: "ble", Kinds: []string{"beacon"}, Metrics: []string{"UUID / major / minor หรือ namespace / instance"}, Verified: false,
 		Description: "beacon มาตรฐานทุกยี่ห้อที่ gateway ได้ยิน · ใช้ระบุตัวตน/ตำแหน่งคร่าว ๆ ไม่มีค่าเซนเซอร์"},
 	{ID: "generic-environment@1", Image: "/devices/generic-environment.png", Brand: "Generic", Model: "Environment sensor", Label: "Generic environment sensor", Radio: "any", Kinds: []string{"environment"}, Metrics: []string{"ตาม payload ที่ส่งเข้ามา"}, Verified: false,
@@ -224,6 +248,8 @@ func ProfileAllowedOn(profileID, gatewayModel string) bool {
 		return radio == "tuya-wifi" || radio == "tuya-ble"
 	case TuyaCloudGatewayModel:
 		return radio == "tuya-cloud"
+	case LoRaWANGatewayModel:
+		return radio == "lorawan"
 	}
-	return radio != "zigbee" && radio != "tuya-wifi" && radio != "tuya-ble" && radio != "tuya-cloud"
+	return radio != "zigbee" && radio != "tuya-wifi" && radio != "tuya-ble" && radio != "tuya-cloud" && radio != "lorawan"
 }

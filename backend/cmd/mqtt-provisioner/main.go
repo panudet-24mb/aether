@@ -21,11 +21,12 @@ type account struct {
 	Revision        int
 }
 
-// z2mModel is domain.Z2MGatewayModel and edgeModel domain.EdgeGatewayModel; this binary deliberately depends on
-// nothing but the database driver.
+// z2mModel is domain.Z2MGatewayModel, edgeModel domain.EdgeGatewayModel and loraModel domain.LoRaWANGatewayModel;
+// this binary deliberately depends on nothing but the database driver.
 const (
 	z2mModel   = "zigbee2mqtt"
 	edgeModel  = "aether-edge"
+	loraModel  = "milesight-ug65"
 	cloudModel = "tuya-cloud" // domain.TuyaCloudGatewayModel: never a broker account
 )
 
@@ -33,11 +34,11 @@ const (
 // A Minew-style gateway may write only its own status/response topics and read its action topic. A Zigbee2MQTT
 // bridge owns its whole tree aether/z2m/<id>/#: it must SUBSCRIBE to its own base_topic/# (Z2M subscribes to
 // exactly that), so the narrower "read …/+/set" would make its subscription fail. An Aether Edge writes its own
-// tree aether/edge/<id>/# and reads only the command topics of its own devices (…/<device>/set). The collector
-// reads all three trees, and the commander writes only the per-device …/set topics.
+// tree aether/edge/<id>/# and reads only the command topics of its own devices (…/<device>/set). A Milesight LoRaWAN
+// gateway owns aether/lora/<id>/#: it publishes uplinks there and subscribes to its own downlink topic. The collector reads all four trees, and the commander writes only the per-device …/set topics.
 func render(basePasswords, baseACL string, accounts []account) (string, string) {
 	p := strings.TrimSpace(basePasswords) + "\n"
-	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\ntopic read aether/edge/+/#\n"
+	a := strings.TrimSpace(baseACL) + "\n\nuser aether-ingest\ntopic read /aether/gateways/+/status\ntopic read aether/z2m/+/#\ntopic read aether/edge/+/#\ntopic read aether/lora/+/#\n"
 	// mqtt-commander may only WRITE device command topics (aether/z2m/<gateway>/<ieee>/set): no subscription at
 	// all, and no bridge/request/* (so it can never permit joins or remove devices). Without its password in the
 	// base file the block is inert.
@@ -50,6 +51,10 @@ func render(basePasswords, baseACL string, accounts []account) (string, string) 
 		p += "gw-" + c.ID + ":" + c.Hash + "\n"
 		if c.Model == z2mModel {
 			a += "\nuser gw-" + c.ID + "\ntopic readwrite aether/z2m/" + c.ID + "/#\n"
+			continue
+		}
+		if c.Model == loraModel {
+			a += "\nuser gw-" + c.ID + "\ntopic readwrite aether/lora/" + c.ID + "/#\n"
 			continue
 		}
 		if c.Model == edgeModel {

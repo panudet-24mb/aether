@@ -1,6 +1,7 @@
 package app
 
 import (
+	"aether/backend/internal/adapters/milesight"
 	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/tuyacloud"
 	"bytes"
@@ -375,6 +376,19 @@ func (s *Service) CaptureEdge(ctx context.Context, tenant, gateway string, m edg
 		}
 	}
 	return s.Repo.CaptureEdge(ctx, tenant, gateway, m, body)
+}
+// CaptureLoRaWAN validates one Milesight LoRaWAN gateway message before it is stored: bounded, UTF-8, free of NUL
+// (PostgreSQL cannot hold it, and it would fail on every redelivery) and a JSON object. Downlinks and anything else
+// Aether does not use (Ignore) are still kept as a diagnostic copy.
+func (s *Service) CaptureLoRaWAN(ctx context.Context, tenant, gateway string, m milesight.Message, body []byte) (string, error) {
+	if len(body) == 0 || len(body) > milesight.MaxPacket || !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 || bytes.Contains(body, []byte(`\u0000`)) {
+		slog.Warn("LoRaWAN message rejected: empty, over the size cap, not UTF-8 or contains NUL", "topic", m.Topic, "bytes", len(body))
+		return "", domain.ErrInvalid
+	}
+	if first := strings.TrimSpace(string(body)); !json.Valid(body) || first == "" || first[0] != '{' {
+		return "", domain.ErrInvalid
+	}
+	return s.Repo.CaptureLoRaWAN(ctx, tenant, gateway, m, body)
 }
 func (s *Service) Ingest(ctx context.Context, tenant, gateway, device string, ts time.Time, metrics map[string]float64) (domain.TelemetryEvent, error) {
 	if !security.ValidID(device) || len(metrics) == 0 || len(metrics) > 3 || ts.IsZero() || ts.Before(time.Now().Add(-7*24*time.Hour)) || ts.After(time.Now().Add(time.Minute)) {

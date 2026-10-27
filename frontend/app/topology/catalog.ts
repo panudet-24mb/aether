@@ -19,7 +19,7 @@ export type DeviceProfile = {
   brand: string;
   model: string;
   label: string;
-  radio: "ble" | "zigbee" | "tuya-wifi" | "tuya-ble" | "tuya-cloud" | "any";
+  radio: "ble" | "zigbee" | "tuya-wifi" | "tuya-ble" | "tuya-cloud" | "lorawan" | "any";
   description: string;
   image?: string;
   metrics: string[];
@@ -207,6 +207,13 @@ export const deviceProfile = (id: string): DeviceProfile | undefined => DEVICE_P
 export const deviceBrands = (): string[] => [...new Set(DEVICE_PROFILES.map((p) => p.brand))];
 export const profilesForBrand = (brand: string): DeviceProfile[] => DEVICE_PROFILES.filter((p) => p.brand === brand);
 
+/** Palette type filter labels for DeviceProfile.kinds; a kind missing here (a new brand's) shows as its raw id. */
+export const DEVICE_KIND_LABEL: Record<string, string> = {
+  environment: "อุณหภูมิ / คุณภาพอากาศ", motion: "การเคลื่อนไหว", leak: "น้ำรั่ว", beacon: "Beacon / ติดตามตำแหน่ง", tamper: "กันถอด / กันงัด",
+  door: "ประตู / หน้าต่าง", switch: "สวิตช์ / ปลั๊ก", zigbee: "Zigbee ทั่วไป", tuya: "Tuya ทั่วไป",
+};
+export const deviceKindLabel = (kind: string): string => DEVICE_KIND_LABEL[kind] ?? kind;
+
 /** Formats a 12-hex BLE MAC as AA:BB:CC:DD:EE:FF; other identifiers are returned unchanged. */
 export function formatMAC(id: string): string {
   return /^[0-9a-f]{12}$/i.test(id) ? id.match(/.{2}/g)!.join(":").toUpperCase() : id;
@@ -222,7 +229,12 @@ export function matchesInfo(p: DeviceProfile, name: string): boolean {
 /** The generic profile every Zigbee2MQTT device can register as (backend domain.Z2MGenericProfile). */
 export const Z2M_GENERIC_PROFILE = "zigbee2mqtt-device@1";
 
-export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean; /** A Tuya Wi‑Fi device under an Aether Edge: always the Tuya Wi‑Fi profile. */ tuya?: boolean; /** A Tuya device reached through a Tuya Cloud link: always the Tuya Cloud profile. */ tuyaCloud?: boolean }): DeviceProfile | undefined {
+export function suggestProfile(input: { model?: string | null; kind?: string | null; hasBeacon?: boolean; /** The reading carries `metrics.motion` (only the PIR frame sets it). */ hasPIR?: boolean; /** A Zigbee2MQTT device: only Zigbee profiles, never a BLE profile matched by kind. */ zigbee?: boolean; /** A Tuya Wi‑Fi device under an Aether Edge: always the Tuya Wi‑Fi profile. */ tuya?: boolean; /** A Tuya device reached through a Tuya Cloud link: always the Tuya Cloud profile. */ tuyaCloud?: boolean; /** A LoRaWAN device behind a Milesight gateway: only LoRaWAN profiles, matched by model. */ lorawan?: boolean }): DeviceProfile | undefined {
+  if (input.lorawan) {
+    const name = input.model?.toLowerCase() ?? "";
+    const byModel = name ? DEVICE_PROFILES.find((p) => p.radio === "lorawan" && p.model.toLowerCase() === name) : undefined;
+    return byModel ?? DEVICE_PROFILES.find((p) => p.id === LORAWAN_GENERIC_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "lorawan");
+  }
   if (input.tuyaCloud) return DEVICE_PROFILES.find((p) => p.id === TUYA_CLOUD_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "tuya-cloud");
   if (input.tuya) return DEVICE_PROFILES.find((p) => p.id === TUYA_WIFI_PROFILE) ?? DEVICE_PROFILES.find((p) => p.radio === "tuya-wifi");
   if (input.zigbee) {
@@ -297,13 +309,21 @@ export const TUYA_BLE_PROFILE = "tuya-ble-device@1";
 export const TUYA_CLOUD_GATEWAY_MODEL = "tuya-cloud";
 /** The profile of any Tuya device reached through Tuya Cloud (backend domain.TuyaCloudProfile). */
 export const TUYA_CLOUD_PROFILE = "tuya-cloud-device@1";
+/**
+ * A Milesight UG65 running its embedded LoRaWAN network server, publishing each uplink under
+ * aether/lora/<gateway id>/<DevEUI>/up (backend domain.LoRaWANGatewayModel).
+ */
+export const LORAWAN_GATEWAY_MODEL = "milesight-ug65";
+/** The profile of a LoRaWAN device no more specific profile matches (backend domain.LoRaWANGenericProfile). */
+export const LORAWAN_GENERIC_PROFILE = "lorawan-device@1";
 
-/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi and Tuya BLE only under an Aether Edge, Tuya Cloud only under a Tuya Cloud gateway, and none of them anywhere else. */
+/** Mirrors domain.ProfileAllowedOn: Zigbee profiles only under a Zigbee2MQTT gateway, Tuya Wi‑Fi and Tuya BLE only under an Aether Edge, Tuya Cloud only under a Tuya Cloud gateway, LoRaWAN only under a LoRaWAN gateway, and none of them anywhere else. */
 export function profileFitsGateway(p: DeviceProfile, gatewayModelId: string): boolean {
   if (gatewayModelId === Z2M_GATEWAY_MODEL) return p.radio === "zigbee";
   if (gatewayModelId === EDGE_GATEWAY_MODEL) return p.radio === "tuya-wifi" || p.radio === "tuya-ble";
   if (gatewayModelId === TUYA_CLOUD_GATEWAY_MODEL) return p.radio === "tuya-cloud";
-  return p.radio !== "zigbee" && p.radio !== "tuya-wifi" && p.radio !== "tuya-ble" && p.radio !== "tuya-cloud";
+  if (gatewayModelId === LORAWAN_GATEWAY_MODEL) return p.radio === "lorawan";
+  return p.radio !== "zigbee" && p.radio !== "tuya-wifi" && p.radio !== "tuya-ble" && p.radio !== "tuya-cloud" && p.radio !== "lorawan";
 }
 
 /** Switch outputs a reading carries, in gang order: [[1, true], [2, false], …] from metrics sw1..sw4. */

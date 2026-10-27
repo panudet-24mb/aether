@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aether/backend/internal/adapters/edge"
+	"aether/backend/internal/adapters/milesight"
 	"aether/backend/internal/adapters/mqttingest"
 	"aether/backend/internal/adapters/postgres"
 	"aether/backend/internal/adapters/zigbee2mqtt"
@@ -109,6 +110,20 @@ func main() {
 				id, err = service.CaptureEdge(call, tenant, gateway, msg, m.Payload())
 				return err
 			}
+			// Milesight LoRaWAN gateways publish uplinks under aether/lora/<gateway id>/<DevEUI>/up; downlinks going TO a
+			// gateway and anything else in its tree are kept only as a diagnostic copy.
+			if strings.HasPrefix(m.Topic(), milesight.Prefix) {
+				gateway, msg, rerr := milesight.Route(m.Topic())
+				if rerr != nil {
+					return rerr
+				}
+				var tenant string
+				if tenant, err = repo.MQTTGatewayTenant(call, gateway); err != nil {
+					return err
+				}
+				id, err = service.CaptureLoRaWAN(call, tenant, gateway, msg, m.Payload())
+				return err
+			}
 			if strings.HasPrefix(m.Topic(), "/aether/gateways/") {
 				gateway := strings.TrimSuffix(strings.TrimPrefix(m.Topic(), "/aether/gateways/"), "/status")
 				if !strings.HasSuffix(m.Topic(), "/status") || !security.ValidID(gateway) {
@@ -161,6 +176,10 @@ func main() {
 		t = c.Subscribe(edge.Prefix+"+/#", 1, handler)
 		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
 			slog.Error("MQTT Aether Edge subscription failed; Edge gateways are not captured until the next reconnect")
+		}
+		t = c.Subscribe(milesight.Prefix+"+/#", 1, handler)
+		if !t.WaitTimeout(10*time.Second) || t.Error() != nil {
+			slog.Error("MQTT LoRaWAN subscription failed; LoRaWAN gateways are not captured until the next reconnect")
 		}
 		for _, b := range mc.Bindings {
 			t := c.Subscribe(b.Topic, 1, handler)

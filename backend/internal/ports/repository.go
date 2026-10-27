@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"aether/backend/internal/adapters/milesight"
 	"aether/backend/internal/adapters/edge"
 	"aether/backend/internal/adapters/minew"
 	"aether/backend/internal/adapters/tuya"
@@ -163,6 +164,7 @@ type Repository interface {
 	CapturePacket(context.Context, string, string, json.RawMessage) (string, error)
 	CaptureZ2M(context.Context, string, string, zigbee2mqtt.Message, []byte) (string, error)
 	CaptureEdge(context.Context, string, string, edge.Message, []byte) (string, error)
+	CaptureLoRaWAN(context.Context, string, string, milesight.Message, []byte) (string, error)
 	SaveTuyaDevices(context.Context, domain.Principal, string, []tuya.Import) (int, error)
 	SaveTuyaCloudLink(context.Context, domain.Principal, domain.TuyaCloudLinkRequest) error
 	UnlinkTuyaCloud(context.Context, domain.Principal, string) error

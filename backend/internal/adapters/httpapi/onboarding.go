@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"aether/backend/internal/adapters/milesight"
 	"aether/backend/internal/adapters/zigbee2mqtt"
 	"aether/backend/internal/app"
 	"aether/backend/internal/config"
@@ -110,6 +111,13 @@ func onboardingRoutes(r fiber.Router, s *app.Service, cfg config.Config) {
 				out["base_topic"] = zigbee2mqtt.BaseTopic(id)
 				out["server"] = zigbee2mqtt.Server(tls, host, port)
 				out["z2m_yaml"] = zigbee2mqtt.ConfigSnippet(tls, host, port, id, password)
+				return c.Status(201).JSON(out)
+			}
+			if model == domain.LoRaWANGatewayModel {
+				// The gateway's embedded network server publishes each uplink under its tree, the DevEUI filled in by the
+				// gateway's own $deveui topic variable.
+				out["uplink_topic"] = milesight.UplinkTopic(id)
+				out["downlink_topic"] = milesight.DownlinkTopic(id)
 				return c.Status(201).JSON(out)
 			}
 			root := "/aether/gateways/" + id

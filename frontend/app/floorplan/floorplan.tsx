@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Building2, Copy, DoorOpen, DraftingCompass, FileUp, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Trash2, Undo2, Cpu } from "lucide-react";
+import { Box, Building2, Copy, DoorOpen, DraftingCompass, FileUp, FolderKanban, Footprints, Grid3x3, Hand, ImagePlus, Layers, Magnet, Map as MapIcon, Maximize2, MousePointer2, PanelLeft, PanelRight, PenLine, Pentagon, PersonStanding, Plus, Radar, Redo2, Router, Ruler, Save, Square, Trash2, Undo2, Cpu } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "../topology/topology.css";
@@ -50,7 +50,7 @@ async function shrinkImage(file: File): Promise<string> {
   throw new Error("ย่อภาพให้เล็กพอไม่ได้ ลองใช้ภาพที่ความละเอียดต่ำกว่านี้");
 }
 
-export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onOpenDevice }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; onOpenDevice?: (external: string) => void }) {
+export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onOpenDevice, onOpenProjects }: { getToken: () => string; refresh: () => Promise<boolean>; onUnauthorized?: () => void; onOpenDevice?: (external: string) => void; onOpenProjects?: () => void }) {
   const handlers = useLatest({ getToken, refresh });
   const [client] = useState(() => createClientFrom(handlers));
   const onUnauthorizedRef = useLatest(onUnauthorized);
@@ -324,6 +324,7 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
         <h1 className="topo-bar-title">ผังอาคาร</h1>
         <span className={`topo-live ${connected ? "is-on" : ""}`} title={connected ? "ตำแหน่งและสถานะอัปเดตแบบ real-time" : "ใช้การตรวจเป็นรอบ"}><i aria-hidden="true" /> {connected ? "Live" : "Polling"}</span>
         <select className="fp-project" aria-label="โปรเจคผังอาคาร" value={project} onChange={(e) => guardSwitch(() => { siteRequest.current++; setProject(e.target.value); setSite(null); setSiteId(""); setFloorId(""); setDrafts({}); setSaved({}); setHistory({}); setSelection(null); })}><option value="" disabled>เลือกโปรเจค</option><option value="none">ยังไม่จัดโปรเจค</option>{snapshot?.projects?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        {onOpenProjects && <button type="button" className="topo-btn" onClick={() => guardSwitch(onOpenProjects)} title="สร้าง แก้ไข หรือเก็บโปรเจค และย้าย gateway เข้าโปรเจค"><FolderKanban size={15} /> จัดการโปรเจค</button>}
         <label className="fp-site">
           <Building2 size={14} />
           <select aria-label="เลือกอาคาร" value={siteId} onChange={(e) => guardSwitch(() => setSiteId(e.target.value))}>
@@ -426,7 +427,11 @@ export default function FloorPlanStudio({ getToken, refresh, onUnauthorized, onO
               <Building2 size={38} />
               <h2>{!project ? "เลือกโปรเจคเพื่อเปิดผังอาคาร" : "โปรเจคนี้ยังไม่มีผังอาคาร"}</h2>
               <p>วาดผนัง แบ่งโซน วาง gateway และอุปกรณ์ตามตำแหน่งจริง แล้วดู wearable เคลื่อนไปตามโซนทั้งแบบ 2 มิติและ 3 มิติ</p>
-              <button type="button" className="topo-btn primary" disabled={!project} onClick={() => setSiteDialog({ name: "", description: "", project_id: project === "none" ? "" : project })}><Plus size={15} /> สร้างอาคารแรก</button>
+              {!project && !snapshot?.projects?.length && <p>ยังไม่มีโปรเจค · สร้างโปรเจคก่อน แล้วย้าย gateway เข้าโปรเจคนั้น</p>}
+              <span className="fp-empty-actions">
+                <button type="button" className="topo-btn primary" disabled={!project} onClick={() => setSiteDialog({ name: "", description: "", project_id: project === "none" ? "" : project })}><Plus size={15} /> สร้างอาคารแรก</button>
+                {onOpenProjects && <button type="button" className={`topo-btn ${!project && !snapshot?.projects?.length ? "primary" : ""}`} onClick={onOpenProjects}><FolderKanban size={15} /> จัดการโปรเจค</button>}
+              </span>
             </div>
           )}
           {draft && mode === "2d" && <Editor2D draft={draft} tool={tool} itemType={itemType} selection={selection} snap={snap} showGrid={showGrid} showCoverage={showCoverage} assets={assets} imageURL={imageURL?.floor === floorId && hasImage ? imageURL.url : null} readOnly={false} box={box} onBox={(b) => setBoxes((all) => ({ ...all, [floorId]: b }))} onSelect={setSelection} onChange={change} onToolDone={() => setTool("select")} />}

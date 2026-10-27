@@ -11,6 +11,9 @@ const COLOR_LABEL: Record<string, string> = { mint: "เขียวมินต
 const utf8 = (s: string) => new TextEncoder().encode(s).length;
 
 export type ProjectInput = { name: string; description: string; color: string };
+/** A project being created (no id) or edited. */
+export type ProjectDraft = ProjectInput & { id?: string };
+export const newProjectDraft = (): ProjectDraft => ({ name: "", description: "", color: "mint" });
 
 export default function ProjectBar({
   projects,
@@ -36,10 +39,9 @@ export default function ProjectBar({
   onUpdate: (id: string, input: ProjectInput) => Promise<boolean>;
   onArchive: (project: Project) => void;
 }) {
-  const [editor, setEditor] = useState<{ id?: string; name: string; description: string; color: string } | null>(null);
+  const [editor, setEditor] = useState<ProjectDraft | null>(null);
   const [archive, setArchive] = useState<Project | null>(null);
   const active = projects.find((p) => p.id === scope);
-  const valid = editor !== null && editor.name.trim() !== "" && utf8(editor.name.trim()) <= 128 && utf8(editor.description) <= 500;
 
   return (
     <nav className="topo-projects" aria-label="โปรเจค">
@@ -71,83 +73,104 @@ export default function ProjectBar({
             </button>
           </>
         )}
-        <button type="button" className="topo-btn" onClick={() => setEditor({ name: "", description: "", color: "mint" })}>
+        <button type="button" className="topo-btn primary" onClick={() => setEditor(newProjectDraft())}>
           <FolderPlus size={15} /> โปรเจคใหม่
         </button>
       </span>
 
-      <Dialog open={editor !== null} onOpenChange={(open) => !open && !busy && setEditor(null)}>
-        <DialogContent className="topo-dialog">
-          <DialogHeader>
-            <DialogTitle>{editor?.id ? "แก้ไขโปรเจค" : "สร้างโปรเจค"}</DialogTitle>
-            <DialogDescription>โปรเจคใช้แยกชุด gateway และอุปกรณ์ เช่น ตามสถานที่หรือตามงานของลูกค้า · gateway ย้ายข้ามโปรเจคได้ภายหลัง</DialogDescription>
-          </DialogHeader>
-          {editor && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!valid) return;
-                const input = { name: editor.name.trim(), description: editor.description.trim(), color: editor.color };
-                void (editor.id ? onUpdate(editor.id, input) : onCreate(input)).then((ok) => ok && setEditor(null));
-              }}
-            >
-              <label>
-                ชื่อโปรเจค
-                <input autoFocus required value={editor.name} onChange={(e) => setEditor({ ...editor, name: e.target.value })} placeholder="เช่น โรงพยาบาล A · อาคารผู้ป่วยใน" />
-              </label>
-              <label>
-                รายละเอียด (ไม่บังคับ)
-                <input value={editor.description} onChange={(e) => setEditor({ ...editor, description: e.target.value })} placeholder="สถานที่ ผู้รับผิดชอบ หรือหมายเหตุ" />
-              </label>
-              <fieldset className="topo-colors">
-                <legend>สีประจำโปรเจค</legend>
-                {Object.keys(PROJECT_COLORS).map((c) => (
-                  <label key={c} className={editor.color === c ? "is-on" : ""} title={COLOR_LABEL[c]}>
-                    <input type="radio" name="project-color" value={c} checked={editor.color === c} onChange={() => setEditor({ ...editor, color: c })} />
-                    <span style={{ background: PROJECT_COLORS[c] }} aria-hidden="true" />
-                    <span className="sr-only">{COLOR_LABEL[c]}</span>
-                  </label>
-                ))}
-              </fieldset>
-              {error && (
-                <p className="topo-warn" role="alert">
-                  {error}
-                </p>
-              )}
-              <div className="topo-dialog-actions">
-                <button type="button" className="topo-btn" disabled={busy} onClick={() => setEditor(null)}>
-                  ยกเลิก
-                </button>
-                <button type="submit" className="topo-btn primary" disabled={busy || !valid}>
-                  {busy ? "กำลังบันทึก…" : editor.id ? "บันทึก" : "สร้างโปรเจค"}
-                </button>
-              </div>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={archive !== null} onOpenChange={(open) => !open && setArchive(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>เก็บโปรเจค “{archive?.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>โปรเจคจะหายจากรายการ · gateway และอุปกรณ์ในโปรเจคไม่ถูกลบ แต่จะกลับไปอยู่ใน “ยังไม่จัดโปรเจค” · Dashboard ที่ผูกกับโปรเจคนี้ยังใช้ได้</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
-            <AlertDialogAction
-              className="is-danger"
-              onClick={() => {
-                const p = archive!;
-                setArchive(null);
-                onArchive(p);
-              }}
-            >
-              เก็บโปรเจค
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ProjectEditor editor={editor} busy={busy} error={error} onChange={setEditor} onCreate={onCreate} onUpdate={onUpdate} />
+      <ArchiveProjectDialog project={archive} onClose={() => setArchive(null)} onArchive={onArchive} />
     </nav>
+  );
+}
+
+/** The create / edit dialog of a project, shared by the project bar and the projects page. */
+export function ProjectEditor({ editor, busy, error, onChange, onCreate, onUpdate }: {
+  editor: ProjectDraft | null;
+  busy: boolean;
+  error: string;
+  onChange: (editor: ProjectDraft | null) => void;
+  onCreate: (input: ProjectInput) => Promise<boolean>;
+  onUpdate: (id: string, input: ProjectInput) => Promise<boolean>;
+}) {
+  const valid = editor !== null && editor.name.trim() !== "" && utf8(editor.name.trim()) <= 128 && utf8(editor.description) <= 500;
+  return (
+    <Dialog open={editor !== null} onOpenChange={(open) => !open && !busy && onChange(null)}>
+      <DialogContent className="topo-dialog">
+        <DialogHeader>
+          <DialogTitle>{editor?.id ? "แก้ไขโปรเจค" : "สร้างโปรเจค"}</DialogTitle>
+          <DialogDescription>โปรเจคใช้แยกชุด gateway และอุปกรณ์ เช่น ตามสถานที่หรือตามงานของลูกค้า · gateway ย้ายข้ามโปรเจคได้ภายหลัง</DialogDescription>
+        </DialogHeader>
+        {editor && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!valid) return;
+              const input = { name: editor.name.trim(), description: editor.description.trim(), color: editor.color };
+              void (editor.id ? onUpdate(editor.id, input) : onCreate(input)).then((ok) => ok && onChange(null));
+            }}
+          >
+            <label>
+              ชื่อโปรเจค
+              <input autoFocus required value={editor.name} onChange={(e) => onChange({ ...editor, name: e.target.value })} placeholder="เช่น โรงพยาบาล A · อาคารผู้ป่วยใน" />
+            </label>
+            <label>
+              รายละเอียด (ไม่บังคับ)
+              <input value={editor.description} onChange={(e) => onChange({ ...editor, description: e.target.value })} placeholder="สถานที่ ผู้รับผิดชอบ หรือหมายเหตุ" />
+            </label>
+            <fieldset className="topo-colors">
+              <legend>สีประจำโปรเจค</legend>
+              {Object.keys(PROJECT_COLORS).map((c) => (
+                <label key={c} className={editor.color === c ? "is-on" : ""} title={COLOR_LABEL[c]}>
+                  <input type="radio" name="project-color" value={c} checked={editor.color === c} onChange={() => onChange({ ...editor, color: c })} />
+                  <span style={{ background: PROJECT_COLORS[c] }} aria-hidden="true" />
+                  <span className="sr-only">{COLOR_LABEL[c]}</span>
+                </label>
+              ))}
+            </fieldset>
+            {error && (
+              <p className="topo-warn" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="topo-dialog-actions">
+              <button type="button" className="topo-btn" disabled={busy} onClick={() => onChange(null)}>
+                ยกเลิก
+              </button>
+              <button type="submit" className="topo-btn primary" disabled={busy || !valid}>
+                {busy ? "กำลังบันทึก…" : editor.id ? "บันทึก" : "สร้างโปรเจค"}
+              </button>
+            </div>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Confirms archiving a project: it leaves the list, its gateways become unassigned, nothing is deleted. */
+export function ArchiveProjectDialog({ project, onClose, onArchive }: { project: Project | null; onClose: () => void; onArchive: (project: Project) => void }) {
+  return (
+    <AlertDialog open={project !== null} onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>เก็บโปรเจค “{project?.name}”?</AlertDialogTitle>
+          <AlertDialogDescription>โปรเจคจะหายจากรายการ · gateway และอุปกรณ์ในโปรเจคไม่ถูกลบ แต่จะกลับไปอยู่ใน “ยังไม่จัดโปรเจค” · Dashboard ที่ผูกกับโปรเจคนี้ยังใช้ได้</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>ยกเลิก</AlertDialogCancel>
+          <AlertDialogAction
+            className="is-danger"
+            onClick={() => {
+              const p = project!;
+              onClose();
+              onArchive(p);
+            }}
+          >
+            เก็บโปรเจค
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

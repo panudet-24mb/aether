@@ -5,6 +5,7 @@ import { Activity, Blinds, Bluetooth, Cloud, CloudOff, Cpu, DoorOpen, Droplets, 
 import { deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, TUYA_CLOUD_GATEWAY_MODEL } from "./catalog";
 import type { GatewayHealth } from "./model";
 import { useShowSimulated } from "../demo-mode";
+import { FrameView, type FrameNode } from "./frames";
 
 export type BrokerData = { configured: boolean; host: string; port: number | null; scheme: string; receiving: number; total: number };
 export type GatewayData = {
@@ -44,7 +45,7 @@ export type BrokerNode = Node<BrokerData, "broker">;
 export type GatewayNode = Node<GatewayData, "gateway">;
 export type DeviceNode = Node<DeviceData, "device">;
 export type DraftNode = Node<DraftData, "draft">;
-export type AppNode = BrokerNode | GatewayNode | DeviceNode | DraftNode;
+export type AppNode = BrokerNode | GatewayNode | DeviceNode | DraftNode | FrameNode;
 
 export const HEALTH_LABEL: Record<GatewayHealth, string> = {
   none: "ยังไม่มีบัญชี MQTT",
@@ -147,4 +148,4 @@ const Draft = memo(function Draft({ data, selected }: NodeProps<DraftNode>) {
   );
 });
 
-export const nodeTypes = { broker: Broker, gateway: Gateway, device: Device, draft: Draft };
+export const nodeTypes = { broker: Broker, gateway: Gateway, device: Device, draft: Draft, frame: FrameView };

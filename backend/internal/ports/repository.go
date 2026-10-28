@@ -51,6 +51,10 @@ type Repository interface {
 	SetDeviceRoaming(context.Context, domain.Principal, string, bool) error
 	GetLayout(context.Context, domain.Principal, string) (domain.Layout, error)
 	SaveLayout(context.Context, domain.Principal, domain.LayoutChange) (domain.LayoutSaved, error)
+	ListFrames(context.Context, domain.Principal, string) ([]domain.TopologyFrame, error)
+	CreateFrame(context.Context, domain.Principal, domain.TopologyFrame) (domain.TopologyFrame, error)
+	UpdateFrame(context.Context, domain.Principal, domain.TopologyFrame) (domain.TopologyFrame, error)
+	DeleteFrame(context.Context, domain.Principal, string) error
 	ListSites(context.Context, domain.Principal) ([]domain.Site, error)
 	GetSite(context.Context, domain.Principal, string) (domain.Site, error)
 	TwinState(context.Context, domain.Principal, string, string) (domain.TwinState, error)

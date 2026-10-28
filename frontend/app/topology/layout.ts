@@ -13,8 +13,8 @@ export const NODE_ID = {
   draft: (id: string) => `draft:${id}`,
 };
 
-export type NodeKind = "broker" | "gateway" | "device" | "draft" | "unknown";
-const PREFIX_KIND: Record<string, NodeKind> = { gw: "gateway", dev: "device", draft: "draft" };
+export type NodeKind = "broker" | "gateway" | "device" | "draft" | "frame" | "unknown";
+const PREFIX_KIND: Record<string, NodeKind> = { gw: "gateway", dev: "device", draft: "draft", frame: "frame" };
 
 export const parseNodeId = (id: string): { kind: NodeKind; ref: string } => {
   if (id === "broker") return { kind: "broker", ref: "" };

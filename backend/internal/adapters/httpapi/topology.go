@@ -88,4 +88,69 @@ func topologyRoutes(r fiber.Router, s *app.Service) {
 		}
 		return c.JSON(out)
 	})
+
+	// Frames: named rectangles that group nodes on the canvas. Reading needs only membership; drawing them is for
+	// owner and admin (app.Service), within the caller's projects (row level security).
+	r.Get("/topology/frames", func(c fiber.Ctx) error {
+		v, e := view(c)
+		if e != nil {
+			return e
+		}
+		out, e := s.Repo.ListFrames(c.Context(), principal(c), v)
+		if e != nil {
+			return e
+		}
+		return c.JSON(fiber.Map{"items": out})
+	})
+	type frameInput struct {
+		View      string   `json:"view"`
+		ProjectID *string  `json:"project_id"`
+		Name      string   `json:"name"`
+		Color     string   `json:"color"`
+		X         *float64 `json:"x"`
+		Y         *float64 `json:"y"`
+		W         *float64 `json:"w"`
+		H         *float64 `json:"h"`
+	}
+	read := func(c fiber.Ctx) (frameInput, app.FrameInput, error) {
+		var in frameInput
+		if e := body(c, &in, 4096); e != nil {
+			return in, app.FrameInput{}, e
+		}
+		if in.X == nil || in.Y == nil || in.W == nil || in.H == nil {
+			return in, app.FrameInput{}, domain.ErrInvalid
+		}
+		return in, app.FrameInput{Name: in.Name, Color: in.Color, X: *in.X, Y: *in.Y, W: *in.W, H: *in.H}, nil
+	}
+	r.Post("/topology/frames", func(c fiber.Ctx) error {
+		in, f, e := read(c)
+		if e != nil {
+			return e
+		}
+		if in.View == "" {
+			in.View = domain.LayoutViewConnect
+		}
+		out, e := s.CreateFrame(c.Context(), principal(c), in.View, in.ProjectID, f)
+		if e != nil {
+			return e
+		}
+		return c.Status(201).JSON(out)
+	})
+	r.Post("/topology/frames/:id/update", func(c fiber.Ctx) error {
+		_, f, e := read(c)
+		if e != nil {
+			return e
+		}
+		out, e := s.UpdateFrame(c.Context(), principal(c), c.Params("id"), f)
+		if e != nil {
+			return e
+		}
+		return c.JSON(out)
+	})
+	r.Post("/topology/frames/:id/delete", func(c fiber.Ctx) error {
+		if e := s.DeleteFrame(c.Context(), principal(c), c.Params("id")); e != nil {
+			return e
+		}
+		return c.SendStatus(204)
+	})
 }

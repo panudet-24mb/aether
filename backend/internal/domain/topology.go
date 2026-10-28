@@ -68,6 +68,34 @@ type LayoutSaved struct {
 	Ignored []string `json:"ignored"`
 }
 
+// TopologyFrame is a named rectangle on the canvas that groups the nodes inside it (migration 00052). It only
+// arranges the picture: membership is where a node sits, so nothing is stored per node.
+type TopologyFrame struct {
+	ID        string    `json:"id"`
+	View      string    `json:"view"`
+	ProjectID *string   `json:"project_id"`
+	Name      string    `json:"name"`
+	Color     string    `json:"color"`
+	X         float64   `json:"x"`
+	Y         float64   `json:"y"`
+	W         float64   `json:"w"`
+	H         float64   `json:"h"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Frame limits: per view of a workspace, and the side of a frame in canvas units.
+const (
+	MaxFrames    = 200
+	MinFrameSide = 40
+	MaxFrameSide = 20000
+)
+
+// ValidGeometry reports whether the frame's position and size are finite and within the limits the table checks.
+func (f TopologyFrame) ValidGeometry() bool {
+	side := func(v float64) bool { return !math.IsNaN(v) && v >= MinFrameSide && v <= MaxFrameSide }
+	return CanvasPoint{X: f.X, Y: f.Y}.Valid() && side(f.W) && side(f.H)
+}
+
 // LayoutConflict is returned when BaseVersion is stale; it carries the current layout so the client can merge.
 type LayoutConflict struct{ Current Layout }
 

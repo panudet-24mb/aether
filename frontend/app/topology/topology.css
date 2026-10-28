@@ -521,3 +521,21 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 .dc-toast { margin: 0; padding: 6px 9px; border-radius: 8px; background: var(--color-danger-dark); color: var(--color-danger); font-size: 12px; }
 @keyframes dc-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .dc-switch.is-pending .dc-knob { animation: none; } }
+
+/* Frames (frames.tsx): drawn under the nodes. Only the title bar and the resize handles take the pointer, so
+   nodes, edges and the pane inside a frame keep working as before. */
+.react-flow__node.react-flow__node-frame { pointer-events: none; }
+.topo-frame { position: relative; border: 1.5px dashed var(--frame-tone); border-radius: 12px; background: color-mix(in oklab, var(--frame-tone) 7%, transparent); }
+.react-flow__node-frame.selected .topo-frame { border-style: solid; }
+.topo-frame-head { pointer-events: all; position: absolute; left: 8px; bottom: calc(100% + 4px); display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 20px); padding: 4px 10px; border: 1px solid var(--frame-tone); border-radius: 8px; background: var(--color-panel); color: var(--color-ink); font-size: 12.5px; white-space: nowrap; cursor: grab; }
+.react-flow__node-frame:not(.draggable) .topo-frame-head { cursor: default; }
+.topo-frame-head strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; color: var(--frame-tone); }
+.topo-frame-head small { color: var(--color-muted); font-size: 11.5px; }
+.topo-frame-head small b { color: var(--color-danger); font-weight: 600; }
+.topo-frame-edit { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--color-muted); cursor: pointer; }
+.topo-frame-edit:hover { color: var(--color-ink); background: var(--color-panel-raised); }
+.react-flow__node-frame .react-flow__resize-control { pointer-events: all; }
+.topo-frame-draw { position: absolute; inset: 0; z-index: 6; cursor: crosshair; touch-action: none; background: color-mix(in oklab, var(--color-accent) 4%, transparent); }
+.topo-frame-draw-hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 5px 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-panel); color: var(--color-muted); font-size: 12.5px; pointer-events: none; white-space: nowrap; }
+.topo-frame-ghost { position: absolute; border: 1.5px dashed var(--color-accent); border-radius: 10px; background: color-mix(in oklab, var(--color-accent) 10%, transparent); pointer-events: none; }
+.topo-frame-delete { margin-right: auto; }

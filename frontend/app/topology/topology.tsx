@@ -17,11 +17,12 @@ import {
   type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search } from "lucide-react";
+import { LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search, SquareDashed } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./topology.css";
-import { ApiError, createClientFrom, type Device, type GatewayCreated, type Layout, type MQTTCredentials, type Snapshot } from "./api";
+import { ApiError, createClientFrom, type Device, type GatewayCreated, type Layout, type MQTTCredentials, type Snapshot, type TopologyFrame } from "./api";
+import { FRAME_MIN, FrameDialog, frameNodeId, framesInScope, inside, type FrameDraft } from "./frames";
 import { useLatest } from "./use-latest";
 import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, LORAWAN_GATEWAY_MODEL, profileFitsGateway, profilesForBrand, suggestProfile, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
@@ -120,6 +121,21 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
   const [removeReg, setRemoveReg] = useState<Device | null>(null);
   const [moveReg, setMoveReg] = useState<{ registration: Device; gatewayId: string } | null>(null);
   const [layoutVersion, bumpLayout] = useReducer((n: number) => n + 1, 0);
+  // Frames (frames.tsx): the server's list, the dialog, the draw tool and the frame selected for resizing.
+  const [frames, setFrames] = useState<TopologyFrame[]>([]);
+  const [frameDraft, setFrameDraft] = useState<FrameDraft | null>(null);
+  const [frameError, setFrameError] = useState("");
+  const [frameSaving, setFrameSaving] = useState(false);
+  const [drawing, setDrawing] = useState(false);
+  const [ghost, setGhost] = useState<{ x0: number; y0: number; x1: number; y1: number; left: number; top: number } | null>(null);
+  const [frameSel, setFrameSel] = useState<string | null>(null);
+  /** Frame sizes by node id (positions live in `positions` like every node). */
+  const frameSizes = useRef<Record<string, { w: number; h: number }>>({});
+  /** Frames being moved or resized here: the server's copy does not overwrite them until they are saved. */
+  const frameBusy = useRef(new Set<string>());
+  const drawStart = useRef<XYPosition | null>(null);
+  /** The frame being dragged and where its member nodes started. */
+  const frameDrag = useRef<{ id: string; start: XYPosition; members: Map<string, XYPosition> } | null>(null);
   // A dismissed warning stays dismissed for this browser session; a different warning shows again.
   const [dismissedWarning, setDismissedWarningState] = useState(() => {
     try {
@@ -315,7 +331,24 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     saveTimer.current = setTimeout(() => void flushRef.current(), SAVE_DEBOUNCE_MS);
   }, []);
 
+  const loadFrames = useCallback(async () => {
+    try {
+      const list = await client.frames();
+      for (const f of list) {
+        const id = frameNodeId(f.id);
+        if (frameBusy.current.has(id)) continue;
+        positions.current[id] = { x: f.x, y: f.y };
+        frameSizes.current[id] = { w: f.w, h: f.h };
+      }
+      setFrames(list);
+      bumpLayout();
+    } catch {
+      // frames are decoration: the board works without them, and the next signal or poll tries again
+    }
+  }, [client]);
+
   const refreshLayout = useCallback(async () => {
+    void loadFrames();
     try {
       const layout = await client.layout();
       // First successful load after the server was unreachable at start: moves made meanwhile are saved now.
@@ -328,7 +361,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     } catch {
       // the next signal or poll tries again
     }
-  }, [client, adoptServer]);
+  }, [client, adoptServer, loadFrames]);
 
   // Freshness keeps decaying between polls and when polling fails, so a dead backend cannot leave devices "online".
   const serverNow = snapshot ? snapshot.serverTime + Math.max(0, now - receivedAt) : 0;
@@ -550,6 +583,31 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     [tenant, fullTopology],
   );
 
+  // Frames under the current project filter. Drawing them is for owner and admin who may arrange the board.
+  const shownFrames = useMemo(() => framesInScope(frames, activeScope, new Set((snapshot?.projects ?? []).map((p) => p.id))), [frames, activeScope, snapshot]);
+  const canManageFrames = canEdit && (role === "owner" || role === "admin");
+  const frameRect = (f: TopologyFrame) => {
+    const id = frameNodeId(f.id);
+    const p = positions.current[id] ?? { x: f.x, y: f.y }, s = frameSizes.current[id] ?? { w: f.w, h: f.h };
+    return { x: p.x, y: p.y, w: s.w, h: s.h };
+  };
+  const frameActions = useLatest({
+    edit: (ref: string) => {
+      const f = frames.find((x) => x.id === ref);
+      if (!f) return;
+      setFrameError("");
+      setFrameDraft({ id: f.id, name: f.name, color: f.color, rect: frameRect(f) });
+    },
+    resized: (ref: string, rect: { x: number; y: number; w: number; h: number }) => void saveFrameRect(ref, rect),
+  });
+  const frameCallbacks = useMemo(
+    () => ({
+      onEdit: (ref: string) => frameActions.current.edit(ref),
+      onResized: (ref: string, rect: { x: number; y: number; w: number; h: number }) => frameActions.current.resized(ref, rect),
+    }),
+    [frameActions],
+  );
+
   // Nodes are derived from the model plus the positions the user has dragged to (kept in a ref, versioned by layoutVersion).
   const { nodes, added } = useMemo(() => {
     void layoutVersion;
@@ -569,6 +627,37 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       }
     };
     const base = (id: string) => ({ id, position: pos[id] ?? { x: 0, y: 0 }, selected: selectedId === id, measured: measured.current[id] });
+    // Frames first, so they are drawn under every node. Members are counted from where the nodes sit now.
+    for (const f of shownFrames) {
+      const id = frameNodeId(f.id);
+      const position = pos[id] ?? { x: f.x, y: f.y };
+      const size = frameSizes.current[id] ?? { w: f.w, h: f.h };
+      const rect = { x: position.x, y: position.y, w: size.w, h: size.h };
+      let members = 0, alerts = 0;
+      for (const g of topology.gateways) {
+        const gid = NODE_ID.gateway(g.gateway.id);
+        if (pos[gid] && inside(rect, pos[gid], measured.current[gid])) members++;
+      }
+      for (const d of topology.devices) {
+        const did = NODE_ID.device(d.external);
+        if (!visibleDevices.has(did) || !pos[did] || !inside(rect, pos[did], measured.current[did])) continue;
+        members++;
+        if (isAlerting(d)) alerts++;
+      }
+      push({
+        id,
+        type: "frame",
+        position,
+        width: size.w,
+        height: size.h,
+        zIndex: -1,
+        draggable: canManageFrames,
+        dragHandle: ".topo-frame-head",
+        selected: frameSel === id,
+        measured: measured.current[id],
+        data: { name: f.name, color: f.color, w: size.w, h: size.h, members, alerts, editable: canManageFrames, ...frameCallbacks },
+      });
+    }
     const settings = topology.broker.settings;
     push({
       ...base(NODE_ID.broker),
@@ -623,7 +712,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       push({ ...base(id), type: "draft", data: { profile: draft.profile, label: profile?.label ?? draft.profile, dim: dimmed.has(id) } });
     }
     return { nodes: next, added };
-  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope, restricted]);
+  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope, restricted, shownFrames, frameSel, canManageFrames, frameCallbacks]);
 
   // Commit auto-placed positions after render (never during it), save them for everyone, and fit the viewport once.
   useEffect(() => {
@@ -673,6 +762,13 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       if (c.type === "position" && c.position) {
         positions.current[c.id] = c.position;
         changed = true;
+      } else if (c.type === "dimensions" && c.dimensions && c.id.startsWith("frame:")) {
+        // A frame's size is its own state; only the resize handles change it (setAttributes), not measurement.
+        if (c.setAttributes) {
+          frameBusy.current.add(c.id);
+          frameSizes.current[c.id] = { w: c.dimensions.width, h: c.dimensions.height };
+          changed = true;
+        }
       } else if (c.type === "dimensions" && c.dimensions) {
         const prev = measured.current[c.id];
         if (!prev || prev.width !== c.dimensions.width || prev.height !== c.dimensions.height) {
@@ -781,14 +877,111 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
 
   function relayout() {
     // Only the nodes on screen are laid out and saved: under a project filter every other project's positions and
-    // the broker stay where they are, for this member and everyone else.
+    // the broker stay where they are, for this member and everyone else. Nodes inside a frame stay in their group.
     const auto = autoLayout(layoutInput);
-    const ids = Object.keys(auto).filter((id) => id !== NODE_ID.broker || (activeScope === "all" && !restrictedRef.current));
+    const rects = shownFrames.map(frameRect);
+    const framed = (id: string) => !!positions.current[id] && rects.some((r) => inside(r, positions.current[id], measured.current[id]));
+    const ids = Object.keys(auto).filter((id) => (id !== NODE_ID.broker || (activeScope === "all" && !restrictedRef.current)) && !framed(id));
     for (const id of ids) positions.current[id] = auto[id];
     schedule(ids);
     bumpLayout();
     requestAnimationFrame(() => fitView({ padding: 0.2, duration: 300 }));
   }
+
+  // Frames are saved on their own endpoint; the nodes a dragged frame carries are saved with the layout as usual.
+  const roundRect = (r: { x: number; y: number; w: number; h: number }) => ({
+    x: Math.round(clampCoord(r.x) * 100) / 100,
+    y: Math.round(clampCoord(r.y) * 100) / 100,
+    w: Math.round(Math.min(20000, Math.max(FRAME_MIN, r.w)) * 100) / 100,
+    h: Math.round(Math.min(20000, Math.max(FRAME_MIN, r.h)) * 100) / 100,
+  });
+  /** The project a new frame belongs to: the one being viewed, or none under "all" / "unassigned". */
+  const frameProject = activeScope !== "all" && activeScope !== "none" ? activeScope : null;
+
+  async function saveFrameRect(ref: string, rect: { x: number; y: number; w: number; h: number }) {
+    const f = frames.find((x) => x.id === ref);
+    const id = frameNodeId(ref);
+    try {
+      if (f) await client.updateFrame(ref, { name: f.name, color: f.color, ...roundRect(rect) });
+    } catch (e) {
+      setActionError(`บันทึกกรอบไม่สำเร็จ · ${e instanceof Error ? e.message : ""}`);
+    } finally {
+      frameBusy.current.delete(id);
+      void loadFrames();
+    }
+  }
+
+  async function saveFrame(draft: FrameDraft) {
+    setFrameSaving(true);
+    setFrameError("");
+    try {
+      const body = { name: draft.name, color: draft.color, ...roundRect(draft.rect) };
+      if (draft.id) await client.updateFrame(draft.id, body);
+      else await client.createFrame({ ...body, project_id: frameProject });
+      setFrameDraft(null);
+      setNotice(draft.id ? `บันทึกกรอบ ${draft.name} แล้ว` : `สร้างกรอบ ${draft.name} แล้ว · ลากหัวกรอบเพื่อย้ายทั้งกลุ่ม`);
+      await loadFrames();
+    } catch (e) {
+      setFrameError(e instanceof ApiError && e.status === 403 ? "ไม่มีสิทธิ์วาดกรอบที่นี่ · ผู้ที่เห็นบางโปรเจคต้องเลือกโปรเจคก่อน" : e instanceof Error ? e.message : "บันทึกกรอบไม่สำเร็จ");
+    } finally {
+      setFrameSaving(false);
+    }
+  }
+
+  async function removeFrame(ref: string) {
+    setFrameSaving(true);
+    setFrameError("");
+    try {
+      await client.deleteFrame(ref);
+      setFrameDraft(null);
+      setFrameSel(null);
+      setNotice("ลบกรอบแล้ว · อุปกรณ์ยังอยู่ที่เดิม");
+      await loadFrames();
+    } catch (e) {
+      setFrameError(e instanceof Error ? e.message : "ลบกรอบไม่สำเร็จ");
+    } finally {
+      setFrameSaving(false);
+    }
+  }
+
+  function startDrawing() {
+    if (drawing) {
+      setDrawing(false);
+      setGhost(null);
+      return;
+    }
+    if (restrictedRef.current && !frameProject) {
+      setNotice("เลือกโปรเจคในแถบโปรเจคก่อน แล้วจึงวาดกรอบ");
+      return;
+    }
+    setDrawing(true);
+  }
+
+  /** The draw tool: a rectangle dragged over the canvas becomes a new frame once it is named. */
+  function finishDrawing(box: { x0: number; y0: number; x1: number; y1: number }) {
+    setDrawing(false);
+    setGhost(null);
+    const a = screenToFlowPosition({ x: Math.min(box.x0, box.x1), y: Math.min(box.y0, box.y1) });
+    const b = screenToFlowPosition({ x: Math.max(box.x0, box.x1), y: Math.max(box.y0, box.y1) });
+    if (b.x - a.x < FRAME_MIN || b.y - a.y < FRAME_MIN) {
+      setNotice("กรอบเล็กเกินไป · ลากให้คลุมอุปกรณ์ที่ต้องการจัดกลุ่ม");
+      return;
+    }
+    setFrameError("");
+    setFrameDraft({ name: "", color: "blue", rect: { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y } });
+  }
+
+  useEffect(() => {
+    if (!drawing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDrawing(false);
+        setGhost(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawing]);
 
   async function issueMQTT(gatewayId: string, rotate: boolean) {
     const c = await client.issueMQTT(gatewayId, rotate);
@@ -844,7 +1037,12 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <PanelRight size={15} />
           </button>
           <span className="topo-bar-sep" aria-hidden="true" />
-          <button type="button" className="topo-btn" onClick={relayout} title="จัดวางอัตโนมัติ · broker → gateway → อุปกรณ์" aria-label="จัดวางอัตโนมัติ">
+          {canManageFrames && (
+            <button type="button" className={`topo-btn ${drawing ? "is-on" : ""}`} aria-pressed={drawing} onClick={startDrawing} title="วาดกรอบกลุ่ม · ลากคลุมอุปกรณ์ที่ต้องการจัดกลุ่ม (Esc เพื่อยกเลิก)">
+              <SquareDashed size={15} /> วาดกรอบ
+            </button>
+          )}
+          <button type="button" className="topo-btn" onClick={relayout} title="จัดวางอัตโนมัติ · broker → gateway → อุปกรณ์ · อุปกรณ์ในกรอบอยู่ที่เดิม" aria-label="จัดวางอัตโนมัติ">
             <LayoutGrid size={15} />
           </button>
           <button type="button" className="topo-btn" onClick={() => fitView({ padding: 0.2, duration: 300 })} title="ย่อ/ขยายให้พอดีจอ" aria-label="ย่อ/ขยายให้พอดีจอ">
@@ -952,19 +1150,58 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             edges={edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
-            onNodeClick={(_, n) => select(n.id)}
+            onNodeClick={(_, n) => {
+              if (n.type === "frame") {
+                setFrameSel(n.id);
+                return;
+              }
+              setFrameSel(null);
+              select(n.id);
+            }}
             onEdgeClick={(_, e) => {
               const n = normalise(e);
               if (n) select(n.device.kind === "device" ? NODE_ID.device(n.device.ref) : NODE_ID.draft(n.device.ref));
               else if (e.source) select(e.source);
             }}
-            onPaneClick={() => setSelection(null)}
+            onPaneClick={() => {
+              setSelection(null);
+              setFrameSel(null);
+            }}
             onNodeDragStart={(_, node, dragged) => {
               for (const n of dragged.length ? dragged : [node]) dragging.current.add(n.id);
+              if (node.type !== "frame") return;
+              // A frame carries the nodes inside it: remember where each started.
+              const f = frames.find((x) => frameNodeId(x.id) === node.id);
+              if (!f) return;
+              const rect = frameRect(f);
+              const members = new Map<string, XYPosition>();
+              for (const n of nodes) {
+                if (n.type === "frame" || (n.id === NODE_ID.broker && !n.draggable)) continue;
+                const p = positions.current[n.id];
+                if (p && inside(rect, p, measured.current[n.id])) members.set(n.id, { ...p });
+              }
+              frameDrag.current = { id: node.id, start: { x: rect.x, y: rect.y }, members };
+              frameBusy.current.add(node.id);
+              for (const id of members.keys()) dragging.current.add(id);
+            }}
+            onNodeDrag={(_, node) => {
+              const d = frameDrag.current;
+              if (!d || node.id !== d.id) return;
+              const dx = node.position.x - d.start.x, dy = node.position.y - d.start.y;
+              for (const [id, p] of d.members) positions.current[id] = { x: p.x + dx, y: p.y + dy };
+              bumpLayout();
             }}
             onNodeDragStop={(_, node, dragged) => {
               const ids = (dragged.length ? dragged : [node]).map((n) => n.id);
               for (const id of ids) dragging.current.delete(id);
+              const d = frameDrag.current;
+              if (d && node.id === d.id) {
+                frameDrag.current = null;
+                for (const id of d.members.keys()) dragging.current.delete(id);
+                ids.push(...d.members.keys());
+                const size = frameSizes.current[d.id];
+                if (size) void saveFrameRect(d.id.slice("frame:".length), { x: node.position.x, y: node.position.y, w: size.w, h: size.h });
+              }
               schedule(ids);
             }}
             nodesDraggable={canEdit}
@@ -992,8 +1229,30 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--color-grid)" />
             <Controls showInteractive={false} position="bottom-left" />
-            <MiniMap pannable zoomable position="bottom-right" nodeColor={(n) => (n.type === "broker" ? "#80b7ff" : n.type === "gateway" ? "#ace5ce" : n.type === "draft" ? "#e8b775" : "#6f8f88")} maskColor="rgba(8,14,16,.65)" />
+            <MiniMap pannable zoomable position="bottom-right" nodeColor={(n) => (n.type === "frame" ? "rgba(128,183,255,.14)" : n.type === "broker" ? "#80b7ff" : n.type === "gateway" ? "#ace5ce" : n.type === "draft" ? "#e8b775" : "#6f8f88")} maskColor="rgba(8,14,16,.65)" />
           </ReactFlow>
+          {drawing && (
+            <div
+              className="topo-frame-draw"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                const r = e.currentTarget.getBoundingClientRect();
+                drawStart.current = { x: e.clientX, y: e.clientY };
+                setGhost({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, left: r.left, top: r.top });
+              }}
+              onPointerMove={(e) => setGhost((g) => (g ? { ...g, x1: e.clientX, y1: e.clientY } : g))}
+              onPointerUp={(e) => {
+                // From the event, not from state: a quick drag can end before the last move was rendered.
+                const s = drawStart.current;
+                drawStart.current = null;
+                if (s) finishDrawing({ x0: s.x, y0: s.y, x1: e.clientX, y1: e.clientY });
+              }}
+            >
+              <span className="topo-frame-draw-hint">ลากคลุมอุปกรณ์ที่ต้องการจัดกลุ่ม · Esc เพื่อยกเลิก</span>
+              {ghost && <i className="topo-frame-ghost" style={{ left: Math.min(ghost.x0, ghost.x1) - ghost.left, top: Math.min(ghost.y0, ghost.y1) - ghost.top, width: Math.abs(ghost.x1 - ghost.x0), height: Math.abs(ghost.y1 - ghost.y0) }} />}
+            </div>
+          )}
           {snapshot && topology.gateways.length === 0 && (
             <div className="topo-hint">
               <strong>ยังไม่มี gateway ใน workspace นี้</strong>
@@ -1356,6 +1615,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <FrameDialog draft={frameDraft} busy={frameSaving} error={frameError} onClose={() => setFrameDraft(null)} onSave={(d) => void saveFrame(d)} onDelete={(id) => void removeFrame(id)} />
     </section>
   );
 }

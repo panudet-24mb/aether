@@ -17,12 +17,13 @@ import {
   type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LayoutGrid, Maximize2, PanelLeft, PanelRight, RefreshCw, Search, SquareDashed } from "lucide-react";
+import { LayoutGrid, Lock, LockOpen, Maximize2, PanelLeft, PanelRight, RefreshCw, Search, SquareDashed } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import "./topology.css";
 import { ApiError, createClientFrom, type Device, type GatewayCreated, type Layout, type MQTTCredentials, type Snapshot, type TopologyFrame } from "./api";
 import { FRAME_MIN, FrameDialog, frameNodeId, framesInScope, inside, type FrameDraft } from "./frames";
+import { edgeTypes } from "./routes";
 import { useLatest } from "./use-latest";
 import { DEVICE_PROFILES, deviceBrands, deviceProfile, EDGE_GATEWAY_MODEL, formatMAC, gatewayModel, LORAWAN_GATEWAY_MODEL, profileFitsGateway, profilesForBrand, suggestProfile, TUYA_CLOUD_GATEWAY_MODEL, Z2M_GATEWAY_MODEL, Z2M_GENERIC_PROFILE, type DeviceProfile } from "./catalog";
 import DiscoveryList from "./discovery";
@@ -129,6 +130,11 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
   const [drawing, setDrawing] = useState(false);
   const [ghost, setGhost] = useState<{ x0: number; y0: number; x1: number; y1: number; left: number; top: number } | null>(null);
   const [frameSel, setFrameSel] = useState<string | null>(null);
+  // The board is locked whenever the page opens: nothing moves until "แก้ไขผัง" is switched on.
+  const [editing, setEditing] = useState(false);
+  /** Bend points of connection lines (routes.tsx), by edge id, and the line selected for bending. */
+  const [routes, setRoutes] = useState<Record<string, XYPosition[]>>({});
+  const [edgeSel, setEdgeSel] = useState<string | null>(null);
   /** Frame sizes by node id (positions live in `positions` like every node). */
   const frameSizes = useRef<Record<string, { w: number; h: number }>>({});
   /** Frames being moved or resized here: the server's copy does not overwrite them until they are saved. */
@@ -347,8 +353,18 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     }
   }, [client]);
 
+  const loadRoutes = useCallback(async () => {
+    try {
+      const list = await client.routes();
+      setRoutes(Object.fromEntries(list.map((r) => [r.edge, r.points])));
+    } catch {
+      // straight lines until the next signal or poll
+    }
+  }, [client]);
+
   const refreshLayout = useCallback(async () => {
     void loadFrames();
+    void loadRoutes();
     try {
       const layout = await client.layout();
       // First successful load after the server was unreachable at start: moves made meanwhile are saved now.
@@ -361,7 +377,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     } catch {
       // the next signal or poll tries again
     }
-  }, [client, adoptServer, loadFrames]);
+  }, [client, adoptServer, loadFrames, loadRoutes]);
 
   // Freshness keeps decaying between polls and when polling fails, so a dead backend cannot leave devices "online".
   const serverNow = snapshot ? snapshot.serverTime + Math.max(0, now - receivedAt) : 0;
@@ -651,18 +667,18 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
         width: size.w,
         height: size.h,
         zIndex: -1,
-        draggable: canManageFrames,
+        draggable: canManageFrames && editing,
         dragHandle: ".topo-frame-head",
         selected: frameSel === id,
         measured: measured.current[id],
-        data: { name: f.name, color: f.color, w: size.w, h: size.h, members, alerts, editable: canManageFrames, ...frameCallbacks },
+        data: { name: f.name, color: f.color, w: size.w, h: size.h, members, alerts, editable: canManageFrames && editing, ...frameCallbacks },
       });
     }
     const settings = topology.broker.settings;
     push({
       ...base(NODE_ID.broker),
       // Only a member who sees every project may move the broker (the server keeps it otherwise).
-      draggable: !restricted,
+      draggable: !restricted && editing,
       type: "broker",
       data: {
         configured: topology.broker.configured,
@@ -712,7 +728,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       push({ ...base(id), type: "draft", data: { profile: draft.profile, label: profile?.label ?? draft.profile, dim: dimmed.has(id) } });
     }
     return { nodes: next, added };
-  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope, restricted, shownFrames, frameSel, canManageFrames, frameCallbacks]);
+  }, [snapshot, topology, layoutInput, visibleDevices, drafts, dimmed, selection, layoutVersion, activeScope, restricted, shownFrames, frameSel, canManageFrames, frameCallbacks, editing]);
 
   // Commit auto-placed positions after render (never during it), save them for everyone, and fit the viewport once.
   useEffect(() => {
@@ -726,12 +742,31 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     }
   }, [nodes, added, schedule, fitView]);
 
+  // A bent line is saved at once (one line per save); the list comes back with the next "layout" signal.
+  const routeActions = useLatest({
+    save: (edge: string, points: XYPosition[]) => {
+      setRoutes((all) => {
+        const next = { ...all };
+        if (points.length) next[edge] = points;
+        else delete next[edge];
+        return next;
+      });
+      client.saveRoute(edge, points).catch((e: unknown) => {
+        setActionError(`บันทึกเส้นทางสายไม่สำเร็จ · ${e instanceof Error ? e.message : ""}`);
+        void loadRoutes();
+      });
+    },
+  });
+  const onRoute = useMemo(() => (edge: string, points: XYPosition[]) => routeActions.current.save(edge, points), [routeActions]);
+  /** Lines that can be bent: a gateway's link to the broker and a registration's line to its gateway. */
+  const routed = (id: string) => ({ type: "routed" as const, data: { points: routes[id] ?? [], editing: editing && canEdit && edgeSel === id, onRoute }, selected: edgeSel === id });
+
   const edges = useMemo<Edge[]>(() => {
     const out: Edge[] = [];
     const cls = (base: string, a: string, b: string) => `topo-edge ${base}${dimmed.has(a) || dimmed.has(b) ? " edge-dim" : ""}`;
     for (const g of topology.gateways) {
       const id = NODE_ID.gateway(g.gateway.id);
-      out.push({ id: `link:${g.gateway.id}`, source: id, sourceHandle: "up", target: NODE_ID.broker, targetHandle: "in", type: "smoothstep", className: cls(`edge-${g.health}`, id, NODE_ID.broker), animated: g.health === "receiving", markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 } });
+      out.push({ id: `link:${g.gateway.id}`, source: id, sourceHandle: "up", target: NODE_ID.broker, targetHandle: "in", ...routed(`link:${g.gateway.id}`), className: cls(`edge-${g.health}`, id, NODE_ID.broker), animated: g.health === "receiving", markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 } });
     }
     const gatewayIds = new Set(topology.gateways.map((g) => g.gateway.id));
     for (const d of topology.devices) {
@@ -744,7 +779,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
         const heard = d.heard.find((h) => h.gatewayId === reg.gateway_id);
         const gw = NODE_ID.gateway(reg.gateway_id);
         seen.add(reg.gateway_id);
-        out.push({ id: `adopt:${reg.id}`, source: dev, sourceHandle: "up", target: gw, targetHandle: "down", type: "smoothstep", className: cls(d.roaming && here && here !== reg.gateway_id ? "edge-adopted edge-away" : "edge-adopted", dev, gw), reconnectable: "target", animated: isFresh(heard?.receivedAt, topology.serverTime), label: heard?.rssi != null ? `${heard.rssi} dBm` : undefined, markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 } });
+        out.push({ id: `adopt:${reg.id}`, source: dev, sourceHandle: "up", target: gw, targetHandle: "down", ...routed(`adopt:${reg.id}`), className: cls(d.roaming && here && here !== reg.gateway_id ? "edge-adopted edge-away" : "edge-adopted", dev, gw), reconnectable: "target", animated: isFresh(heard?.receivedAt, topology.serverTime), label: heard?.rssi != null ? `${heard.rssi} dBm` : undefined, markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 } });
       }
       for (const h of d.heard) {
         if (seen.has(h.gatewayId) || !gatewayIds.has(h.gatewayId)) continue;
@@ -753,7 +788,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
       }
     }
     return out;
-  }, [topology, visibleDevices, dimmed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `routed` reads only routes, editing, canEdit, edgeSel and onRoute
+  }, [topology, visibleDevices, dimmed, routes, editing, canEdit, edgeSel, onRoute]);
 
   const onNodesChange = useCallback((changes: NodeChange<AppNode>[]) => {
     // Selection is owned by this component (inspector); React Flow only reports positions and measurements.
@@ -1037,12 +1073,29 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <PanelRight size={15} />
           </button>
           <span className="topo-bar-sep" aria-hidden="true" />
-          {canManageFrames && (
+          {canEdit && (
+            <button
+              type="button"
+              className={`topo-btn ${editing ? "primary" : ""}`}
+              aria-pressed={editing}
+              onClick={() => {
+                setEditing((v) => !v);
+                setDrawing(false);
+                setGhost(null);
+                setEdgeSel(null);
+                setFrameSel(null);
+              }}
+              title={editing ? "ล็อคผัง · อุปกรณ์ กรอบ และสายจะลากไม่ได้จนกว่าจะเปิดแก้ไขอีกครั้ง" : "ปลดล็อคเพื่อย้ายอุปกรณ์ จัดกรอบ และดัดเส้นทางสาย"}
+            >
+              {editing ? <LockOpen size={15} /> : <Lock size={15} />} {editing ? "เสร็จสิ้น" : "แก้ไขผัง"}
+            </button>
+          )}
+          {canManageFrames && editing && (
             <button type="button" className={`topo-btn ${drawing ? "is-on" : ""}`} aria-pressed={drawing} onClick={startDrawing} title="วาดกรอบกลุ่ม · ลากคลุมอุปกรณ์ที่ต้องการจัดกลุ่ม (Esc เพื่อยกเลิก)">
               <SquareDashed size={15} /> วาดกรอบ
             </button>
           )}
-          <button type="button" className="topo-btn" onClick={relayout} title="จัดวางอัตโนมัติ · broker → gateway → อุปกรณ์ · อุปกรณ์ในกรอบอยู่ที่เดิม" aria-label="จัดวางอัตโนมัติ">
+          <button type="button" className="topo-btn" disabled={!editing} onClick={relayout} title={editing ? "จัดวางอัตโนมัติ · broker → gateway → อุปกรณ์ · อุปกรณ์ในกรอบอยู่ที่เดิม" : "จัดวางอัตโนมัติ · กด “แก้ไขผัง” ก่อน"} aria-label="จัดวางอัตโนมัติ">
             <LayoutGrid size={15} />
           </button>
           <button type="button" className="topo-btn" onClick={() => fitView({ padding: 0.2, duration: 300 })} title="ย่อ/ขยายให้พอดีจอ" aria-label="ย่อ/ขยายให้พอดีจอ">
@@ -1149,6 +1202,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             onNodeClick={(_, n) => {
               if (n.type === "frame") {
@@ -1159,6 +1213,8 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
               select(n.id);
             }}
             onEdgeClick={(_, e) => {
+              // In edit mode a stable line is selected for bending; the inspector opens as before.
+              setEdgeSel(editing && e.type === "routed" ? e.id : null);
               const n = normalise(e);
               if (n) select(n.device.kind === "device" ? NODE_ID.device(n.device.ref) : NODE_ID.draft(n.device.ref));
               else if (e.source) select(e.source);
@@ -1166,6 +1222,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             onPaneClick={() => {
               setSelection(null);
               setFrameSel(null);
+              setEdgeSel(null);
             }}
             onNodeDragStart={(_, node, dragged) => {
               for (const n of dragged.length ? dragged : [node]) dragging.current.add(n.id);
@@ -1204,7 +1261,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
               }
               schedule(ids);
             }}
-            nodesDraggable={canEdit}
+            nodesDraggable={canEdit && editing}
             onConnect={onConnect}
             onReconnect={(oldEdge, connection) => {
               // Dragging the gateway end of an adopted (green) link onto another gateway moves the registration.
@@ -1231,6 +1288,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
             <Controls showInteractive={false} position="bottom-left" />
             <MiniMap pannable zoomable position="bottom-right" nodeColor={(n) => (n.type === "frame" ? "rgba(128,183,255,.14)" : n.type === "broker" ? "#80b7ff" : n.type === "gateway" ? "#ace5ce" : n.type === "draft" ? "#e8b775" : "#6f8f88")} maskColor="rgba(8,14,16,.65)" />
           </ReactFlow>
+          {editing && !drawing && <div className="topo-edit-hint">กำลังแก้ไขผัง · ลากอุปกรณ์หรือกรอบเพื่อย้าย · คลิกสายเพื่อดัดเส้นทาง · กด “เสร็จสิ้น” เพื่อล็อค</div>}
           {drawing && (
             <div
               className="topo-frame-draw"

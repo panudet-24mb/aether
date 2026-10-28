@@ -99,6 +99,8 @@ export type LayoutChange = { version: number; positions: Record<string, { x: num
 /** A named rectangle grouping the nodes inside it on the connect canvas (owner/admin draw it, scoped to a project). */
 export type TopologyFrame = { id: string; view: string; project_id: string | null; name: string; color: string; x: number; y: number; w: number; h: number; updated_at: string };
 export type FrameInput = { name: string; color: string; x: number; y: number; w: number; h: number };
+/** Bend points of a connection line ("link:<gateway>" or "adopt:<registration>"), shared by the workspace. */
+export type EdgeRoute = { edge: string; points: { x: number; y: number }[] };
 
 export type DeviceEventRow = { id: string; gateway_id: string; external_id: string; device_name: string; event_type: string; detail: Record<string, unknown>; occurred_at: string };
 export type Discovery = { gateway_id: string; external_id: string; last_seen: string; source: string; model?: string; kind?: string; rssi: number | null; profile?: DeviceProfile; /** Zigbee2MQTT definition's vendor and description (for a Tuya device: "Tuya" and its name). */ vendor?: string; description?: string; /** Tuya devices under an Aether Edge (source "tuya" imported, "tuya_lan" seen on the LAN without a key) or a Tuya Cloud link (source "tuya_cloud"). */ key_status?: TuyaKeyStatus; local_capable?: boolean; ip?: string; protocol_version?: string; /** Imported Tuya device: how an owner/admin set it to be reached (source "tuya_ble" once set to Bluetooth), and whether the Edge hears it over Bluetooth. */ transport?: TuyaTransport; ble_seen?: boolean };
@@ -380,6 +382,9 @@ export function createClient(getToken: () => string, refresh: () => Promise<bool
     createFrame: (input: FrameInput & { project_id: string | null }) => call<TopologyFrame>("/topology/frames", input),
     updateFrame: (id: string, input: FrameInput) => call<TopologyFrame>(`/topology/frames/${id}/update`, input),
     deleteFrame: (id: string) => call<void>(`/topology/frames/${id}/delete`, {}),
+    routes: async () => (await call<{ items: EdgeRoute[] }>("/topology/routes")).items,
+    /** No points draws the line straight again. */
+    saveRoute: (edge: string, points: { x: number; y: number }[]) => call<void>("/topology/routes", { edge, points }),
     catalog: () => call<CatalogResponse>("/catalog"),
     zigbeeCatalog: (q: string, opts: { vendor?: string; category?: string; limit?: number; vendors?: boolean } = {}) => {
       const params = new URLSearchParams({ q, limit: String(opts.limit ?? 50) });

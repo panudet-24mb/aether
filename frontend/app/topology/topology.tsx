@@ -479,6 +479,10 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
         }
         setTenant(me.tenant_id);
         setRole(me.role);
+        // Frames and line routes load with the layout, not with the poll: once the signal socket is up the poll
+        // only checks the layout every few rounds, so they would wait for the next "layout" signal.
+        void loadFrames();
+        void loadRoutes();
       })
       .catch((e: unknown) => {
         if (!active) return;
@@ -492,7 +496,7 @@ function Canvas({ getToken, refresh, onAdd, onUnauthorized }: DeviceTopologyProp
     return () => {
       active = false;
     };
-  }, [client]);
+  }, [client, loadFrames, loadRoutes]);
 
   // Push: a signal only says "refetch". Bursts (one uplink = packet + events + alerts) collapse into one load.
   const pending = useRef<{ timer?: ReturnType<typeof setTimeout>; force: boolean }>({ force: false });

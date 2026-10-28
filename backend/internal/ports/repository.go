@@ -55,6 +55,8 @@ type Repository interface {
 	CreateFrame(context.Context, domain.Principal, domain.TopologyFrame) (domain.TopologyFrame, error)
 	UpdateFrame(context.Context, domain.Principal, domain.TopologyFrame) (domain.TopologyFrame, error)
 	DeleteFrame(context.Context, domain.Principal, string) error
+	ListRoutes(context.Context, domain.Principal, string) ([]domain.EdgeRoute, error)
+	SaveRoute(ctx context.Context, p domain.Principal, view, kind, ref string, points []domain.CanvasPoint) error
 	ListSites(context.Context, domain.Principal) ([]domain.Site, error)
 	GetSite(context.Context, domain.Principal, string) (domain.Site, error)
 	TwinState(context.Context, domain.Principal, string, string) (domain.TwinState, error)

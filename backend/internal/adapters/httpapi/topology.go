@@ -153,4 +153,35 @@ func topologyRoutes(r fiber.Router, s *app.Service) {
 		}
 		return c.SendStatus(204)
 	})
+
+	// Routes: the bend points of a connection line. Reading needs only membership; saving is a layout write.
+	r.Get("/topology/routes", func(c fiber.Ctx) error {
+		v, e := view(c)
+		if e != nil {
+			return e
+		}
+		out, e := s.Repo.ListRoutes(c.Context(), principal(c), v)
+		if e != nil {
+			return e
+		}
+		return c.JSON(fiber.Map{"items": out})
+	})
+	type routeInput struct {
+		View   string               `json:"view"`
+		Edge   string               `json:"edge"`
+		Points []domain.CanvasPoint `json:"points"`
+	}
+	r.Post("/topology/routes", func(c fiber.Ctx) error {
+		var in routeInput
+		if e := body(c, &in, 8192); e != nil {
+			return e
+		}
+		if in.View == "" {
+			in.View = domain.LayoutViewConnect
+		}
+		if e := s.SaveRoute(c.Context(), principal(c), in.View, in.Edge, in.Points); e != nil {
+			return e
+		}
+		return c.SendStatus(204)
+	})
 }

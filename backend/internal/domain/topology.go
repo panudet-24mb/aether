@@ -96,6 +96,30 @@ func (f TopologyFrame) ValidGeometry() bool {
 	return CanvasPoint{X: f.X, Y: f.Y}.Valid() && side(f.W) && side(f.H)
 }
 
+// EdgeRoute is the bend points a connection on the canvas is drawn through (migration 00053). Edge is the canvas
+// edge id: "link:<gateway id>" (gateway to broker) or "adopt:<registration id>" (registration to its gateway).
+type EdgeRoute struct {
+	Edge   string        `json:"edge"`
+	Points []CanvasPoint `json:"points"`
+}
+
+// Route limits: bend points of one line, and stored routes per view of a workspace.
+const (
+	MaxRoutePoints = 16
+	MaxRoutes      = 2000
+)
+
+var routeEdgeRe = regexp.MustCompile(`^(link|adopt):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+
+// ParseRouteEdge splits a routable edge id into its kind and the gateway or registration it names.
+func ParseRouteEdge(id string) (kind, ref string, ok bool) {
+	m := routeEdgeRe.FindStringSubmatch(id)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
 // LayoutConflict is returned when BaseVersion is stale; it carries the current layout so the client can merge.
 type LayoutConflict struct{ Current Layout }
 

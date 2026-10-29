@@ -33,3 +33,10 @@
 .studio .studio-group-actions select{padding:4px 6px;font-size:11px;max-width:150px}
 .studio .studio-group-actions button{gap:4px;font-size:11px}
 .studio-device-name{font-weight:600;color:var(--color-ink);letter-spacing:0}
+/* Groups sit side by side in a four-column grid per level; a group's own panels and subgroups use its width. */
+.studio-groups{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;align-items:start}
+.studio-groups>.studio-group{margin-bottom:0;min-width:0}
+.studio-group-body>.studio-grid+.studio-groups{margin-top:16px}
+.studio-group-body{min-width:0}
+@media(max-width:1000px){.studio-groups,.studio-group-body>.studio-grid,.studio-group-body>.studio-groups{grid-template-columns:repeat(2,minmax(0,1fr))!important}.studio-groups>.studio-group{grid-column:span 2!important}}
+.studio-group-head{flex-wrap:wrap}.studio-group-head input{min-width:120px}

@@ -172,6 +172,28 @@ func TestUplinks(t *testing.T) {
 		{`{"battery":98,"distance":1200,"occupancy":"vacant"}`, "VS330", func(m map[string]float64, _ map[string]string, _ string) bool {
 			return m["motion"] == 0 && m["distance"] == 1200
 		}},
+		// The codec on a UG65 (firmware 60.0.0.43) sends the same states as 0 / 1, and the WS202's daylight as
+		// light_status (payloads as received from a WS202 and a VS330).
+		{`{"pir":0,"battery":100,"light_status":0}`, "WS202", func(m map[string]float64, _ map[string]string, k string) bool {
+			_, raw := m["light_status"]
+			return k == zigbee2mqtt.CategoryOccupancy && m["motion"] == 0 && m["daylight"] == 0 && !raw
+		}},
+		{`{"pir":1,"battery":100,"light_status":1}`, "WS202", func(m map[string]float64, _ map[string]string, k string) bool {
+			return k == zigbee2mqtt.CategoryOccupancy && m["motion"] == 1 && m["daylight"] == 1
+		}},
+		{`{"battery":68,"distance":2000,"occupancy":0}`, "VS330", func(m map[string]float64, _ map[string]string, k string) bool {
+			return k == zigbee2mqtt.CategoryOccupancy && m["motion"] == 0 && m["distance"] == 2000
+		}},
+		{`{"battery":68,"distance":15,"occupancy":1}`, "VS330", func(m map[string]float64, _ map[string]string, k string) bool {
+			return k == zigbee2mqtt.CategoryOccupancy && m["motion"] == 1
+		}},
+		{`{"battery":90,"leakage_status":1}`, "WS303", func(m map[string]float64, _ map[string]string, k string) bool {
+			return k == zigbee2mqtt.CategoryLeak && m["leak"] == 1
+		}},
+		{`{"battery":90,"pir":2}`, "WS202", func(m map[string]float64, _ map[string]string, _ string) bool {
+			_, motion := m["motion"]
+			return !motion // a number other than 0 / 1 is not a state
+		}},
 	} {
 		ev, e := ParseUplink(m, []byte(c.object))
 		if e != nil || ev.Raw != nil || ev.RSSI != nil || Model(ev) != c.model {

@@ -26,7 +26,9 @@ export type LoRaWANValue = { key: string; label: string; value: string; unit?: s
 const SENSOR_STATUS: Record<string, string> = { polarizing: "กำลังอุ่นเครื่อง", "device error": "เซนเซอร์ผิดพลาด" };
 const GAS: [metric: string, label: string, digits: number][] = [["nh3", "NH₃", 2], ["h2s", "H₂S", 3]];
 /** Values shown elsewhere on the card (main value, footer) or not meant for people. */
-const SHOWN_ELSEWHERE = new Set(["temperature", "humidity", "battery", "motion", "leak", "rssi", "snr", "linkquality"]);
+const SHOWN_ELSEWHERE = new Set(["temperature", "humidity", "battery", "motion", "leak", "rssi", "snr", "linkquality",
+  // Stored raw before the backend read a UG65 codec's numeric states as daylight (milesight/state.go).
+  "light_status", "pir", "occupancy"]);
 const LABEL: Record<string, [label: string, unit?: string, digits?: number]> = {
   distance: ["ระยะถึงพื้น", "mm"], illuminance: ["แสง", "lx"], co2: ["CO₂", "ppm"], tvoc: ["TVOC", "ppb"], pm25: ["PM2.5", "µg/m³"], pm10: ["PM10", "µg/m³"],
   pressure: ["ความกดอากาศ", "hPa", 1],

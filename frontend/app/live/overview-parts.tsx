@@ -9,6 +9,7 @@ import type { DeviceEventRow, LiveSensor, Project, Reading } from "../topology/a
 import { deviceProfile, formatMAC, switchGangs } from "../topology/catalog";
 import DeviceControlsPanel, { type CommandClient } from "../topology/device-controls";
 import { environmentReading } from "./measurements";
+import { isLoRaWAN, lorawanCharts, lorawanRadio, lorawanValues } from "./lorawan";
 import { COMFORT_NOTE, DOOR_LEFT_OPEN_MS, OCCUPIED_WINDOW_MS, activityStrip, comfortOf, doorText, duration, type Comfort, type DoorState, type Occupancy, type StripCell } from "./office";
 import TemplateSettings from "../template-settings";
 import { CONTROL_KINDS } from "./overview3d/types";
@@ -76,6 +77,26 @@ export function Spark({ values, tone }: { values: number[]; tone: string }) {
 }
 
 export const number = (value: number | undefined, digits = 0) => value != null && Number.isFinite(value) ? value.toFixed(digits) : "—";
+
+/** Chart of one numeric metric (a LoRaWAN gas reading), same drawing as `Chart`. */
+export function MetricChart({ readings: rawReadings, metric, label, digits }: { readings: Reading[]; metric: string; label: string; digits: number }) {
+  const readings = rawReadings.filter((r) => Number.isFinite(r.metrics?.[metric]));
+  if (readings.length < 2) return <div className="ov-chart-empty">ต้องมีอย่างน้อย 2 จุดในช่วงเวลานี้</div>;
+  const values = readings.map((r) => r.metrics![metric]);
+  const pad = Math.max((Math.max(...values) - Math.min(...values)) * 0.1, 10 ** -digits);
+  const lo = Math.max(0, Math.min(...values) - pad), hi = Math.max(...values) + pad;
+  const from = Date.parse(readings[0].received_at), dur = Math.max(1, Date.parse(readings[readings.length - 1].received_at) - from);
+  const y = (v: number) => 150 - ((v - lo) / (hi - lo)) * 130;
+  const pts = readings.map((r) => `${44 + ((Date.parse(r.received_at) - from) / dur) * 650},${y(r.metrics![metric])}`).join(" ");
+  return (
+    <svg className="ov-chart" viewBox="0 0 710 176" role="img" aria-label={`กราฟ ${label}`}>
+      {[lo, (lo + hi) / 2, hi].map((v) => <g key={v}><line x1="44" x2="700" y1={y(v)} y2={y(v)} className="ov-chart-grid" /><text x="4" y={y(v) + 4}>{v.toFixed(digits)}</text></g>)}
+      <polyline points={pts} fill="none" className="ov-chart-line is-gas" />
+      <text x="44" y="172">{new Date(readings[0].received_at).toLocaleString("th-TH", { hour12: false, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</text>
+      <text x="700" y="172" textAnchor="end">{new Date(readings[readings.length - 1].received_at).toLocaleTimeString("th-TH", { hour12: false })}</text>
+    </svg>
+  );
+}
 
 export function Chart({ readings: rawReadings, metric, limit }: { readings: Reading[]; metric: "temperature" | "humidity"; limit?: number | null }) {
   const readings = rawReadings.filter(environmentReading);
@@ -281,6 +302,7 @@ export function DeviceDetail({ opened, now, events, history, range, onRange, cli
 }) {
   const doorLog = opened.door ? events.filter((e) => e.external_id.toLowerCase() === opened.external && (e.event_type === "door_open" || e.event_type === "door_closed")).slice(0, 10) : [];
   const openedComfort: Comfort | null = opened.kind === "environment" || opened.kind === "occupancy" ? comfortOf(opened.reading?.temperature, opened.reading?.humidity) : null;
+  const lora = isLoRaWAN(deviceProfile(opened.profileId ?? ""));
   return (
     <div className="ov-sheet-body">
       <div className={`ov-status is-${opened.status}${opened.sos ? " is-sos" : ""}`}>{opened.sos ? "SOS · กดปุ่มฉุกเฉิน ยังไม่รับทราบ" : opened.status === "alert" ? "ต้องตรวจสอบ" :opened.status === "online" ? "ปกติ · รับข้อมูลล่าสุด" : opened.status === "stale" ? "ข้อมูลเริ่มเก่า" : "ขาดการติดต่อ"}{opened.reading ? ` · ${ago(opened.reading.received_at, now)} ที่แล้ว` : ""}</div>
@@ -295,12 +317,13 @@ export function DeviceDetail({ opened, now, events, history, range, onRange, cli
           <div><strong>{opened.reading?.metrics?.linkquality ?? "—"}</strong>สัญญาณ Zigbee (LQI)</div>
         </> : <>
         <div><strong>{number(opened.reading?.battery)}%</strong>แบตเตอรี่</div>
-        <div><strong>{opened.reading?.rssi ?? "—"} dBm</strong>RSSI</div>
+        {!lora && <div><strong>{opened.reading?.rssi ?? "—"} dBm</strong>RSSI</div>}
         </>}
         {deviceProfile(opened.profileId ?? "")?.kinds?.includes("motion") && !opened.occupancy && <div><strong>{number(opened.reading?.metrics?.accel_g, 2)} g</strong>ความเร่ง</div>}
         {opened.kind === "tamper" && <div><strong>{opened.reading?.metrics?.tamper == null ? "—" : opened.reading.metrics.tamper === 1 ? "ถูกถอด" : "ติดอยู่"}</strong>สถานะกันถอด</div>}
         {deviceProfile(opened.profileId ?? "")?.model === "B10" && <div><strong>{events.filter((e) => e.external_id.toLowerCase() === opened.external && e.event_type === "button").map((e) => new Date(e.occurred_at).toLocaleTimeString("th-TH"))[0] ?? "ยังไม่พบเหตุการณ์"}</strong>กดปุ่มล่าสุด</div>}
         {opened.wearable && <div><strong>{opened.zone ?? "—"}</strong>โซนปัจจุบัน</div>}
+        {lora && [...lorawanValues(opened.reading), ...lorawanRadio(opened.reading)].map((v) => <div key={v.key} className={v.tone ? `is-${v.tone}` : ""}><strong>{v.value}{v.unit ? ` ${v.unit}` : ""}</strong>{v.label}</div>)}
       </div>
       {openedComfort && <p className="topo-note">{COMFORT_NOTE} · นอกช่วงนี้แสดงเป็น ร้อน / เย็น / ชื้น / แห้ง</p>}
       {opened.deviceId && (opened.external.startsWith("0x") || CONTROL_KINDS.has(opened.kind)) && <DeviceControlsPanel client={client} deviceId={opened.deviceId} refreshKey={opened.reading?.received_at} />}
@@ -328,6 +351,7 @@ export function DeviceDetail({ opened, now, events, history, range, onRange, cli
           <div className="ov-range"><span>ย้อนหลัง</span>{["1h", "24h", "7d"].map((r) => <button key={r} type="button" className={range === r ? "is-on" : ""} aria-pressed={range === r} onClick={() => onRange(r)}>{r === "1h" ? "1 ชม." : r === "24h" ? "24 ชม." : "7 วัน"}</button>)}</div>
           <h3>อุณหภูมิ</h3><Chart readings={history} metric="temperature" limit={opened.thresholds?.temperature_high} />
           <h3>ความชื้น</h3><Chart readings={history} metric="humidity" limit={opened.thresholds?.humidity_high} />
+          {lora && lorawanCharts(history).map((g) => <Fragment key={g.key}><h3>{g.label} (ppm)</h3><MetricChart readings={history} metric={g.key} label={g.label} digits={g.digits} /></Fragment>)}
           <TemplateSettings key={opened.key} gateway={opened.gatewayId} external={opened.external} name={opened.name} currentTemplate={opened.templateId} getToken={getToken} />
         </>
       )}

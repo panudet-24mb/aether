@@ -3,8 +3,12 @@ import type { Reading } from "../topology/api";
 /** Decoder name of a Zigbee2MQTT state message (backend zigbee2mqtt.FrameState). */
 const ZIGBEE_FRAME = "z2m-state@1";
 
+/** Decoder name of a Milesight LoRaWAN uplink (backend milesight.FrameUplink): it carries its values in `metrics`
+ *  through the same pipeline as Zigbee2MQTT, so it is read the same way. */
+const MILESIGHT_FRAME = "milesight-up@1";
+
 export function isZigbeeReading(r: Reading): boolean {
-  return !!r.frames?.includes(ZIGBEE_FRAME);
+  return !!r.frames?.includes(ZIGBEE_FRAME) || !!r.frames?.includes(MILESIGHT_FRAME);
 }
 
 /**

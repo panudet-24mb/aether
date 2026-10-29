@@ -39,14 +39,47 @@ type Definition struct {
 	Groups []Group `json:"groups,omitempty"`
 }
 
-// Group is a named section of a dashboard (Definition.Groups).
+// Group is a named section of a dashboard (Definition.Groups). A group with a ParentID sits inside that group;
+// siblings keep their order in Definition.Groups.
 type Group struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	ParentID string `json:"parent_id,omitempty"`
 }
 
-// MaxGroups bounds the sections of one dashboard (as many as it has panels).
-const MaxGroups = 16
+// MaxGroups bounds the sections of one dashboard (as many as it has panels); MaxGroupDepth bounds their nesting
+// (a top-level group is depth 1), so headers stay readable.
+const (
+	MaxGroups     = 16
+	MaxGroupDepth = 3
+)
+
+// validGroups reports a dashboard's groups: unique ids, names, parents that exist, no cycle, at most MaxGroupDepth
+// deep.
+func validGroups(groups []Group) bool {
+	if len(groups) > MaxGroups {
+		return false
+	}
+	parent := map[string]string{}
+	for _, g := range groups {
+		if _, dup := parent[g.ID]; !Text(g.ID, 64) || dup || !Text(g.Name, 128) {
+			return false
+		}
+		parent[g.ID] = g.ParentID
+	}
+	for _, g := range groups {
+		depth := 1
+		for at := g.ParentID; at != ""; at = parent[at] {
+			if _, known := parent[at]; !known || at == g.ID {
+				return false // a parent that does not exist, or the group is its own ancestor
+			}
+			if depth++; depth > MaxGroupDepth {
+				return false
+			}
+		}
+	}
+	return true
+}
 type Panel struct {
 	ID         string `json:"id"`
 	Title      string `json:"title"`
@@ -124,11 +157,11 @@ func Validate(i Item) error {
 		if len(d.Groups) > MaxGroups {
 			return fmt.Errorf("dashboard limit is %d groups", MaxGroups)
 		}
+		if !validGroups(d.Groups) {
+			return fmt.Errorf("invalid groups")
+		}
 		groups := map[string]bool{}
 		for _, g := range d.Groups {
-			if !Text(g.ID, 64) || groups[g.ID] || !Text(g.Name, 128) {
-				return fmt.Errorf("invalid group")
-			}
 			groups[g.ID] = true
 		}
 		seen := map[string]bool{}

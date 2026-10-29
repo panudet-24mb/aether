@@ -26,3 +26,9 @@
 .studio-group-empty{font-size:12px!important;padding:14px;border:1px dashed var(--color-border);border-radius:8px;text-align:center}
 .studio-panel header select[aria-label="กลุ่มของ widget"]{width:92px}
 .studio-panel header input{min-width:40px}.studio-panel header select,.studio-panel header button{flex-shrink:0}
+/* Nested groups: indented (inline margin per level) with a guide line. */
+.studio-group.depth-2,.studio-group.depth-3{padding-left:12px;border-left:2px solid var(--color-border)}
+.studio-group.depth-2 .studio-group-head,.studio-group.depth-3 .studio-group-head{background:transparent}
+.studio-group.depth-2 .studio-group-head input,.studio-group.depth-3 .studio-group-head input{font-size:14px!important}
+.studio .studio-group-actions select{padding:4px 6px;font-size:11px;max-width:150px}
+.studio .studio-group-actions button{gap:4px;font-size:11px}

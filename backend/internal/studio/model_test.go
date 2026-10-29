@@ -56,6 +56,32 @@ func TestDashboardGroupsValidation(t *testing.T) {
 	}
 }
 
+// Groups nest up to MaxGroupDepth levels under parents that exist, without cycles.
+func TestDashboardNestedGroupsValidation(t *testing.T) {
+	dashboard := func(groups string) Item {
+		return Item{Kind: "dashboard", Name: "Building", Brand: "Any", Model: "Any", Version: 1, Visibility: "private", Definition: json.RawMessage(`{"groups":[` + groups + `],"panels":[]}`)}
+	}
+	ok := `{"id":"b","name":"อาคาร"},{"id":"m","name":"ชั้น M","parent_id":"b"},{"id":"w","name":"ห้องน้ำหญิง","parent_id":"m"},{"id":"o","name":"ส่วนกลาง"}`
+	if e := Validate(dashboard(ok)); e != nil {
+		t.Fatal(e)
+	}
+	// A child may come before its parent in the list: order is only the sibling order.
+	if e := Validate(dashboard(`{"id":"m","name":"ชั้น M","parent_id":"b"},{"id":"b","name":"อาคาร"}`)); e != nil {
+		t.Fatal(e)
+	}
+	for name, bad := range map[string]string{
+		"too deep":       `{"id":"a","name":"A"},{"id":"b","name":"B","parent_id":"a"},{"id":"c","name":"C","parent_id":"b"},{"id":"d","name":"D","parent_id":"c"}`,
+		"unknown parent": `{"id":"a","name":"A","parent_id":"x"}`,
+		"own parent":     `{"id":"a","name":"A","parent_id":"a"}`,
+		"cycle":          `{"id":"a","name":"A","parent_id":"b"},{"id":"b","name":"B","parent_id":"a"}`,
+		"cycle above":    `{"id":"a","name":"A","parent_id":"b"},{"id":"b","name":"B","parent_id":"c"},{"id":"c","name":"C","parent_id":"b"}`,
+	} {
+		if Validate(dashboard(bad)) == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}
+
 // A controls panel names registered devices instead of one stream; nothing else may borrow its shape.
 func TestControlsPanelValidation(t *testing.T) {
 	item := func(panel string) Item {

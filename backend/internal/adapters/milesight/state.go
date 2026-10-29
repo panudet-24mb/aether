@@ -18,7 +18,9 @@ import (
 // SensorDecoders, main branch, 2026-09); no decoder code is used here.
 
 // binaryStatus maps a Milesight status field to the Zigbee2MQTT feature it means and its on/off values. Both
-// spellings of the WS202's daylight are accepted: the decoder emits dim/bright, its README says dark/light.
+// spellings of the WS202's daylight are accepted: the decoder emits dim/bright, its README says dark/light. The codec
+// on a UG65 (firmware 60.0.0.43) emits the same states as numbers instead: "pir": 0/1, "occupancy": 0/1, and the
+// WS202's daylight as "light_status": 0/1, so 1 is on and 0 is off for every field here (statusOf).
 var binaryStatus = map[string]struct {
 	name    string
 	on, off []string
@@ -26,7 +28,25 @@ var binaryStatus = map[string]struct {
 	"leakage_status": {"water_leak", []string{"leak"}, []string{"normal"}},
 	"pir":            {"occupancy", []string{"trigger"}, []string{"normal", "idle"}},
 	"daylight":       {"daylight", []string{"bright", "light"}, []string{"dim", "dark"}},
+	"light_status":   {"daylight", []string{"bright", "light"}, []string{"dim", "dark"}},
 	"occupancy":      {"presence", []string{"occupied"}, []string{"vacant"}},
+}
+
+// statusOf reads a status field as text (its on / off words), as a number (1 / 0) or as a boolean.
+func statusOf(raw json.RawMessage, on, off []string) (bool, bool) {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return statusValue(s, on, off)
+	}
+	var b bool
+	if json.Unmarshal(raw, &b) == nil {
+		return b, true
+	}
+	var n float64
+	if json.Unmarshal(raw, &n) == nil && (n == 0 || n == 1) {
+		return n == 1, true
+	}
+	return false, false
 }
 
 // units of the numeric fields Milesight decoders emit, by name.
@@ -71,10 +91,8 @@ func State(ev Event) (map[string]any, []zigbee2mqtt.Feature) {
 		}
 		var s string
 		if status, ok := binaryStatus[key]; ok {
-			if json.Unmarshal(raw, &s) == nil {
-				if v, known := statusValue(s, status.on, status.off); known {
-					add(status.name, "binary", v)
-				}
+			if v, known := statusOf(raw, status.on, status.off); known {
+				add(status.name, "binary", v)
 			}
 			continue
 		}

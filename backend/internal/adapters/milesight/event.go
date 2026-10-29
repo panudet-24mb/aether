@@ -121,7 +121,7 @@ func Model(ev Event) string {
 	switch {
 	case has("leakage_status"):
 		return "WS303"
-	case has("pir", "daylight"):
+	case has("pir", "daylight", "light_status"):
 		return "WS202"
 	case has("nh3", "h2s", "nh3_sensor_status", "h2s_sensor_status"):
 		return "GS301"

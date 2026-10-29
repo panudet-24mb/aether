@@ -34,7 +34,19 @@ type Definition struct {
 	// ProjectID scopes a dashboard's device picker to one project by default; panels may still reference
 	// devices of other projects in the same workspace. Empty means "all projects".
 	ProjectID string `json:"project_id,omitempty"`
+	// Groups are a dashboard's named sections, in display order; a panel joins one by its GroupID. They only
+	// arrange the page: whether a viewer has a group collapsed is that viewer's own choice, never stored here.
+	Groups []Group `json:"groups,omitempty"`
 }
+
+// Group is a named section of a dashboard (Definition.Groups).
+type Group struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// MaxGroups bounds the sections of one dashboard (as many as it has panels).
+const MaxGroups = 16
 type Panel struct {
 	ID         string `json:"id"`
 	Title      string `json:"title"`
@@ -46,6 +58,8 @@ type Panel struct {
 	Height     int    `json:"height"`
 	// Devices are the registered devices (core.devices ids) of a controls panel (WidgetID ControlsWidget).
 	Devices []string `json:"devices,omitempty"`
+	// GroupID is the dashboard group (Definition.Groups) this panel sits in; empty: above every group.
+	GroupID string `json:"group_id,omitempty"`
 }
 
 // ControlsWidget is the first-party controls panel: switches for the chosen devices, drawn natively by the app
@@ -107,8 +121,21 @@ func Validate(i Item) error {
 				return fmt.Errorf("invalid project")
 			}
 		}
+		if len(d.Groups) > MaxGroups {
+			return fmt.Errorf("dashboard limit is %d groups", MaxGroups)
+		}
+		groups := map[string]bool{}
+		for _, g := range d.Groups {
+			if !Text(g.ID, 64) || groups[g.ID] || !Text(g.Name, 128) {
+				return fmt.Errorf("invalid group")
+			}
+			groups[g.ID] = true
+		}
 		seen := map[string]bool{}
 		for _, p := range d.Panels {
+			if p.GroupID != "" && !groups[p.GroupID] {
+				return fmt.Errorf("panel in an unknown group")
+			}
 			if p.WidgetID == ControlsWidget {
 				if !validControls(p.Devices) || p.GatewayID != "" || p.ExternalID != "" {
 					return fmt.Errorf("invalid controls panel")

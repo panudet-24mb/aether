@@ -61,7 +61,7 @@ func TestDashboardNestedGroupsValidation(t *testing.T) {
 	dashboard := func(groups string) Item {
 		return Item{Kind: "dashboard", Name: "Building", Brand: "Any", Model: "Any", Version: 1, Visibility: "private", Definition: json.RawMessage(`{"groups":[` + groups + `],"panels":[]}`)}
 	}
-	ok := `{"id":"b","name":"อาคาร"},{"id":"m","name":"ชั้น M","parent_id":"b"},{"id":"w","name":"ห้องน้ำหญิง","parent_id":"m"},{"id":"o","name":"ส่วนกลาง"}`
+	ok := `{"id":"b","name":"อาคาร"},{"id":"m","name":"ชั้น M","parent_id":"b","width":2,"height":3},{"id":"w","name":"ห้องน้ำหญิง","parent_id":"m","width":1},{"id":"o","name":"ส่วนกลาง","height":1}`
 	if e := Validate(dashboard(ok)); e != nil {
 		t.Fatal(e)
 	}
@@ -75,6 +75,9 @@ func TestDashboardNestedGroupsValidation(t *testing.T) {
 		"own parent":     `{"id":"a","name":"A","parent_id":"a"}`,
 		"cycle":          `{"id":"a","name":"A","parent_id":"b"},{"id":"b","name":"B","parent_id":"a"}`,
 		"cycle above":    `{"id":"a","name":"A","parent_id":"b"},{"id":"b","name":"B","parent_id":"c"},{"id":"c","name":"C","parent_id":"b"}`,
+		"too wide":       `{"id":"a","name":"A","width":5}`,
+		"too tall":       `{"id":"a","name":"A","height":5}`,
+		"negative":       `{"id":"a","name":"A","width":-1}`,
 	} {
 		if Validate(dashboard(bad)) == nil {
 			t.Fatalf("%s accepted", name)

@@ -40,11 +40,14 @@ type Definition struct {
 }
 
 // Group is a named section of a dashboard (Definition.Groups). A group with a ParentID sits inside that group;
-// siblings keep their order in Definition.Groups.
+// siblings keep their order in Definition.Groups. Width is the columns (1-4) it takes of its level and Height its
+// rows of panels (1-4), like a panel's; zero means all columns, and a height that fits the content.
 type Group struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	ParentID string `json:"parent_id,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
 }
 
 // MaxGroups bounds the sections of one dashboard (as many as it has panels); MaxGroupDepth bounds their nesting
@@ -62,7 +65,7 @@ func validGroups(groups []Group) bool {
 	}
 	parent := map[string]string{}
 	for _, g := range groups {
-		if _, dup := parent[g.ID]; !Text(g.ID, 64) || dup || !Text(g.Name, 128) {
+		if _, dup := parent[g.ID]; !Text(g.ID, 64) || dup || !Text(g.Name, 128) || g.Width < 0 || g.Width > 4 || g.Height < 0 || g.Height > 4 {
 			return false
 		}
 		parent[g.ID] = g.ParentID

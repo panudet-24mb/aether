@@ -164,3 +164,12 @@
 .ov-select:disabled { opacity: .5; cursor: not-allowed; }
 .ov-notice { display: flex; align-items: center; gap: 10px; }
 .ov-notice .ov-link { font-size: 12px; }
+
+/* LoRaWAN sensors (lorawan.ts): every other value they send, under the card's main value. */
+.ov-extra { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: -2px; font-size: 11.5px; color: var(--color-muted); min-width: 0; }
+.ov-extra > span { white-space: nowrap; }
+.ov-extra b { color: var(--color-ink); font-weight: 600; }
+.ov-extra small { font-size: 10.5px; }
+.ov-extra .is-warn, .ov-extra .is-warn b { color: var(--color-warning); }
+.ov-extra .is-bad, .ov-extra .is-bad b { color: var(--color-danger); }
+.ov-chart-line.is-gas { stroke: #c4a7ff; stroke-width: 2; }

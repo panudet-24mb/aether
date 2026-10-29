@@ -12,6 +12,7 @@ import { useLatest } from "../topology/use-latest";
 import { useSignals } from "../topology/use-signals";
 import { environmentReading, latestMeasurements, normalizeReading } from "./measurements";
 import { activityStrip, doorStateOf, duration, isDoorSensor, isOccupancySensor, lastMotionText, occupancyOf } from "./office";
+import { isLoRaWAN, lorawanValues, lorawanWindows } from "./lorawan";
 import { useShowSimulated } from "../demo-mode";
 import type { StageApi, StageProps } from "./overview3d/stage";
 import { useOutputs } from "./overview3d/outputs";
@@ -177,13 +178,21 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
     }
     for (const c of cards.values()) {
       const r = c.reading, m = (r?.metrics ?? {}) as Record<string, number>, age = r ? now - Date.parse(r.received_at) : Infinity;
+      // LoRaWAN sensors report every few minutes to hours: their own model's interval decides stale and offline.
+      const profile = deviceProfile(c.profileId ?? ""), lora = isLoRaWAN(profile);
+      const windows = lora ? lorawanWindows(profile) : { fresh: FRESH_MS, stale: STALE_MS };
       // A wall switch is silent until someone flips it: Zigbee2MQTT's availability report, not the age of the last
       // state, says whether it is reachable.
       if (c.reportedOffline !== undefined) { if (c.reportedOffline) { c.status = "offline"; c.reasons.push("Zigbee2MQTT รายงานว่าขาดการติดต่อ"); } }
-      else if (age > STALE_MS) { c.status = "offline"; if (r) c.reasons.push(`เงียบมา ${ago(r.received_at, now)}`); }
-      else if (age > FRESH_MS) { c.status = "stale"; c.reasons.push(`ข้อมูลล่าสุด ${ago(r!.received_at, now)} ที่แล้ว`); }
+      else if (age > windows.stale) { c.status = "offline"; if (r) c.reasons.push(`เงียบมา ${ago(r.received_at, now)}`); }
+      else if (age > windows.fresh) { c.status = "stale"; c.reasons.push(`ข้อมูลล่าสุด ${ago(r!.received_at, now)} ที่แล้ว`); }
       const events = eventsBy.get(c.external) ?? [];
-      if (c.kind === "occupancy") c.occupancy = occupancyOf(c.samples, events, now);
+      if (c.kind === "occupancy") {
+        c.occupancy = occupancyOf(c.samples, events, now);
+        // A LoRaWAN sensor reports the room's state (occupied / vacant) and holds it between uplinks: its latest
+        // value is the answer, not motion within the last few minutes.
+        if (lora && m.motion != null) c.occupancy = { ...c.occupancy, occupied: m.motion === 1 };
+      }
       if (c.kind === "door") {
         c.door = doorStateOf(r, c.samples, events, now, eventPageFull);
         if (c.door.leftOpen && c.door.since) c.reasons.push(`ประตูเปิดค้าง ${duration(now - Date.parse(c.door.since))}`);
@@ -348,6 +357,11 @@ export default function Overview({ getToken, refresh, onUnauthorized, onNavigate
                           <i className="ov-dot" aria-label={c.status} />
                         </span>
                         {value(c)}
+                        {isLoRaWAN(deviceProfile(c.profileId ?? "")) && c.status !== "offline" && (() => {
+                          // A LoRaWAN sensor's other values (gases, daylight, distance…) under its main value.
+                          const extra = lorawanValues(c.reading);
+                          return extra.length > 0 && <span className="ov-extra">{extra.map((v) => <span key={v.key} className={v.tone ? `is-${v.tone}` : ""}>{v.label} <b>{v.value}</b>{v.unit && <small> {v.unit}</small>}</span>)}</span>;
+                        })()}
                         {cardStrip ? <Strip cells={cardStrip} className={c.door ? "is-door" : ""} label={c.door ? "ประตูเปิดในชั่วโมงที่ผ่านมา ช่องละ 5 นาที" : "การเคลื่อนไหวในชั่วโมงที่ผ่านมา ช่องละ 5 นาที"} /> : <Spark values={series} tone={c.status === "alert" ? "bad" : c.kind === "environment" ? "ok" : "info"} />}
                         <span className="ov-card-foot">
                           <span>{c.wearable && c.zone && c.status !== "offline" ? `อยู่ที่ ${c.zone}` : c.reasons[0] ?? (c.occupancy ? lastMotionText(c.occupancy, now) : c.door ? `วันนี้เปิด ${c.door.countPartial ? "≥ " : ""}${c.door.openCountToday} ครั้ง` : c.reading ? `${ago(c.reading.received_at, now)} ที่แล้ว` : "")}</span>

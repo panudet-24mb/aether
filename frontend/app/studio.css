@@ -32,3 +32,4 @@
 .studio-group.depth-2 .studio-group-head input,.studio-group.depth-3 .studio-group-head input{font-size:14px!important}
 .studio .studio-group-actions select{padding:4px 6px;font-size:11px;max-width:150px}
 .studio .studio-group-actions button{gap:4px;font-size:11px}
+.studio-device-name{font-weight:600;color:var(--color-ink);letter-spacing:0}

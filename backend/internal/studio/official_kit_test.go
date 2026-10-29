@@ -29,7 +29,7 @@ func TestKitWidgetsRender(t *testing.T) {
 		"alerts": []any{map[string]any{"title": "MBT01 · ป้ายถูกถอด", "severity": "critical", "opened_at": "2026-09-20T02:58:00Z"}},
 	}
 	payload, _ := json.Marshal(input)
-	want := map[string]string{"official-motion-v1": "กำลังเคลื่อนไหว", "official-tamper-v1": "ป้ายถูกถอด", "official-button-v1": "กำลังกดปุ่ม", "official-beacon-v1": "00f915", "official-events-v1": "ป้ายถูกถอด", "official-alerts-v1": "OPEN ALERTS · 1"}
+	want := map[string]string{"official-motion-v1": "กำลังเคลื่อนไหว", "official-tamper-v1": "ป้ายถูกถอด", "official-button-v1": "กำลังกดปุ่ม", "official-beacon-v1": "01f915", "official-events-v1": "ป้ายถูกถอด", "official-alerts-v1": "OPEN ALERTS · 1"}
 	seen := 0
 	for _, item := range Official() {
 		expect, ok := want[item.ID]

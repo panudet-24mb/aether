@@ -542,9 +542,9 @@ h1.topo-bar-title { font-size: 15px; margin: 0; white-space: nowrap; }
 
 /* Edit mode (the board is locked otherwise) and bendable connection lines (routes.tsx). */
 .topo-edit-hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5; padding: 5px 12px; border: 1px solid var(--color-accent); border-radius: 8px; background: var(--color-panel); color: var(--color-accent); font-size: 12.5px; white-space: nowrap; pointer-events: none; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
-.topo-route-handle { position: absolute; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--color-accent); background: var(--color-panel); pointer-events: all; cursor: grab; touch-action: none; z-index: 1001; }
-.topo-route-handle:active { cursor: grabbing; }
-.topo-route-handle.is-add { width: 9px; height: 9px; border-width: 1.5px; border-style: dashed; opacity: .75; cursor: copy; }
-.topo-route-handle.is-add:hover { opacity: 1; }
+.topo-route-handle { position: absolute; border-radius: 4px; border: 2px solid var(--color-accent); background: var(--color-panel); pointer-events: all; touch-action: none; z-index: 1001; }
+.topo-route-handle.is-vertical { width: 8px; height: 22px; cursor: ew-resize; }
+.topo-route-handle.is-horizontal { width: 22px; height: 8px; cursor: ns-resize; }
+.topo-route-handle:hover { background: var(--color-accent); }
 .topo-route-reset { position: absolute; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-panel); color: var(--color-muted); font: inherit; font-size: 11px; pointer-events: all; cursor: pointer; z-index: 1001; }
 .topo-route-reset:hover { color: var(--color-ink); border-color: var(--color-accent); }

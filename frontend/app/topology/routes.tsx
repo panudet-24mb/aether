@@ -76,14 +76,19 @@ function defaultPoints(source: XYPosition, sourcePos: Position, target: XYPositi
   return [{ x, y: s.y }, { x, y: t.y }];
 }
 
+/** Direction of a segment along one axis. Within half a unit counts as none, as in `same`: a node handle sits at
+ *  fractional coordinates while saved corners keep two decimals, and taking the sign of that sliver would push the
+ *  rounded corner sideways and slant the whole segment. */
+const dir = (v: number) => (Math.abs(v) < 0.5 ? 0 : Math.sign(v));
+
 /** SVG path through the points with small rounded corners, like smoothstep. */
 function svgPath(pts: XYPosition[]): string {
   let d = `M ${pts[0].x} ${pts[0].y}`;
   for (let i = 1; i < pts.length - 1; i++) {
     const a = pts[i - 1], p = pts[i], b = pts[i + 1];
     const r = Math.min(RADIUS, Math.hypot(p.x - a.x, p.y - a.y) / 2, Math.hypot(b.x - p.x, b.y - p.y) / 2);
-    const inX = p.x - Math.sign(p.x - a.x) * r, inY = p.y - Math.sign(p.y - a.y) * r;
-    const outX = p.x + Math.sign(b.x - p.x) * r, outY = p.y + Math.sign(b.y - p.y) * r;
+    const inX = p.x - dir(p.x - a.x) * r, inY = p.y - dir(p.y - a.y) * r;
+    const outX = p.x + dir(b.x - p.x) * r, outY = p.y + dir(b.y - p.y) * r;
     d += ` L ${inX} ${inY} Q ${p.x} ${p.y} ${outX} ${outY}`;
   }
   const last = pts[pts.length - 1];

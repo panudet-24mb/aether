@@ -106,3 +106,20 @@ func TestControlsPanelValidation(t *testing.T) {
 		}
 	}
 }
+
+// A panel's finer size is optional: columns of 12 and a pixel height within bounds, beside its coarse size.
+func TestPanelFineSizeValidation(t *testing.T) {
+	item := func(size string) Item {
+		return Item{Kind: "dashboard", Name: "Sizes", Brand: "Any", Model: "Any", Version: 1, Visibility: "private", Definition: json.RawMessage(`{"panels":[{"id":"a","title":"A","widget_id":"official-milesight-gs301-v1","gateway_id":"6f1c1f6e-8d0b-4c55-9a55-0b8f2d6c1a09","external_id":"24e124798e210951","width":2,"height":1` + size + `}]}`)}
+	}
+	for _, ok := range []string{``, `,"w":5,"h":340`, `,"w":12,"auto":true`, `,"w":1,"h":80`, `,"h":2000`} {
+		if e := Validate(item(ok)); e != nil {
+			t.Fatalf("%s: %v", ok, e)
+		}
+	}
+	for _, bad := range []string{`,"w":13`, `,"w":-1`, `,"h":79`, `,"h":2001`, `,"h":-5`} {
+		if Validate(item(bad)) == nil {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+}

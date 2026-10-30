@@ -96,7 +96,16 @@ type Panel struct {
 	Devices []string `json:"devices,omitempty"`
 	// GroupID is the dashboard group (Definition.Groups) this panel sits in; empty: above every group.
 	GroupID string `json:"group_id,omitempty"`
+	// W, H and Auto are the finer size the studio page lays out with: W of 12 columns, H pixels, or Auto to fit the
+	// widget's content. Width and Height (quarters, rows) stay the coarse size a wall display and older dashboards use;
+	// zero W and H mean only the coarse size was set.
+	W    int  `json:"w,omitempty"`
+	H    int  `json:"h,omitempty"`
+	Auto bool `json:"auto,omitempty"`
 }
+
+// MinPanelHeight and MaxPanelHeight bound a panel's pixel height (Panel.H).
+const MinPanelHeight, MaxPanelHeight = 80, 2000
 
 // ControlsWidget is the first-party controls panel: switches for the chosen devices, drawn natively by the app
 // (never in the widget sandbox, which runs no script in the browser) through the ordinary command API; a wall
@@ -179,7 +188,7 @@ func Validate(i Item) error {
 			} else if _, e := uuid.Parse(p.GatewayID); e != nil || !ValidSource(p.ExternalID) || len(p.Devices) > 0 {
 				return fmt.Errorf("invalid source")
 			}
-			if !Text(p.ID, 64) || seen[p.ID] || !Text(p.Title, 128) || p.Width < 1 || p.Width > 4 || p.Height < 1 || p.Height > 4 || !Text(p.WidgetID, 80) || (p.WidgetID != ControlsWidget && !Text(p.GatewayID, 40)) {
+			if !Text(p.ID, 64) || seen[p.ID] || !Text(p.Title, 128) || p.Width < 1 || p.Width > 4 || p.Height < 1 || p.Height > 4 || p.W < 0 || p.W > 12 || (p.H != 0 && (p.H < MinPanelHeight || p.H > MaxPanelHeight)) || !Text(p.WidgetID, 80) || (p.WidgetID != ControlsWidget && !Text(p.GatewayID, 40)) {
 				return fmt.Errorf("invalid panel")
 			}
 			seen[p.ID] = true
